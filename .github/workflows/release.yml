@@ -107,6 +107,12 @@ jobs:
               chmod 755 /etc/maude/new-user-login.sh /etc/maude/first-boot.sh
               chmod 755 /usr/local/bin/maude-setup /usr/local/bin/maude-adduser
 
+              # Hook maude-path.sh at END of .bashrc so it always wins
+              printf '\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n' \
+                >> /home/maude/.bashrc
+              printf '\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n' \
+                >> /etc/skel/.bashrc
+
               printf "MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n" \
                 "${MAUDE_VERSION}" "${MAUDE_BUILD_DATE}" > /etc/maude/maude.conf
 

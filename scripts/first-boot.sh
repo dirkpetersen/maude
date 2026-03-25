@@ -149,6 +149,25 @@ if [[ -f "${MAUDE_ETC}/new-user-login.sh" ]]; then
     chmod 755 "${MAUDE_ETC}/new-user-login.sh"
 fi
 
+# ── 7a. Patch /etc/skel/.bashrc so all future users get correct PATH ─────────
+# Ubuntu's default .bashrc prepends ~/bin and ~/.local/bin, and tools like
+# Claude Code also prepend to .bashrc. We hook maude-path.sh at the END so it
+# always wins and produces: ~/bin first, ~/.local/bin once at end.
+_PATH_HOOK='
+# maude: enforce correct PATH order (runs last, overrides any earlier prepends)
+[ -f /etc/profile.d/maude-path.sh ] && . /etc/profile.d/maude-path.sh'
+if ! grep -q "maude-path.sh" /etc/skel/.bashrc 2>/dev/null; then
+    printf '%s\n' "${_PATH_HOOK}" >> /etc/skel/.bashrc
+fi
+# Patch existing users too (maude user and any others)
+for _home in /home/*; do
+    _bashrc="${_home}/.bashrc"
+    if [[ -f "${_bashrc}" ]] && ! grep -q "maude-path.sh" "${_bashrc}"; then
+        printf '%s\n' "${_PATH_HOOK}" >> "${_bashrc}"
+        log "Patched PATH hook into ${_bashrc}"
+    fi
+done
+
 # ── 8. Enable UFW (VM only, not WSL) ─────────────────────────────────────────
 if [[ "${DEPLOY_TARGET}" == "vm" ]] && command -v ufw &>/dev/null; then
     log "Configuring UFW firewall..."

@@ -85,5 +85,33 @@ assert_eq "~/bin first even when .local/bin was first before" "${_tmpdir}/bin" "
 _local_ubuntu=$(echo "${_path_ubuntu}" | tr ':' '\n' | grep -cF "${_tmpdir}/.local/bin" || true)
 assert_eq "~/.local/bin exactly once with Ubuntu-style initial PATH" "1" "${_local_ubuntu}"
 
+suite_header "Simulated bashrc-sourced scenario (real WSL boot order)"
+# Simulate what happens in WSL:
+#   1. profile.d runs (sets ~/bin first)
+#   2. Ubuntu .bashrc prepends ~/bin and ~/.local/bin
+#   3. Claude Code prepends ~/.local/bin again
+#   4. Our .bashrc hook re-sources maude-path.sh at the end
+_path_bashrc=$(
+    HOME="${_tmpdir}"
+    export HOME
+    PATH="/usr/local/bin:/usr/bin:/bin"
+    # Step 1: profile.d runs
+    source "${PROFILE}"
+    # Step 2: Ubuntu .bashrc prepends (simulated)
+    PATH="${HOME}/bin:${PATH}"
+    PATH="${HOME}/.local/bin:${PATH}"
+    # Step 3: Claude Code prepends (simulated)
+    PATH="${HOME}/.local/bin:${PATH}"
+    # Step 4: .bashrc hook re-runs maude-path.sh
+    source "${PROFILE}"
+    echo "${PATH}"
+)
+_first_bashrc="${_path_bashrc%%:*}"
+assert_eq "~/bin first after full WSL boot sequence"          "${_tmpdir}/bin"        "${_first_bashrc}"
+_bin_final=$(echo "${_path_bashrc}" | tr ':' '\n' | grep -cF "${_tmpdir}/bin" || true)
+assert_eq "~/bin exactly once after full boot"                "1"                     "${_bin_final}"
+_local_final=$(echo "${_path_bashrc}" | tr ':' '\n' | grep -cF "${_tmpdir}/.local/bin" || true)
+assert_eq "~/.local/bin exactly once after full boot"         "1"                     "${_local_final}"
+
 rm -f /tmp/_path_test_out.txt
 suite_summary

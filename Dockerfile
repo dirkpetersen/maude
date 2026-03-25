@@ -89,6 +89,12 @@ RUN groupadd --gid 100 users 2>/dev/null || true \
 RUN printf 'MAUDE_DEPLOY_TARGET=docker\nMAUDE_BASE_DOMAIN=localhost\n' \
     > /etc/maude/maude.conf
 
+# ── Hook maude-path.sh at END of .bashrc (wins over Ubuntu defaults + tool prepends) ──
+RUN printf '\n# maude: enforce correct PATH order (runs last, overrides any earlier prepends)\n[ -f /etc/profile.d/maude-path.sh ] && . /etc/profile.d/maude-path.sh\n' \
+    >> /home/maude/.bashrc \
+    && printf '\n# maude: enforce correct PATH order\n[ -f /etc/profile.d/maude-path.sh ] && . /etc/profile.d/maude-path.sh\n' \
+    >> /etc/skel/.bashrc
+
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh

@@ -19,6 +19,14 @@ MAUDE_DIR="${HOME}/.config/maude"
 # --- 1. Create standard dirs ---
 mkdir -p "${HOME}/bin" "${HOME}/.local/bin" "${HOME}/.local/share" "${MAUDE_DIR}"
 
+# Ensure maude-path.sh is hooked at the END of ~/.bashrc so it always runs last.
+# Ubuntu's default .bashrc prepends ~/bin and ~/.local/bin; tools like Claude Code
+# also prepend ~/.local/bin. Without this hook ~/bin ends up buried after ~/.local/bin.
+if [[ -f "${HOME}/.bashrc" ]] && ! grep -q "maude-path.sh" "${HOME}/.bashrc"; then
+    printf '\n# maude: enforce correct PATH order (runs last, overrides any earlier prepends)\n[ -f /etc/profile.d/maude-path.sh ] && . /etc/profile.d/maude-path.sh\n' \
+        >> "${HOME}/.bashrc"
+fi
+
 # --- 2. Claude Code install prompt ---
 # Only show when we have a real interactive terminal
 if [[ -t 0 && -t 1 ]]; then
