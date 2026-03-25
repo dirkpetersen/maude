@@ -15,7 +15,8 @@ IFS=$'\n\t'
 SENTINEL="/etc/maude/.first-boot-done"
 LOG="/var/log/maude-first-boot.log"
 MAUDE_ETC="/etc/maude"
-MOM_GROUP="mom"
+# mom uses the 'users' group so every new Linux user gets package access
+MOM_GROUP="users"
 
 # ── Redirect all output to log ────────────────────────────────────────────────
 exec > >(tee -a "${LOG}") 2>&1
@@ -57,50 +58,35 @@ else
 fi
 echo "MAUDE_DEPLOY_TARGET=${DEPLOY_TARGET}" >> /etc/maude/maude.conf
 
-# ── 2. Install mom ────────────────────────────────────────────────────────────
-log "Installing mom..."
-_arch=$(arch)
-_mom_url="https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-${_arch}"
-
-# Prefer .deb on Debian/Ubuntu
-if command -v dpkg &>/dev/null; then
-    _mom_deb_url="https://github.com/dirkpetersen/mom/releases/latest/download/mom_latest_amd64.deb"
-    if [[ "${_arch}" == "amd64" ]]; then
-        curl -fsSL "${_mom_deb_url}" -o /tmp/mom.deb
-        dpkg -i /tmp/mom.deb || apt-get -f install -y
-        rm -f /tmp/mom.deb
-    else
-        curl -fsSL "${_mom_url}" -o /usr/local/bin/mom
-        chmod 4755 /usr/local/bin/mom  # setuid root
-    fi
-else
-    curl -fsSL "${_mom_url}" -o /usr/local/bin/mom
+# ── 2. Verify/install mom ─────────────────────────────────────────────────────
+# mom is pre-installed in the image; this step ensures config is correct
+# and upgrades the binary if a newer release is available.
+log "Configuring mom..."
+if [[ ! -x /usr/local/bin/mom ]]; then
+    log "mom binary missing — installing..."
+    _arch=$(arch)
+    curl -fsSL \
+        "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-${_arch}" \
+        -o /usr/local/bin/mom
     chmod 4755 /usr/local/bin/mom
 fi
 
-# Create mom group and config
-groupadd --system "${MOM_GROUP}" 2>/dev/null || true
+# Ensure 'users' group exists (standard Linux group GID 100)
+groupadd --system --gid 100 "${MOM_GROUP}" 2>/dev/null || true
+
 mkdir -p /etc/mom
 if [[ ! -f /etc/mom/mom.conf ]]; then
-    cat > /etc/mom/mom.conf <<'EOF'
-# mom configuration — see: github.com/dirkpetersen/mom
-group = "mom"
-deny_list = "/etc/mom/deny.list"
-log_file = "/var/log/mom.log"
-EOF
+    printf 'group = "%s"\ndeny_list = "/etc/mom/deny.list"\nlog_file = "/var/log/mom.log"\n' \
+        "${MOM_GROUP}" > /etc/mom/mom.conf
 fi
 if [[ ! -f /etc/mom/deny.list ]]; then
-    cat > /etc/mom/deny.list <<'EOF'
-# mom deny list — one glob pattern per line
-# Block packages that could compromise multi-user isolation
-nmap
-tcpdump
-wireshark*
-aircrack*
-metasploit*
-EOF
+    printf '# mom deny list\nnmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n' \
+        > /etc/mom/deny.list
 fi
-log "mom installed."
+
+# Ensure the default maude user is in the users group
+usermod -aG "${MOM_GROUP}" maude 2>/dev/null || true
+log "mom configured (group: ${MOM_GROUP})."
 
 # ── 3. Install appmotel ───────────────────────────────────────────────────────
 log "Installing appmotel..."

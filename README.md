@@ -36,17 +36,21 @@ maude is a pre-configured Ubuntu 26.04 appliance that gives developers a browser
 
 ### WSL (Windows Subsystem for Linux)
 
-```powershell
-# Download the latest release
-$url = "https://github.com/dirkpetersen/maude/releases/latest/download/maude-wsl-ubuntu2604-latest.tar.gz"
-Invoke-WebRequest $url -OutFile maude-wsl.tar.gz
+> **Prerequisites:** Windows Terminal and WSL must be installed first.
+> See the **[Windows Setup Guide](docs/windows-setup.md)** for step-by-step instructions.
 
-# Import and start
-wsl --import maude C:\maude .\maude-wsl.tar.gz
+Open **Command Prompt** (not PowerShell) and run:
+
+```cmd
+curl -L -o maude-wsl.tar.gz https://github.com/dirkpetersen/maude/releases/latest/download/maude-wsl-ubuntu2604-v0.1.0.tar.gz
+mkdir C:\maude
+wsl --import maude C:\maude maude-wsl.tar.gz --version 2
 wsl -d maude
 ```
 
-On first boot, maude will install appmotel and deploy web-term automatically. Open your browser at [http://localhost:3000](http://localhost:3000).
+Windows Terminal will automatically show **maude** as a profile after import. Your prompt will show `maude@maude:~$`.
+
+On first boot, maude installs appmotel and deploys web-term automatically (~1 min). Then open: [http://localhost:3000](http://localhost:3000)
 
 ### Docker
 

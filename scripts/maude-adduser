@@ -39,7 +39,7 @@ done
 # ── Already exists? ───────────────────────────────────────────────────────────
 if id "${USERNAME}" &>/dev/null; then
     # Ensure group memberships are current even for existing users
-    usermod -aG mom "${USERNAME}" 2>/dev/null || true
+    usermod -aG users "${USERNAME}" 2>/dev/null || true
     exit 0
 fi
 
@@ -51,8 +51,9 @@ useradd \
     "${USERNAME}"
 
 # ── Group memberships ─────────────────────────────────────────────────────────
-# mom group: allows use of the mom package manager
-usermod -aG mom "${USERNAME}" 2>/dev/null || true
+# users group: mom is configured to allow the 'users' group, so every new
+# Linux user added here automatically gets package management access via mom.
+usermod -aG users "${USERNAME}" 2>/dev/null || true
 
 # Optional groups (add if they exist)
 for _group in docker sudo_restricted; do

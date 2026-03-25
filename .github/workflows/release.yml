@@ -66,11 +66,34 @@ jobs:
 
               locale-gen en_US.UTF-8
               echo LANG=en_US.UTF-8 > /etc/default/locale
+              echo "maude" > /etc/hostname
 
-              useradd --create-home --shell /bin/bash --comment "maude default user" maude
+              # mom group = users (GID 100) so every new user gets mom access
+              groupadd --gid 100 users 2>/dev/null || true
+
+              useradd --create-home --shell /bin/bash \
+                --comment "maude default user" \
+                --gid users \
+                maude
               echo "maude:maude" | chpasswd
               echo "maude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/maude
               chmod 440 /etc/sudoers.d/maude
+
+              sed -i "/^#ADD_EXTRA_GROUPS/s/^#//" /etc/adduser.conf 2>/dev/null || true
+              sed -i "/^#EXTRA_GROUPS/s/^#//"     /etc/adduser.conf 2>/dev/null || true
+              grep -q "^ADD_EXTRA_GROUPS" /etc/adduser.conf || echo "ADD_EXTRA_GROUPS=1"   >> /etc/adduser.conf
+              grep -q "^EXTRA_GROUPS"     /etc/adduser.conf || echo 'EXTRA_GROUPS="users"' >> /etc/adduser.conf
+
+              # Install mom binary
+              _arch=$(dpkg --print-architecture 2>/dev/null || uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
+              curl -fsSL \
+                "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-${_arch}" \
+                -o /usr/local/bin/mom
+              chmod 4755 /usr/local/bin/mom
+              mkdir -p /etc/mom
+              printf "group = \"users\"\ndeny_list = \"/etc/mom/deny.list\"\nlog_file = \"/var/log/mom.log\"\n" \
+                > /etc/mom/mom.conf
+              printf "nmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n" > /etc/mom/deny.list
 
               mkdir -p /etc/maude
               cp /maude-src/scripts/profile.d/maude-path.sh       /etc/profile.d/
@@ -87,8 +110,10 @@ jobs:
               printf "MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n" \
                 "${MAUDE_VERSION}" "${MAUDE_BUILD_DATE}" > /etc/maude/maude.conf
 
-              printf "[boot]\nsystemd=true\ncommand=/etc/maude/first-boot.sh\n\n[user]\ndefault=maude\n\n[interop]\nenabled=true\nappendWindowsPath=false\n" \
+              printf "[boot]\nsystemd=true\ncommand=/etc/maude/first-boot.sh\n\n[network]\nhostname=maude\ngenerateResolvConf=true\n\n[user]\ndefault=maude\n\n[interop]\nenabled=true\nappendWindowsPath=false\n" \
                 > /etc/wsl.conf
+
+              usermod --home /home/maude maude 2>/dev/null || true
 
               if [ -f /etc/ssh/sshd_config ]; then
                 sed -i \

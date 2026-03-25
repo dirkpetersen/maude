@@ -73,13 +73,17 @@ RUN useradd --create-home --shell /bin/bash --comment "maude default user" maude
     && echo 'maude ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/maude \
     && chmod 440 /etc/sudoers.d/maude
 
-# ── mom group (binary installed at first-run) ─────────────────────────────────
-RUN groupadd --system mom \
-    && usermod -aG mom maude \
+# ── mom: group=users (GID 100), binary pre-installed ─────────────────────────
+RUN groupadd --gid 100 users 2>/dev/null || true \
+    && usermod -aG users maude \
     && mkdir -p /etc/mom \
-    && printf 'group = "mom"\ndeny_list = "/etc/mom/deny.list"\nlog_file = "/var/log/mom.log"\n' \
+    && printf 'group = "users"\ndeny_list = "/etc/mom/deny.list"\nlog_file = "/var/log/mom.log"\n' \
        > /etc/mom/mom.conf \
-    && touch /etc/mom/deny.list
+    && printf 'nmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n' > /etc/mom/deny.list \
+    && curl -fsSL \
+       "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-amd64" \
+       -o /usr/local/bin/mom \
+    && chmod 4755 /usr/local/bin/mom
 
 # ── Write maude.conf ──────────────────────────────────────────────────────────
 RUN printf 'MAUDE_DEPLOY_TARGET=docker\nMAUDE_BASE_DOMAIN=localhost\n' \
