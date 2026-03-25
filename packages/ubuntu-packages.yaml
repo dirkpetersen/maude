@@ -1,0 +1,124 @@
+# maude — Ubuntu 26.04 package list
+# Installed by apt during Packer/WSL image build (running as root).
+# mom is installed separately as a setuid binary for post-boot user installs.
+# Format: flat list under 'packages:' key; groups are comments only.
+
+packages:
+
+  # --- Core system utilities ---
+  - ca-certificates
+  - curl
+  - wget
+  - gnupg
+  - lsb-release
+  - software-properties-common
+  - apt-transport-https
+  - unzip
+  - zip
+  - xz-utils
+  - jq
+  - tree
+  - file
+  - less
+  - man-db
+  - locales
+  - tzdata
+
+  # --- Shell & terminal ---
+  - bash-completion
+  - tmux
+  - screen
+  - zsh
+  - zsh-autosuggestions
+  - zsh-syntax-highlighting
+  - direnv
+  - fzf
+  - ripgrep
+  - fd-find
+  - bat
+  - htop
+  - ncdu
+  - strace
+  - lsof
+
+  # --- Version control ---
+  - git
+  - git-lfs
+  - gh                      # GitHub CLI
+
+  # --- Build essentials ---
+  - build-essential
+  - pkg-config
+  - cmake
+  - ninja-build
+  - autoconf
+  - automake
+  - libtool
+  - libssl-dev
+  - libffi-dev
+  - libreadline-dev
+  - zlib1g-dev
+  - libbz2-dev
+  - libsqlite3-dev
+  - libxml2-dev
+  - libxslt1-dev
+
+  # --- Python ---
+  - python3
+  - python3-pip
+  - python3-venv
+  - python3-dev
+  - pipx
+
+  # --- Node.js (via NodeSource repo, but this is the fallback) ---
+  - nodejs
+  - npm
+
+  # --- Go ---
+  - golang-go
+
+  # --- Rust (rustup installed separately in first-boot) ---
+  - rustup                  # available in Ubuntu 26.04+
+
+  # --- Network tools ---
+  - net-tools
+  - dnsutils
+  - iputils-ping
+  - iproute2
+  - nmap
+  - netcat-openbsd
+  - socat
+  - tcpdump
+  - mtr-tiny
+
+  # --- SSH & remote access ---
+  - openssh-server
+  - openssh-client
+  - sshpass
+
+  # --- Security & firewall ---
+  - ufw
+  - fail2ban
+  - sudo
+  - libpam-runtime
+
+  # --- Editors ---
+  - vim
+  - nano
+  - micro
+
+  # --- Container-adjacent (for building, not running workloads) ---
+  - skopeo                  # inspect/copy container images without daemon
+
+  # --- Observability ---
+  - sysstat
+  - iotop
+  - nethogs
+  - prometheus-node-exporter
+
+  # --- Misc dev tools ---
+  - sqlite3
+  - redis-tools
+  - postgresql-client
+  - mysql-client
+  - httpie

@@ -1,0 +1,136 @@
+name: Build WSL Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'packages/**'
+      - '.github/workflows/build-wsl.yml'
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: 'Ubuntu version (e.g. 26.04)'
+        required: false
+        default: '26.04'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-wsl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [[ "${VERSION}" == "main" ]]; then
+            VERSION="dev-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "artifact=maude-wsl-ubuntu2604-${VERSION}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y debootstrap systemd-container
+
+      - name: Build Ubuntu 26.04 rootfs
+        run: |
+          sudo mkdir -p /rootfs
+          # Bootstrap minimal Ubuntu 26.04 (Plucky Puffin)
+          sudo debootstrap \
+            --arch=amd64 \
+            --variant=minbase \
+            --include=ca-certificates,curl,wget,git,python3,python3-pip,python3-venv,\
+          nodejs,npm,golang-go,tmux,openssh-server,openssh-client,sudo,bash-completion,\
+          vim,jq,build-essential,pkg-config,libssl-dev,libffi-dev,net-tools,dnsutils,\
+          iputils-ping,iproute2,unzip,zip,less,ripgrep \
+            plucky \
+            /rootfs \
+            http://archive.ubuntu.com/ubuntu/
+
+      - name: Configure rootfs
+        run: |
+          # Set locale and timezone
+          sudo chroot /rootfs locale-gen en_US.UTF-8 || true
+          sudo chroot /rootfs ln -sf /usr/share/zoneinfo/UTC /etc/localtime || true
+
+          # Create maude user
+          sudo chroot /rootfs useradd \
+            --create-home --shell /bin/bash \
+            --comment "maude default user" maude
+          echo 'maude:maude' | sudo chroot /rootfs chpasswd
+          echo 'maude ALL=(ALL) NOPASSWD:ALL' | \
+            sudo tee /rootfs/etc/sudoers.d/maude
+          sudo chmod 440 /rootfs/etc/sudoers.d/maude
+
+          # Install maude scripts
+          sudo mkdir -p /rootfs/etc/maude/profile.d
+          sudo cp scripts/profile.d/maude-path.sh \
+                  /rootfs/etc/profile.d/maude-path.sh
+          sudo cp scripts/profile.d/maude-firstlogin.sh \
+                  /rootfs/etc/profile.d/maude-firstlogin.sh
+          sudo cp scripts/new-user-login.sh \
+                  /rootfs/etc/maude/new-user-login.sh
+          sudo cp scripts/first-boot.sh \
+                  /rootfs/etc/maude/first-boot.sh
+          sudo cp scripts/maude-setup \
+                  /rootfs/usr/local/bin/maude-setup
+          sudo cp scripts/maude-adduser \
+                  /rootfs/usr/local/bin/maude-adduser
+          sudo chmod 644 /rootfs/etc/profile.d/maude-*.sh
+          sudo chmod 755 /rootfs/etc/maude/*.sh
+          sudo chmod 755 /rootfs/usr/local/bin/maude-*
+
+          # Write version info
+          echo "MAUDE_VERSION=${{ steps.version.outputs.version }}" | \
+            sudo tee /rootfs/etc/maude/maude.conf
+          echo "MAUDE_BUILD_DATE=$(date -Iseconds)" | \
+            sudo tee -a /rootfs/etc/maude/maude.conf
+          echo "MAUDE_DEPLOY_TARGET=wsl" | \
+            sudo tee -a /rootfs/etc/maude/maude.conf
+
+          # WSL-specific: wsl.conf
+          sudo tee /rootfs/etc/wsl.conf <<'EOF'
+          [boot]
+          systemd=true
+          command=/etc/maude/first-boot.sh
+
+          [user]
+          default=maude
+
+          [interop]
+          enabled=true
+          appendWindowsPath=false
+          EOF
+
+          # SSH config for WSL
+          sudo sed -i \
+            -e 's/^#PermitRootLogin.*/PermitRootLogin no/' \
+            -e 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
+            /rootfs/etc/ssh/sshd_config
+
+      - name: Create WSL tarball
+        run: |
+          sudo tar -czf "${{ steps.version.outputs.artifact }}" \
+            --numeric-owner \
+            -C /rootfs .
+          sha256sum "${{ steps.version.outputs.artifact }}" \
+            > "${{ steps.version.outputs.artifact }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maude-wsl-ubuntu2604
+          path: |
+            ${{ steps.version.outputs.artifact }}
+            ${{ steps.version.outputs.artifact }}.sha256
+          retention-days: 14

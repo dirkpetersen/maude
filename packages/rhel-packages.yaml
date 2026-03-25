@@ -1,0 +1,118 @@
+# maude — RHEL/Rocky/AlmaLinux package list
+# Installed by dnf during image build (running as root).
+# mom is installed separately as a setuid binary for post-boot user installs.
+# Format: flat list under 'packages:' key; groups are comments only.
+
+packages:
+
+  # --- Core system utilities ---
+  - ca-certificates
+  - curl
+  - wget
+  - gnupg2
+  - redhat-lsb-core
+  - unzip
+  - zip
+  - xz
+  - jq
+  - tree
+  - file
+  - less
+  - man-db
+  - glibc-langpack-en
+  - tzdata
+
+  # --- Shell & terminal ---
+  - bash-completion
+  - tmux
+  - screen
+  - zsh
+  - direnv
+  - fzf
+  - ripgrep
+  - fd-find
+  - htop
+  - ncdu
+  - strace
+  - lsof
+
+  # --- Version control ---
+  - git
+  - git-lfs
+  - gh                      # GitHub CLI (requires GitHub repo)
+
+  # --- Build essentials ---
+  - gcc
+  - gcc-c++
+  - make
+  - pkg-config
+  - cmake
+  - ninja-build
+  - autoconf
+  - automake
+  - libtool
+  - openssl-devel
+  - libffi-devel
+  - readline-devel
+  - zlib-devel
+  - bzip2-devel
+  - sqlite-devel
+  - libxml2-devel
+  - libxslt-devel
+
+  # --- Python ---
+  - python3
+  - python3-pip
+  - python3-devel
+  - pipx
+
+  # --- Node.js ---
+  - nodejs
+  - npm
+
+  # --- Go ---
+  - golang
+
+  # --- Rust ---
+  - rustup
+
+  # --- Network tools ---
+  - net-tools
+  - bind-utils
+  - iputils
+  - iproute
+  - nmap
+  - nmap-ncat
+  - socat
+  - tcpdump
+  - mtr
+
+  # --- SSH & remote access ---
+  - openssh-server
+  - openssh-clients
+  - sshpass
+
+  # --- Security & firewall ---
+  - firewalld
+  - fail2ban
+  - sudo
+  - pam
+
+  # --- Editors ---
+  - vim-enhanced
+  - nano
+
+  # --- Container-adjacent ---
+  - skopeo
+
+  # --- Observability ---
+  - sysstat
+  - iotop
+  - nethogs
+  - prometheus-node-exporter
+
+  # --- Misc dev tools ---
+  - sqlite
+  - redis
+  - postgresql
+  - httpie

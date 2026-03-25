@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# /usr/local/bin/maude-adduser
+# JIT user provisioning: creates a Linux user if they do not exist.
+# Called by web-term's auth flow (or PAM) when a new user authenticates.
+#
+# Usage: maude-adduser <username>
+# Must run as root (called via sudo from web-term service account).
+set -o errexit -o nounset -o pipefail
+IFS=$'\n\t'
+
+CONFIG_FILE="/etc/maude/maude.conf"
+
+# ── Validate input ────────────────────────────────────────────────────────────
+if [[ $# -ne 1 ]]; then
+    echo "Usage: maude-adduser <username>" >&2
+    exit 1
+fi
+
+USERNAME="$1"
+
+# Strict username validation: lowercase letters, digits, hyphens, underscores.
+# Must start with a letter. Length 1-32. Matches useradd rules + extra safety.
+if [[ ! "${USERNAME}" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; then
+    echo "Invalid username: '${USERNAME}'" >&2
+    exit 1
+fi
+
+# Refuse to create or modify system-reserved names
+_BLOCKED=("root" "daemon" "bin" "sys" "sync" "games" "man" "lp" "mail" "news"
+           "uucp" "proxy" "www-data" "backup" "list" "irc" "gnats" "nobody"
+           "systemd-network" "systemd-resolve" "appmotel" "apps" "mom" "maude")
+for _blocked in "${_BLOCKED[@]}"; do
+    if [[ "${USERNAME}" == "${_blocked}" ]]; then
+        echo "Refused: '${USERNAME}' is a reserved system name." >&2
+        exit 1
+    fi
+done
+
+# ── Already exists? ───────────────────────────────────────────────────────────
+if id "${USERNAME}" &>/dev/null; then
+    # Ensure group memberships are current even for existing users
+    usermod -aG mom "${USERNAME}" 2>/dev/null || true
+    exit 0
+fi
+
+# ── Create user ───────────────────────────────────────────────────────────────
+useradd \
+    --create-home \
+    --shell /bin/bash \
+    --comment "maude user" \
+    "${USERNAME}"
+
+# ── Group memberships ─────────────────────────────────────────────────────────
+# mom group: allows use of the mom package manager
+usermod -aG mom "${USERNAME}" 2>/dev/null || true
+
+# Optional groups (add if they exist)
+for _group in docker sudo_restricted; do
+    if getent group "${_group}" &>/dev/null; then
+        usermod -aG "${_group}" "${USERNAME}"
+    fi
+done
+
+# ── Seed home directory ───────────────────────────────────────────────────────
+# The maude-path.sh profile.d script will create ~/bin etc on first login,
+# but pre-create .config/maude so the sentinel path exists.
+install -d -o "${USERNAME}" -g "${USERNAME}" -m 0700 \
+    "/home/${USERNAME}/.config" \
+    "/home/${USERNAME}/.config/maude"
+
+logger -t maude-adduser "Created user '${USERNAME}'"
+echo "Created user: ${USERNAME}"

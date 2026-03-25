@@ -1,0 +1,59 @@
+#cloud-config
+# Ubuntu 26.04 autoinstall config for Packer builds.
+# Served by Packer's built-in HTTP server during the ISO boot.
+
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  identity:
+    hostname: maude
+    username: maude
+    # bcrypt hash of "maude" — change after first login
+    password: "$6$rounds=4096$maude$3nNGJTbm7S2KlFHUKX9j7ZiIkEXf7e/o3A7j5o7QT9nD0F3f7XiKgxz6AqZqWzmL8OVDPQX6j9G5K6dEpG3N."
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  storage:
+    layout:
+      name: lvm
+    swap:
+      size: 0
+
+  packages:
+    - curl
+    - git
+    - openssh-server
+    - python3
+    - python3-pip
+    - python3-venv
+    - nodejs
+    - npm
+    - golang-go
+    - tmux
+    - vim
+    - jq
+    - build-essential
+    - ca-certificates
+    - gnupg
+    - lsb-release
+    - ufw
+    - fail2ban
+
+  user-data:
+    disable_root: false
+
+  late-commands:
+    # Allow maude user to sudo without password during initial setup
+    - echo 'maude ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/maude-build
+    - chmod 440 /target/etc/sudoers.d/maude-build
+    # Enable openssh
+    - curtin in-target --target=/target -- systemctl enable ssh
+
+  updates: security
+  shutdown: reboot

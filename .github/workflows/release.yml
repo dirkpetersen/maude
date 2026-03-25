@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ── Build WSL tarball ──────────────────────────────────────────────────────
+  build-wsl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      wsl_artifact: ${{ steps.version.outputs.artifact }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "artifact=maude-wsl-ubuntu2604-${VERSION}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Install debootstrap
+        run: sudo apt-get update -qq && sudo apt-get install -y debootstrap
+
+      - name: Build Ubuntu 26.04 rootfs
+        run: |
+          sudo mkdir -p /rootfs
+          sudo debootstrap \
+            --arch=amd64 \
+            --variant=minbase \
+            --include=ca-certificates,curl,wget,git,python3,python3-pip,python3-venv,\
+          nodejs,npm,golang-go,tmux,openssh-server,openssh-client,sudo,bash-completion,\
+          vim,jq,build-essential,pkg-config,libssl-dev,libffi-dev,net-tools,dnsutils,\
+          iputils-ping,iproute2,unzip,zip,less,ripgrep \
+            plucky \
+            /rootfs \
+            http://archive.ubuntu.com/ubuntu/
+
+      - name: Configure rootfs
+        run: |
+          sudo chroot /rootfs locale-gen en_US.UTF-8 || true
+          sudo mkdir -p /rootfs/etc/maude
+          sudo useradd --root /rootfs --create-home --shell /bin/bash maude 2>/dev/null || true
+          echo 'maude:maude' | sudo chroot /rootfs chpasswd
+          echo 'maude ALL=(ALL) NOPASSWD:ALL' | sudo tee /rootfs/etc/sudoers.d/maude
+          sudo chmod 440 /rootfs/etc/sudoers.d/maude
+          sudo cp scripts/profile.d/maude-path.sh /rootfs/etc/profile.d/
+          sudo cp scripts/profile.d/maude-firstlogin.sh /rootfs/etc/profile.d/
+          sudo cp scripts/new-user-login.sh /rootfs/etc/maude/
+          sudo cp scripts/first-boot.sh /rootfs/etc/maude/
+          sudo cp scripts/maude-setup /rootfs/usr/local/bin/
+          sudo cp scripts/maude-adduser /rootfs/usr/local/bin/
+          sudo chmod 644 /rootfs/etc/profile.d/maude-*.sh
+          sudo chmod 755 /rootfs/etc/maude/*.sh /rootfs/usr/local/bin/maude-*
+          printf 'MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n' \
+            "${{ steps.version.outputs.version }}" "$(date -Iseconds)" \
+            | sudo tee /rootfs/etc/maude/maude.conf
+          sudo tee /rootfs/etc/wsl.conf <<'EOF'
+          [boot]
+          systemd=true
+          command=/etc/maude/first-boot.sh
+
+          [user]
+          default=maude
+
+          [interop]
+          enabled=true
+          appendWindowsPath=false
+          EOF
+
+      - name: Create tarball
+        run: |
+          sudo tar -czf "${{ steps.version.outputs.artifact }}" \
+            --numeric-owner -C /rootfs .
+          sha256sum "${{ steps.version.outputs.artifact }}" \
+            > "${{ steps.version.outputs.artifact }}.sha256"
+
+      - name: Upload WSL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsl-image
+          path: |
+            ${{ steps.version.outputs.artifact }}
+            ${{ steps.version.outputs.artifact }}.sha256
+
+  # ── Build Docker image ─────────────────────────────────────────────────────
+  build-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  # ── Create GitHub Release ─────────────────────────────────────────────────
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-wsl, build-docker]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download WSL artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wsl-image
+          path: dist/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${{ github.ref_name }}"
+          cat > /tmp/release-notes.md <<EOF
+          ## maude ${VERSION}
+
+          Ready-to-run sandbox appliance for agentic coding on Ubuntu 26.04.
+
+          ### Artifacts
+
+          | File | Description |
+          |------|-------------|
+          | \`maude-wsl-ubuntu2604-${VERSION}.tar.gz\` | WSL2 image — import with \`wsl --import\` |
+          | \`maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256\` | SHA-256 checksum |
+          | \`ghcr.io/dirkpetersen/maude:${VERSION}\` | Docker image |
+
+          ### Quick Start
+
+          **WSL:**
+          \`\`\`powershell
+          wsl --import maude C:\maude .\maude-wsl-ubuntu2604-${VERSION}.tar.gz
+          wsl -d maude
+          \`\`\`
+
+          **Docker:**
+          \`\`\`bash
+          docker run -d -p 3000:3000 --name maude ghcr.io/dirkpetersen/maude:${VERSION}
+          \`\`\`
+
+          See [README](https://github.com/dirkpetersen/maude#readme) for full documentation.
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "maude ${{ github.ref_name }}" \
+            --notes-file /tmp/release-notes.md \
+            dist/maude-wsl-ubuntu2604-${{ github.ref_name }}.tar.gz \
+            dist/maude-wsl-ubuntu2604-${{ github.ref_name }}.tar.gz.sha256

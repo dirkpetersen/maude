@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# /usr/local/bin/maude-setup
+# Interactive setup wizard for maude.
+# Safe to re-run; reads existing config as defaults.
+set -o errexit -o nounset -o pipefail
+IFS=$'\n\t'
+
+CONFIG_FILE="/etc/maude/maude.conf"
+APPMOTEL_ENV="/home/appmotel/.config/appmotel/.env"
+
+# ── Colors ────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+require_root() {
+    if [[ "${EUID}" -ne 0 ]]; then
+        echo -e "${RED}Run as root: sudo maude-setup${RESET}" >&2
+        exit 1
+    fi
+}
+
+is_wsl() { [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]]; }
+
+conf_get() {
+    local key="$1" default="${2:-}"
+    grep -E "^${key}=" "${CONFIG_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "${default}"
+}
+
+conf_set() {
+    local key="$1" value="$2"
+    if grep -qE "^${key}=" "${CONFIG_FILE}" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "${CONFIG_FILE}"
+    else
+        echo "${key}=\"${value}\"" >> "${CONFIG_FILE}"
+    fi
+}
+
+prompt() {
+    # prompt <var_name> <question> <default>
+    local var="$1" question="$2" default="$3" reply
+    read -r -p "${question} [${default}]: " reply
+    eval "${var}='${reply:-${default}}'"
+}
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+require_root
+mkdir -p /etc/maude
+
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════════════════╗${RESET}"
+echo -e "${BOLD}║          maude — appliance setup wizard          ║${RESET}"
+echo -e "${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
+echo ""
+
+# Detect deploy target
+DEPLOY_TARGET=$(conf_get MAUDE_DEPLOY_TARGET "vm")
+if is_wsl; then
+    DEPLOY_TARGET="wsl"
+    echo -e "${CYAN}Detected: WSL environment${RESET}"
+    echo "  → Traefik will only listen on localhost (127.0.0.1)"
+else
+    echo -e "${CYAN}Detected: VM / bare-metal${RESET}"
+fi
+echo ""
+
+# ── Hostname ─────────────────────────────────────────────────────────────────
+CURRENT_HOSTNAME=$(hostname -s 2>/dev/null || echo "maude")
+DEFAULT_HOSTNAME=$(conf_get MAUDE_HOSTNAME "${CURRENT_HOSTNAME}")
+prompt MAUDE_HOSTNAME "Hostname" "${DEFAULT_HOSTNAME}"
+if [[ "${MAUDE_HOSTNAME}" != "${CURRENT_HOSTNAME}" ]]; then
+    hostnamectl set-hostname "${MAUDE_HOSTNAME}"
+    echo "  → Hostname set to ${MAUDE_HOSTNAME}"
+fi
+
+# ── Base domain ──────────────────────────────────────────────────────────────
+if [[ "${DEPLOY_TARGET}" == "wsl" ]]; then
+    DEFAULT_DOMAIN="localhost"
+else
+    # Try to detect public IP for the default hint
+    _ip=$(curl -fsSL --max-time 3 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+    DEFAULT_DOMAIN=$(conf_get MAUDE_BASE_DOMAIN "${_ip:-maude.local}")
+fi
+echo ""
+echo "Base domain is used by Traefik to route apps (e.g., web-term.yourdomain.com)."
+echo "For WSL/local use, 'localhost' is fine. For VMs, use your public domain or IP."
+prompt MAUDE_BASE_DOMAIN "Base domain" "${DEFAULT_DOMAIN}"
+
+# ── TLS / Let's Encrypt (VM only) ────────────────────────────────────────────
+MAUDE_TLS_EMAIL=""
+if [[ "${DEPLOY_TARGET}" == "vm" && "${MAUDE_BASE_DOMAIN}" != *"."* ]] 2>/dev/null; then
+    echo ""
+    echo -e "${YELLOW}Note: TLS (HTTPS) requires a real domain name and port 80/443 open.${RESET}"
+    echo "Leave email blank to skip Let's Encrypt (HTTP only)."
+    prompt MAUDE_TLS_EMAIL "Let's Encrypt email" "$(conf_get MAUDE_TLS_EMAIL '')"
+fi
+
+# ── Write config ─────────────────────────────────────────────────────────────
+conf_set MAUDE_DEPLOY_TARGET "${DEPLOY_TARGET}"
+conf_set MAUDE_HOSTNAME "${MAUDE_HOSTNAME}"
+conf_set MAUDE_BASE_DOMAIN "${MAUDE_BASE_DOMAIN}"
+[[ -n "${MAUDE_TLS_EMAIL}" ]] && conf_set MAUDE_TLS_EMAIL "${MAUDE_TLS_EMAIL}"
+
+# ── Update appmotel .env ──────────────────────────────────────────────────────
+if [[ -f "${APPMOTEL_ENV}" ]]; then
+    echo ""
+    echo "Updating appmotel configuration..."
+    sed -i "s|^BASE_DOMAIN=.*|BASE_DOMAIN=${MAUDE_BASE_DOMAIN}|" "${APPMOTEL_ENV}" || true
+    if [[ -n "${MAUDE_TLS_EMAIL}" ]]; then
+        sed -i "s|^LETSENCRYPT_EMAIL=.*|LETSENCRYPT_EMAIL=${MAUDE_TLS_EMAIL}|" "${APPMOTEL_ENV}" || true
+        sed -i "s|^LETSENCRYPT_ENABLED=.*|LETSENCRYPT_ENABLED=true|" "${APPMOTEL_ENV}" || true
+    fi
+    sudo -u appmotel sudo systemctl restart traefik-appmotel 2>/dev/null || true
+fi
+
+echo ""
+echo -e "${GREEN}Setup complete!${RESET}"
+echo ""
+echo "  Web terminal:  http://web-term.${MAUDE_BASE_DOMAIN}"
+[[ "${DEPLOY_TARGET}" == "wsl" ]] && echo "  (WSL: use http://localhost if domain does not resolve)"
+echo ""
+echo "  Re-run anytime: sudo maude-setup"
+echo "  Config file:    ${CONFIG_FILE}"
+echo ""
