@@ -34,7 +34,6 @@ jobs:
       - name: Bootstrap Ubuntu 26.04 minimal rootfs
         run: |
           sudo mkdir -p /rootfs
-          # Phase 1: minimal bootstrap with only core packages from main
           sudo debootstrap \
             --arch=amd64 \
             --variant=minbase \
@@ -51,11 +50,13 @@ jobs:
           sudo mount --bind /dev     /rootfs/dev
           sudo mount --bind /dev/pts /rootfs/dev/pts
 
-          sudo tee /rootfs/etc/apt/sources.list > /dev/null <<'EOF'
-deb http://archive.ubuntu.com/ubuntu/ plucky main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ plucky-updates main restricted universe multiverse
-deb http://security.ubuntu.com/ubuntu/ plucky-security main restricted universe multiverse
-EOF
+          # Write sources.list (printf avoids YAML-special chars at column 0)
+          printf '%s\n%s\n%s\n' \
+            'deb http://archive.ubuntu.com/ubuntu/ plucky main restricted universe multiverse' \
+            'deb http://archive.ubuntu.com/ubuntu/ plucky-updates main restricted universe multiverse' \
+            'deb http://security.ubuntu.com/ubuntu/ plucky-security main restricted universe multiverse' \
+            | sudo tee /rootfs/etc/apt/sources.list > /dev/null
+
           sudo chroot /rootfs apt-get update -qq
           sudo chroot /rootfs apt-get install -y --no-install-recommends \
             git git-lfs \
@@ -86,15 +87,14 @@ EOF
       - name: Configure rootfs
         run: |
           sudo chroot /rootfs locale-gen en_US.UTF-8 || true
-          echo 'LANG=en_US.UTF-8' | sudo tee /rootfs/etc/default/locale
+          printf 'LANG=en_US.UTF-8\n' | sudo tee /rootfs/etc/default/locale
 
           sudo mkdir -p /rootfs/etc/maude
           sudo chroot /rootfs useradd \
             --create-home --shell /bin/bash \
             --comment "maude default user" maude 2>/dev/null || true
-          echo 'maude:maude' | sudo chroot /rootfs chpasswd
-          printf 'maude ALL=(ALL) NOPASSWD:ALL\n' | \
-            sudo tee /rootfs/etc/sudoers.d/maude
+          printf 'maude:maude\n' | sudo chroot /rootfs chpasswd
+          printf 'maude ALL=(ALL) NOPASSWD:ALL\n' | sudo tee /rootfs/etc/sudoers.d/maude
           sudo chmod 440 /rootfs/etc/sudoers.d/maude
 
           sudo cp scripts/profile.d/maude-path.sh       /rootfs/etc/profile.d/
@@ -104,27 +104,19 @@ EOF
           sudo cp scripts/maude-setup                    /rootfs/usr/local/bin/
           sudo cp scripts/maude-adduser                  /rootfs/usr/local/bin/
           sudo chmod 644 /rootfs/etc/profile.d/maude-*.sh
-          sudo chmod 755 /rootfs/etc/maude/new-user-login.sh \
-                         /rootfs/etc/maude/first-boot.sh \
-                         /rootfs/usr/local/bin/maude-setup \
-                         /rootfs/usr/local/bin/maude-adduser
+          sudo chmod 755 \
+            /rootfs/etc/maude/new-user-login.sh \
+            /rootfs/etc/maude/first-boot.sh \
+            /rootfs/usr/local/bin/maude-setup \
+            /rootfs/usr/local/bin/maude-adduser
 
           printf 'MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n' \
             "${{ steps.version.outputs.version }}" "$(date -Iseconds)" \
             | sudo tee /rootfs/etc/maude/maude.conf
 
-          sudo tee /rootfs/etc/wsl.conf > /dev/null <<'EOF'
-[boot]
-systemd=true
-command=/etc/maude/first-boot.sh
-
-[user]
-default=maude
-
-[interop]
-enabled=true
-appendWindowsPath=false
-EOF
+          # wsl.conf uses ini-format with [sections] — write with printf, not heredoc
+          printf '[boot]\nsystemd=true\ncommand=/etc/maude/first-boot.sh\n\n[user]\ndefault=maude\n\n[interop]\nenabled=true\nappendWindowsPath=false\n' \
+            | sudo tee /rootfs/etc/wsl.conf > /dev/null
 
           if [[ -f /rootfs/etc/ssh/sshd_config ]]; then
             sudo sed -i \
@@ -205,6 +197,12 @@ EOF
           name: wsl-image
           path: dist/
 
+      - name: Generate release notes from template
+        run: |
+          VERSION="${{ github.ref_name }}"
+          sed "s/MAUDE_VERSION/${VERSION}/g" \
+            .github/release-notes-template.md > /tmp/release-notes.md
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -212,34 +210,6 @@ EOF
           VERSION="${{ github.ref_name }}"
           gh release create "${VERSION}" \
             --title "maude ${VERSION}" \
-            --notes "$(cat <<EOF
-## maude ${VERSION}
-
-Ready-to-run sandbox appliance for agentic coding on Ubuntu 26.04.
-
-### Artifacts
-
-| File | Description |
-|------|-------------|
-| \`maude-wsl-ubuntu2604-${VERSION}.tar.gz\` | WSL2 image — import with \`wsl --import\` |
-| \`maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256\` | SHA-256 checksum |
-| \`ghcr.io/dirkpetersen/maude:${VERSION}\` | Docker image |
-
-### Quick Start
-
-**WSL:**
-\`\`\`powershell
-wsl --import maude C:\maude .\maude-wsl-ubuntu2604-${VERSION}.tar.gz
-wsl -d maude
-\`\`\`
-
-**Docker:**
-\`\`\`bash
-docker run -d -p 3000:3000 --name maude ghcr.io/dirkpetersen/maude:${VERSION}
-\`\`\`
-
-See [README](https://github.com/dirkpetersen/maude#readme) for full documentation.
-EOF
-)" \
-            dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz \
-            dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256
+            --notes-file /tmp/release-notes.md \
+            "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz" \
+            "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256"
