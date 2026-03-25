@@ -40,27 +40,72 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y debootstrap systemd-container
+          sudo apt-get install -y debootstrap
 
-      - name: Build Ubuntu 26.04 rootfs
+      - name: Bootstrap Ubuntu 26.04 minimal rootfs
         run: |
           sudo mkdir -p /rootfs
-          # Bootstrap minimal Ubuntu 26.04 (Plucky Puffin)
+          # Phase 1: bootstrap with only core packages that exist in main
+          # (debootstrap --variant=minbase only resolves from main+restricted)
           sudo debootstrap \
             --arch=amd64 \
             --variant=minbase \
-            --include=ca-certificates,curl,wget,git,python3,python3-pip,python3-venv,\
-          nodejs,npm,golang-go,tmux,openssh-server,openssh-client,sudo,bash-completion,\
-          vim,jq,build-essential,pkg-config,libssl-dev,libffi-dev,net-tools,dnsutils,\
-          iputils-ping,iproute2,unzip,zip,less,ripgrep \
+            --components=main,restricted,universe \
+            --include=ca-certificates,curl,wget,sudo,locales,tzdata \
             plucky \
             /rootfs \
             http://archive.ubuntu.com/ubuntu/
 
+      - name: Install packages via chroot apt-get
+        run: |
+          # Mount proc/sys/dev for chroot apt-get
+          sudo mount --bind /proc /rootfs/proc
+          sudo mount --bind /sys  /rootfs/sys
+          sudo mount --bind /dev  /rootfs/dev
+          sudo mount --bind /dev/pts /rootfs/dev/pts
+
+          # Add universe repo (already set by debootstrap but ensure sources.list is complete)
+          sudo tee /rootfs/etc/apt/sources.list > /dev/null <<'EOF'
+          deb http://archive.ubuntu.com/ubuntu/ plucky main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu/ plucky-updates main restricted universe multiverse
+          deb http://security.ubuntu.com/ubuntu/ plucky-security main restricted universe multiverse
+          EOF
+
+          sudo chroot /rootfs apt-get update -qq
+
+          # Phase 2: install full package set inside chroot
+          sudo chroot /rootfs apt-get install -y --no-install-recommends \
+            git git-lfs \
+            python3 python3-pip python3-venv python3-dev \
+            nodejs npm \
+            golang-go \
+            tmux \
+            openssh-server openssh-client \
+            bash-completion \
+            vim nano \
+            jq tree file less \
+            build-essential pkg-config \
+            libssl-dev libffi-dev \
+            net-tools bind9-dnsutils \
+            iputils-ping iproute2 \
+            unzip zip \
+            ripgrep \
+            ufw \
+            fail2ban
+
+          sudo chroot /rootfs apt-get clean
+          sudo rm -rf /rootfs/var/lib/apt/lists/*
+
+          # Unmount
+          sudo umount /rootfs/dev/pts
+          sudo umount /rootfs/dev
+          sudo umount /rootfs/sys
+          sudo umount /rootfs/proc
+
       - name: Configure rootfs
         run: |
-          # Set locale and timezone
           sudo chroot /rootfs locale-gen en_US.UTF-8 || true
+          echo 'LANG=en_US.UTF-8' | sudo tee /rootfs/etc/default/locale
           sudo chroot /rootfs ln -sf /usr/share/zoneinfo/UTC /etc/localtime || true
 
           # Create maude user
@@ -68,55 +113,51 @@ jobs:
             --create-home --shell /bin/bash \
             --comment "maude default user" maude
           echo 'maude:maude' | sudo chroot /rootfs chpasswd
-          echo 'maude ALL=(ALL) NOPASSWD:ALL' | \
+          printf 'maude ALL=(ALL) NOPASSWD:ALL\n' | \
             sudo tee /rootfs/etc/sudoers.d/maude
           sudo chmod 440 /rootfs/etc/sudoers.d/maude
 
           # Install maude scripts
-          sudo mkdir -p /rootfs/etc/maude/profile.d
-          sudo cp scripts/profile.d/maude-path.sh \
-                  /rootfs/etc/profile.d/maude-path.sh
-          sudo cp scripts/profile.d/maude-firstlogin.sh \
-                  /rootfs/etc/profile.d/maude-firstlogin.sh
-          sudo cp scripts/new-user-login.sh \
-                  /rootfs/etc/maude/new-user-login.sh
-          sudo cp scripts/first-boot.sh \
-                  /rootfs/etc/maude/first-boot.sh
-          sudo cp scripts/maude-setup \
-                  /rootfs/usr/local/bin/maude-setup
-          sudo cp scripts/maude-adduser \
-                  /rootfs/usr/local/bin/maude-adduser
+          sudo mkdir -p /rootfs/etc/maude
+          sudo cp scripts/profile.d/maude-path.sh      /rootfs/etc/profile.d/
+          sudo cp scripts/profile.d/maude-firstlogin.sh /rootfs/etc/profile.d/
+          sudo cp scripts/new-user-login.sh             /rootfs/etc/maude/
+          sudo cp scripts/first-boot.sh                 /rootfs/etc/maude/
+          sudo cp scripts/maude-setup                   /rootfs/usr/local/bin/
+          sudo cp scripts/maude-adduser                 /rootfs/usr/local/bin/
           sudo chmod 644 /rootfs/etc/profile.d/maude-*.sh
-          sudo chmod 755 /rootfs/etc/maude/*.sh
-          sudo chmod 755 /rootfs/usr/local/bin/maude-*
+          sudo chmod 755 /rootfs/etc/maude/new-user-login.sh \
+                         /rootfs/etc/maude/first-boot.sh
+          sudo chmod 755 /rootfs/usr/local/bin/maude-setup \
+                         /rootfs/usr/local/bin/maude-adduser
 
           # Write version info
-          echo "MAUDE_VERSION=${{ steps.version.outputs.version }}" | \
-            sudo tee /rootfs/etc/maude/maude.conf
-          echo "MAUDE_BUILD_DATE=$(date -Iseconds)" | \
-            sudo tee -a /rootfs/etc/maude/maude.conf
-          echo "MAUDE_DEPLOY_TARGET=wsl" | \
-            sudo tee -a /rootfs/etc/maude/maude.conf
+          printf 'MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n' \
+            "${{ steps.version.outputs.version }}" "$(date -Iseconds)" \
+            | sudo tee /rootfs/etc/maude/maude.conf
 
-          # WSL-specific: wsl.conf
-          sudo tee /rootfs/etc/wsl.conf <<'EOF'
-          [boot]
-          systemd=true
-          command=/etc/maude/first-boot.sh
+          # WSL-specific: wsl.conf (no leading spaces — wsl.conf is ini-format)
+          sudo tee /rootfs/etc/wsl.conf > /dev/null <<'EOF'
+[boot]
+systemd=true
+command=/etc/maude/first-boot.sh
 
-          [user]
-          default=maude
+[user]
+default=maude
 
-          [interop]
-          enabled=true
-          appendWindowsPath=false
-          EOF
+[interop]
+enabled=true
+appendWindowsPath=false
+EOF
 
-          # SSH config for WSL
-          sudo sed -i \
-            -e 's/^#PermitRootLogin.*/PermitRootLogin no/' \
-            -e 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
-            /rootfs/etc/ssh/sshd_config
+          # SSH hardening
+          if [[ -f /rootfs/etc/ssh/sshd_config ]]; then
+            sudo sed -i \
+              -e 's/^#PermitRootLogin.*/PermitRootLogin no/' \
+              -e 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
+              -e 's/^#MaxAuthTries.*/MaxAuthTries 5/' \
+              /rootfs/etc/ssh/sshd_config
+          fi
 
       - name: Create WSL tarball
         run: |
