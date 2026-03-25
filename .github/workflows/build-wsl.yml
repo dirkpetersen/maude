@@ -122,9 +122,10 @@ jobs:
 
               # Hook maude-path.sh at END of .bashrc so it always wins over
               # Ubuntu defaults and tools (like Claude Code) that prepend to PATH.
-              printf '\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n' \
+              # Use double-quotes (single-quotes would close the outer bash -c '...' string)
+              printf "\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n" \
                 >> /home/maude/.bashrc
-              printf '\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n' \
+              printf "\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n" \
                 >> /etc/skel/.bashrc
 
               printf "MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n" \
