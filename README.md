@@ -181,7 +181,7 @@ See the [appmotel skill](https://github.com/dirkpetersen/appmotel/blob/main/.cla
 
 ## Package Management (mom)
 
-Users in the `mom` group can install packages without full sudo:
+Every user is a member of the `users` group, which grants access to `mom` — a setuid helper that allows package installation without full sudo:
 
 ```bash
 mom install ripgrep bat
@@ -189,34 +189,89 @@ mom update curl
 mom refresh          # apt-get update / dnf makecache
 ```
 
-All operations are logged to `/var/log/mom.log` (JSON) and syslog.
+All operations are logged to `/var/log/mom.log` (JSON) and syslog. New users created via `maude-adduser` are automatically added to the `users` group.
 
 ---
 
-## Building from Source
+## PATH Behaviour
 
-### Prerequisites
+maude enforces a consistent PATH for every user:
 
-- Linux with Docker (for Docker builds)
-- `debootstrap` (for WSL builds)
-- [Packer](https://developer.hashicorp.com/packer) >= 1.10 (for VM builds)
-- KVM/QEMU (for KVM builds) or VMware Workstation/Fusion (for OVA)
+```
+~/bin  →  system dirs  →  ~/.local/bin
+```
+
+`~/bin` is always first so user scripts take priority over system commands. `~/.local/bin` is always present exactly once at the end (tools like Claude Code install binaries there).
+
+This is achieved by hooking `maude-path.sh` at the **end** of `~/.bashrc`, which runs after Ubuntu's built-in PATH additions and after any tool that prepends to `~/.bashrc` on install (such as Claude Code). The hook is placed in `/etc/skel/.bashrc` so new users get it automatically.
+
+---
+
+## Development Workflow
+
+Changes to scripts can be tested at three speeds — no CI wait needed for most work.
+
+### Tier 1 — Instant: unit tests
 
 ```bash
-# Run tests
-make test
+make test          # full test suite (PATH logic, script syntax, username validation, etc.)
+make test-fast     # stop on first failure
+make lint          # bash -n syntax check only
+```
 
-# Build Docker image
-make build-docker
+### Tier 2 — Seconds: sync scripts into a running distro
 
-# Build WSL tarball (Linux only, requires debootstrap)
-make build-wsl
+If you have `maude-dev` already imported, push changed scripts directly without rebuilding:
 
-# Build VM images (requires Packer + KVM)
-make build-vm-kvm UBUNTU_ISO_URL=https://cdimage.ubuntu.com/...
+```bash
+make wsl-update-scripts          # copies all changed scripts into maude-dev
+make wsl-test                    # smoke tests PATH, hostname, mom, users group
+wsl -d maude-dev                 # open a shell to test interactively
+```
 
-# Create a release
-make tag VERSION=v0.2.0
+To apply a PATH fix to an already-imported distro without rebuilding:
+
+```bash
+wsl -d maude -- bash -c 'printf "\n# maude path fix\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n" >> ~/.bashrc && exec bash -l && echo $PATH'
+```
+
+### Tier 3 — ~3 min: full local WSL image build
+
+Builds the same way as CI (Docker + `ubuntu:plucky`), outputs a tarball you import locally as `maude-dev` — doesn't touch your production `maude` distro.
+
+Requires Docker running locally.
+
+```bash
+make build-wsl                   # builds output/maude-wsl-ubuntu2604-<version>.tar.gz
+make wsl-import                  # registers it as 'maude-dev' (unregisters old one first)
+make wsl-test                    # automated smoke tests
+wsl -d maude-dev                 # interactive testing
+```
+
+Override the distro name or install path:
+
+```bash
+make wsl-import WSL_DISTRO=maude-test WSL_DIR=C:\maude-test
+```
+
+### Tier 4 — Official releases only: GitHub Actions
+
+Triggered automatically by pushing a version tag:
+
+```bash
+make tag VERSION=v0.2.0          # creates + pushes tag → triggers CI release workflow
+```
+
+CI builds the WSL tarball, Docker image, and GitHub Release with SHA-256 checksums.
+
+### Other build targets
+
+```bash
+make build-docker                # build Docker image locally
+make run-docker                  # run Docker container (web-term :3000, SSH :2222)
+make build-vm-kvm UBUNTU_ISO_URL=https://...   # Packer KVM build (.qcow2)
+make build-vm-vmware UBUNTU_ISO_URL=https://... # Packer VMware build (.ova)
+make clean                       # remove output/ and local Docker images
 ```
 
 ---
@@ -249,7 +304,8 @@ Key points:
 1. Fork and clone the repo
 2. Run `make test` to verify your environment
 3. Make changes, add tests in `tests/`
-4. Open a PR — CI runs syntax checks and the test suite automatically
+4. Test interactively with `make build-wsl && make wsl-import && make wsl-test`
+5. Open a PR — CI runs the test suite and builds the WSL image automatically
 
 ---
 
