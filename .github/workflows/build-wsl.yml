@@ -35,75 +35,81 @@ jobs:
       - name: Build WSL rootfs via Docker
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          BUILD_DATE="$(date -Iseconds)"
+          WORKSPACE="${GITHUB_WORKSPACE}"
 
-          # Use Ubuntu 26.04 (plucky) Docker image as base — avoids debootstrap issues
-          # with librtmp1 and other packages that fail to configure outside a real system
-          docker run --name maude-wsl-build ubuntu:plucky bash -c "
-            export DEBIAN_FRONTEND=noninteractive
-            export TZ=UTC
-            apt-get update -qq
-            apt-get install -y --no-install-recommends \
-              ca-certificates curl wget sudo locales tzdata \
-              git \
-              python3 python3-pip python3-venv python3-dev \
-              nodejs npm \
-              golang-go \
-              tmux \
-              openssh-server openssh-client \
-              bash-completion \
-              vim nano \
-              jq tree file less \
-              build-essential pkg-config \
-              libssl-dev libffi-dev \
-              net-tools bind9-dnsutils \
-              iputils-ping iproute2 \
-              unzip zip \
-              ripgrep \
-              ufw fail2ban
-            apt-get clean
-            rm -rf /var/lib/apt/lists/*
-            locale-gen en_US.UTF-8
-            echo 'LANG=en_US.UTF-8' > /etc/default/locale
-            useradd --create-home --shell /bin/bash --comment 'maude default user' maude
-            echo 'maude:maude' | chpasswd
-            echo 'maude ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/maude
-            chmod 440 /etc/sudoers.d/maude
-            echo 'Setup complete'
-          "
+          # Mount the repo into the container so we can copy scripts in one pass.
+          # Everything happens in a single docker run — no docker exec needed.
+          docker run --name maude-wsl-build \
+            -v "${WORKSPACE}:/maude-src:ro" \
+            -e MAUDE_VERSION="${VERSION}" \
+            -e MAUDE_BUILD_DATE="${BUILD_DATE}" \
+            ubuntu:plucky bash -c '
+              set -e
+              export DEBIAN_FRONTEND=noninteractive TZ=UTC
 
-          # Copy maude scripts into the container
-          docker cp scripts/profile.d/maude-path.sh       maude-wsl-build:/etc/profile.d/
-          docker cp scripts/profile.d/maude-firstlogin.sh  maude-wsl-build:/etc/profile.d/
-          docker exec maude-wsl-build mkdir -p /etc/maude
-          docker cp scripts/new-user-login.sh              maude-wsl-build:/etc/maude/
-          docker cp scripts/first-boot.sh                  maude-wsl-build:/etc/maude/
-          docker cp scripts/maude-setup                    maude-wsl-build:/usr/local/bin/
-          docker cp scripts/maude-adduser                  maude-wsl-build:/usr/local/bin/
+              apt-get update -qq
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl wget sudo locales tzdata \
+                git \
+                python3 python3-pip python3-venv python3-dev \
+                nodejs npm \
+                golang-go \
+                tmux \
+                openssh-server openssh-client \
+                bash-completion \
+                vim nano \
+                jq tree file less \
+                build-essential pkg-config \
+                libssl-dev libffi-dev \
+                net-tools bind9-dnsutils \
+                iputils-ping iproute2 \
+                unzip zip \
+                ripgrep \
+                ufw fail2ban
+              apt-get clean
+              rm -rf /var/lib/apt/lists/*
 
-          # Set permissions
-          docker exec maude-wsl-build bash -c "
-            chmod 644 /etc/profile.d/maude-*.sh
-            chmod 755 /etc/maude/new-user-login.sh /etc/maude/first-boot.sh
-            chmod 755 /usr/local/bin/maude-setup /usr/local/bin/maude-adduser
-          "
+              locale-gen en_US.UTF-8
+              echo LANG=en_US.UTF-8 > /etc/default/locale
 
-          # Write config and wsl.conf
-          docker exec maude-wsl-build bash -c "
-            printf 'MAUDE_VERSION=${VERSION}\nMAUDE_BUILD_DATE=$(date -Iseconds)\nMAUDE_DEPLOY_TARGET=wsl\n' \
-              > /etc/maude/maude.conf
-            printf '[boot]\nsystemd=true\ncommand=/etc/maude/first-boot.sh\n\n[user]\ndefault=maude\n\n[interop]\nenabled=true\nappendWindowsPath=false\n' \
-              > /etc/wsl.conf
-            sed -i \
-              -e 's/^#PermitRootLogin.*/PermitRootLogin no/' \
-              -e 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' \
-              -e 's/^#MaxAuthTries.*/MaxAuthTries 5/' \
-              /etc/ssh/sshd_config 2>/dev/null || true
-          "
+              useradd --create-home --shell /bin/bash --comment "maude default user" maude
+              echo "maude:maude" | chpasswd
+              echo "maude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/maude
+              chmod 440 /etc/sudoers.d/maude
+
+              mkdir -p /etc/maude
+              cp /maude-src/scripts/profile.d/maude-path.sh       /etc/profile.d/
+              cp /maude-src/scripts/profile.d/maude-firstlogin.sh  /etc/profile.d/
+              cp /maude-src/scripts/new-user-login.sh              /etc/maude/
+              cp /maude-src/scripts/first-boot.sh                  /etc/maude/
+              cp /maude-src/scripts/maude-setup                    /usr/local/bin/
+              cp /maude-src/scripts/maude-adduser                  /usr/local/bin/
+
+              chmod 644 /etc/profile.d/maude-*.sh
+              chmod 755 /etc/maude/new-user-login.sh /etc/maude/first-boot.sh
+              chmod 755 /usr/local/bin/maude-setup /usr/local/bin/maude-adduser
+
+              printf "MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n" \
+                "${MAUDE_VERSION}" "${MAUDE_BUILD_DATE}" > /etc/maude/maude.conf
+
+              printf "[boot]\nsystemd=true\ncommand=/etc/maude/first-boot.sh\n\n[user]\ndefault=maude\n\n[interop]\nenabled=true\nappendWindowsPath=false\n" \
+                > /etc/wsl.conf
+
+              if [ -f /etc/ssh/sshd_config ]; then
+                sed -i \
+                  -e "s/^#PermitRootLogin.*/PermitRootLogin no/" \
+                  -e "s/^#PasswordAuthentication.*/PasswordAuthentication yes/" \
+                  -e "s/^#MaxAuthTries.*/MaxAuthTries 5/" \
+                  /etc/ssh/sshd_config
+              fi
+
+              echo "WSL rootfs build complete."
+            '
 
       - name: Export container as WSL tarball
         run: |
           ARTIFACT="${{ steps.version.outputs.artifact }}"
-          # docker export gives a flat rootfs tarball — exactly what wsl --import expects
           docker export maude-wsl-build | gzip > "${ARTIFACT}"
           docker rm maude-wsl-build
           sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
