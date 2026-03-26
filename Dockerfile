@@ -80,10 +80,11 @@ RUN groupadd --gid 100 users 2>/dev/null || true \
     && printf 'group = "users"\ndeny_list = "/etc/mom/deny.list"\nlog_file = "/var/log/mom.log"\n' \
        > /etc/mom/mom.conf \
     && printf 'nmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n' > /etc/mom/deny.list \
-    && curl -fsSL \
+    && { curl -fsSL --max-time 30 \
        "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-amd64" \
        -o /usr/local/bin/mom \
-    && chmod 4755 /usr/local/bin/mom
+    && chmod 4755 /usr/local/bin/mom \
+    || echo "WARNING: mom release not yet published — docker-entrypoint.sh will install it at runtime."; }
 
 # ── Write maude.conf ──────────────────────────────────────────────────────────
 RUN printf 'MAUDE_DEPLOY_TARGET=docker\nMAUDE_BASE_DOMAIN=localhost\n' \

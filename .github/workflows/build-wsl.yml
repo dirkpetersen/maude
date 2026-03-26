@@ -97,10 +97,15 @@ jobs:
 
               # ── mom binary ─────────────────────────────────────────────────
               _arch=$(dpkg --print-architecture 2>/dev/null || uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
-              curl -fsSL \
+              if curl -fsSL --max-time 30 \
                 "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-${_arch}" \
-                -o /usr/local/bin/mom
-              chmod 4755 /usr/local/bin/mom
+                -o /usr/local/bin/mom 2>/dev/null; then
+                chmod 4755 /usr/local/bin/mom
+                echo "mom installed from GitHub release."
+              else
+                echo "WARNING: mom release not yet published — skipping. first-boot.sh will install it at runtime."
+                rm -f /usr/local/bin/mom
+              fi
               mkdir -p /etc/mom
               printf "group = \"users\"\ndeny_list = \"/etc/mom/deny.list\"\nlog_file = \"/var/log/mom.log\"\n" \
                 > /etc/mom/mom.conf
