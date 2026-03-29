@@ -122,3 +122,4 @@ packages:
   - postgresql-client
   - mysql-client
   - httpie
+  - pandoc

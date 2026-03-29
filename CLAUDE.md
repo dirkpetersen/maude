@@ -22,7 +22,7 @@ Traefik (reverse proxy, HTTP only for now)
     ├── web-term  (Node.js app, deployed by appmotel, provides browser terminal)
     └── user apps (deployed via appmotel by users or Claude Code)
 
-Each user → separate Linux account (JIT-created on first login)
+Each user → separate Linux account (JIT-created on first login via maude-adduser)
 appmotel  → runs as its own system user, manages Traefik + app systemd services
 mom       → setuid binary, lets non-root users install packages
 ```
@@ -42,19 +42,68 @@ mom       → setuid binary, lets non-root users install packages
 - **No containers**: appmotel deploys Python, Node.js, and Go apps only (Rust support deferred)
 - MIT licensed
 
-## Repository Structure (being built)
+## Commands
+
+### Testing & Linting
+```bash
+make test           # Run full test suite (all tests/test-*.sh files)
+make test-fast      # Run tests, stop on first failure
+make lint           # Bash -n syntax check only (no execution)
+```
+
+To run a single test file directly:
+```bash
+bash tests/test-path-setup.sh
+bash tests/test-username-validation.sh
+```
+
+### Building
+
+```bash
+# Docker
+make build-docker                          # Build Docker image locally
+make run-docker                            # Run with ports :3000, :2222, :8080
+make push-docker                           # Push to GHCR
+
+# WSL (builds via Docker — works on Linux/WSL/Mac, same as CI)
+make build-wsl                             # Build WSL rootfs tarball
+make wsl-import WSL_DISTRO=maude-dev WSL_DIR=C:\maude-dev  # Register in WSL
+make wsl-test                              # Smoke tests (PATH, hostname, mom, users group)
+make wsl-update-scripts                    # Hot-patch scripts into running WSL distro (seconds)
+
+# VM (requires Packer + KVM or VMware)
+make build-vm-kvm UBUNTU_ISO_URL=...       # Outputs .qcow2
+make build-vm-vmware UBUNTU_ISO_URL=...    # Outputs .ova
+```
+
+### Releasing
+```bash
+make tag VERSION=v0.2.0    # Creates + pushes git tag → triggers CI release workflow
+```
+
+## Repository Structure
 
 ```
 maude/
-├── packer/                  # Packer templates for VM/WSL image builds
+├── packer/                  # Packer HCL templates for VM/WSL image builds
+│   ├── http/                # Cloud-init autoinstall configs (user-data, meta-data)
+│   ├── ubuntu-2604.pkr.hcl  # Builds KVM (.qcow2) and VMware (.ova) images
+│   └── variables.pkr.hcl    # Packer variables (disk_size, memory, cpus, ISO URL)
 ├── packages/
-│   ├── ubuntu-packages.yaml # Package list installed by apt during image build
-│   └── rhel-packages.yaml   # Package list installed by dnf during image build
+│   ├── ubuntu-packages.yaml # ~125 packages installed by apt during image build
+│   └── rhel-packages.yaml   # ~95 packages for RHEL/Rocky/Alma
 ├── scripts/
-│   ├── first-boot.sh        # Runs once on first boot: sets up appmotel, deploys web-term
-│   ├── maude-setup          # CLI wizard: domain, hostname, deployment-type detection
-│   └── profile.d/           # Shell profile snippets dropped into /etc/profile.d/
-└── .github/workflows/       # GitHub Actions: builds WSL tarball and Docker image
+│   ├── first-boot.sh        # Systemd one-shot: installs mom, appmotel, web-term
+│   ├── maude-setup          # Interactive wizard: domain, hostname, TLS config
+│   ├── maude-adduser        # JIT user provisioning (called by web-term on first login)
+│   ├── new-user-login.sh    # Per-user first-login setup (Claude Code prompt, dirs)
+│   └── profile.d/           # maude-path.sh and maude-firstlogin.sh → /etc/profile.d/
+├── tests/
+│   ├── lib.sh               # Test framework: assert_eq, assert_contains, assert_exit_zero, etc.
+│   └── test-*.sh            # Test suites (path-setup, username-validation, wsl-detection, etc.)
+├── Dockerfile               # Docker image (ubuntu:plucky base)
+├── docker-entrypoint.sh     # Docker first-run: installs appmotel, web-term; starts services
+└── .github/workflows/       # build-docker.yml, build-wsl.yml, release.yml
 ```
 
 ## Image Build Strategy
@@ -68,28 +117,36 @@ maude/
 
 ## First Boot & User Experience
 
-1. `first-boot.sh` runs via systemd oneshot service:
+1. `first-boot.sh` runs via systemd oneshot service (sentinel: `/etc/maude/.first-boot-done`):
    - Installs appmotel (pulls `install.sh` from its repo)
    - Deploys web-term as an appmotel app
    - Runs WSL detection; patches Traefik config to `127.0.0.1` if on WSL
 2. User logs in → `maude setup` wizard prompts for domain/hostname (skippable, defaults to IP)
 3. On every new user's first login:
-   - Linux account auto-created (JIT via PAM or adduser in profile script)
+   - Linux account JIT-created by `maude-adduser` (username regex: `^[a-z][a-z0-9_-]{0,31}$`; system names like root, appmotel, mom, maude are blocked)
    - `~/bin` and `~/.local/bin` created, `~/bin` prepended to PATH (via `/etc/profile.d/maude-path.sh`)
    - Prompted once to install Claude Code: `curl -fsSL https://claude.ai/install.sh | bash -s latest`
-
-## Default User
-
-Image ships with a `maude` user (regular Linux user, not admin). Additional users created with standard `adduser`. The `apps` operator user (appmotel tier-1) is also present per appmotel's permission model.
+   - Sentinel written to `~/.config/maude/.first-login-done`
 
 ## PATH Convention
 
-All users must have `~/bin` at the **front** of PATH and `~/.local/bin` also present. Enforced via `/etc/profile.d/maude-path.sh`:
+All users must have `~/bin` at the **front** of PATH and `~/.local/bin` also present. The `maude-path.sh` profile script is intentionally placed at the **end** of `~/.bashrc` so it runs after all tool installers (e.g., Claude Code) that prepend their own paths — then re-enforces `~/bin` first and deduplicates `~/.local/bin`.
 
 ```bash
 mkdir -p "$HOME/bin" "$HOME/.local/bin"
 export PATH="$HOME/bin:$PATH:$HOME/.local/bin"
 ```
+
+## Development Workflow Tiers
+
+- **Tier 1 — Unit tests (instant)**: `make test` / `make lint`
+- **Tier 2 — Hot script update (seconds)**: `make wsl-update-scripts` then `make wsl-test`
+- **Tier 3 — Full local build (~3 min)**: `make build-wsl && make wsl-import && make wsl-test`
+- **Tier 4 — Official release (CI only)**: `make tag VERSION=vX.Y.Z`
+
+## Default User
+
+Image ships with a `maude` user (regular Linux user, not admin). Additional users created with standard `adduser`. The `apps` operator user (appmotel tier-1) is also present per appmotel's permission model.
 
 ## appmotel Permission Model
 
@@ -98,6 +155,14 @@ Three-tier sudo model (see `~/gh/appmotel/.claude/skills/appmotel/SKILL.md`):
 - `appmotel` user → `sudo systemctl` → manages only Traefik system service
 
 Always prefix appmotel CLI calls with `sudo -u appmotel appmo ...`
+
+## Key Runtime Config Files
+
+- `/etc/maude/maude.conf` — `MAUDE_HOSTNAME`, `MAUDE_BASE_DOMAIN`, `MAUDE_TLS_EMAIL`, `MAUDE_DEPLOY_TARGET`, `MAUDE_VERSION`
+- `/home/appmotel/.config/appmotel/.env` — appmotel configuration (updated by `maude-setup`)
+- `/etc/mom/mom.conf` — setuid group + deny list path
+- `/etc/mom/deny.list` — blocked packages (nmap, tcpdump, wireshark, metasploit, etc.)
+- `/etc/wsl.conf` — WSL-specific boot config (hostname, systemd, interop)
 
 ## Missing Features in Upstream Repos (to be implemented by separate agents)
 

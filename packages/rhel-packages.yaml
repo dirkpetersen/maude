@@ -116,3 +116,4 @@ packages:
   - redis
   - postgresql
   - httpie
+  - pandoc
