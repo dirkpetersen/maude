@@ -166,6 +166,8 @@ fi
 USER_HOME="/home/$USERNAME"
 
 # Restore script — runs once at boot before lsyncd starts
+mkdir -p "$USER_HOME/bin"
+chown "$USERNAME:$USERNAME" "$USER_HOME/bin"
 cat > "$USER_HOME/bin/maude-restore.sh" << RESTOREEOF
 #!/bin/bash
 # maude-restore.sh — populate empty dirs from shared Maude folder on boot
