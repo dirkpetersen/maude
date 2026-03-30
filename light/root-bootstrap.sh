@@ -290,6 +290,13 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
         printf '\n# Maude welcome\n. /etc/profile.d/maude-welcome.sh\n' >> "/home/$USERNAME/.bashrc"
 fi
 
+# ── PS1: replace hostname with underscore ─────────────────────────────
+if [ -f "/home/$USERNAME/.bashrc" ]; then
+    grep -q 'MAUDE_PS1' "/home/$USERNAME/.bashrc" 2>/dev/null || \
+        printf '\n# Maude PS1: show user@_ instead of user@hostname\nMAUDE_PS1=1\nPS1='"'"'${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '"'"'\n' \
+            >> "/home/$USERNAME/.bashrc"
+fi
+
 # ── Install packages from stdin (fallback — normally baked into template) ─
 if [ -n "$PACKAGES" ]; then
     echo "Installing packages..."
