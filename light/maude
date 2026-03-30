@@ -190,16 +190,6 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 # ── Helper: check if Claude has a previous session for a directory ────
-claude_has_session() {
-    # Claude Code stores sessions under ~/.claude/projects/<absolute-path>/
-    # Use the resolved path to handle symlinks correctly
-    local resolved
-    resolved="$(cd "$1" && pwd -P)"
-    local session_dir="$HOME/.claude/projects${resolved}"
-    [ -d "$session_dir" ] && \
-    find "$session_dir" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .
-}
-
 # ── Auto-update Claude Code once a week ──────────────────────────────
 claude_maybe_update() {
     local stamp="$HOME/.claude/.last-update-check"
@@ -223,14 +213,10 @@ if [ -d "$PROJECT_PATH" ]; then
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     claude_maybe_update
     cd "$PROJECT_PATH"
-    if claude_has_session "$PROJECT_PATH"; then
-        echo -e "${GREEN}Resuming previous conversation${NC}"
-        echo ""
-        exec claude opus-1m --continue
-    else
-        echo ""
-        exec claude opus-1m
-    fi
+    # Always pass --continue for existing projects; Claude Code
+    # starts a fresh session if there's nothing to resume.
+    echo ""
+    exec claude --continue --model opus-1m
 else
     # New project → create, git init, fresh start
     echo -e "${CYAN}Creating new project:${NC} $PROJECT_NAME"
@@ -240,5 +226,5 @@ else
     git -C "$PROJECT_PATH" init --quiet
     echo -e "${GREEN}  Initialized git repo${NC}"
     echo ""
-    cd "$PROJECT_PATH" && exec claude opus-1m
+    cd "$PROJECT_PATH" && exec claude --model opus-1m
 fi
