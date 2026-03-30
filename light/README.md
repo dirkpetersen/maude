@@ -12,17 +12,20 @@ A lightweight WSL2 sandbox for agentic coding with [Claude Code](https://claude.
 - **[mom](https://github.com/dirkpetersen/mom)** — install additional system packages without sudo (`mom install <pkg>`)
 - **[Claude Code skills](https://github.com/anthropics/skills)** — pdf, docx, xlsx, pptx, and more pre-linked
 - **Project launcher** — `maude project-name` creates a project folder, initializes git, and launches Claude Code
-- **Hourly backup** — `~/Projects` and `~/.claude` are rsynced to the shared `~/Maude` folder so work survives distro removal
+- **Real-time sync** — `~/Projects` and `~/.claude` are mirrored to `~/Maude` via lsyncd (inotify), restored on fresh install
 - **Fast rebuilds** — packages are baked into a reusable WSL template; teardown + reinstall takes under a minute
 
 ## Install
 
-Open an **Administrator PowerShell** and run:
+Open **PowerShell as Administrator** (right-click → "Run as Administrator") and run:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1'))
+curl -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
+
+That's it — one line. It downloads the setup script to a temp file and runs it. All companion files (bootstrap scripts, packages list, icon) are downloaded automatically from GitHub during setup.
+
+> **Note:** Piping directly via `iex` (`Invoke-Expression`) may be blocked by antivirus on corporate machines. The `curl` approach above works reliably everywhere.
 
 The setup script will:
 
@@ -39,17 +42,13 @@ On subsequent runs, step 3 is skipped (the template already exists), so rebuilds
 ## Uninstall
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1'))
+curl -sLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\teardown-wsl-maude.ps1
 ```
 
 This removes the Maude distro, Windows Terminal profile, and desktop shortcut. The template is kept for fast reinstalls. To remove everything including the template:
 
 ```powershell
-# Download and run locally with -IncludeTemplate
-$script = (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1')
-$scriptBlock = [scriptblock]::Create($script)
-& $scriptBlock -IncludeTemplate
+curl -sLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\teardown-wsl-maude.ps1 -IncludeTemplate
 ```
 
 ## Usage
@@ -75,8 +74,8 @@ After install, open the **Maude** profile in Windows Terminal (or the desktop sh
 Windows host
   │
   ├── C:\Users\you\OneDrive\Documents\Maude\   ← shared folder (host side)
-  │       ├── Projects/                          ← backed up from WSL hourly
-  │       └── .claude/                           ← backed up from WSL hourly
+  │       ├── Projects/                          ← synced from WSL in real time
+  │       └── .claude/                           ← synced from WSL in real time
   │
   └── WSL2: Maude (Ubuntu 24.04)
         ├── ~/Maude/           ← drvfs mount of shared folder
