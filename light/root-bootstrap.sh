@@ -122,20 +122,9 @@ if [ -n "$HOST_FOLDER" ]; then
         printf '%s %s drvfs defaults,uid=%s,gid=%s 0 0\n' \
             "$FSTAB_SRC" "$MOUNT_POINT" "$USER_UID" "$USER_GID" >> /etc/fstab
     fi
-    # Mount now so directories created later land on the host filesystem
-    if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
-        if mount "$MOUNT_POINT"; then
-            echo "Mounted $MOUNT_POINT"
-        else
-            echo "WARNING: mount $MOUNT_POINT failed (will activate on next WSL restart)."
-        fi
-    fi
-    # Create .claude and Projects on the mounted host filesystem
-    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
-        mkdir -p "$MOUNT_POINT/.claude" "$MOUNT_POINT/Projects"
-        chown "$USERNAME:$USERNAME" "$MOUNT_POINT/.claude" "$MOUNT_POINT/Projects"
-        echo "Created .claude and Projects on host mount."
-    fi
+    # Note: the drvfs mount only activates after WSL restart (step 6).
+    # The .claude and Projects dirs are pre-created on the Windows side
+    # by setup-wsl-maude.ps1 so they exist when the mount activates.
     echo "Sandbox mount configured: $HOST_FOLDER -> $MOUNT_POINT"
 else
     echo "WARNING: No host folder path found, skipping sandbox mount."
@@ -184,32 +173,12 @@ USER_HOME="/home/$USERNAME"
 mkdir -p "$USER_HOME/bin" "$USER_HOME/.local/bin" "$USER_HOME/.local/state"
 chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 
-# ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
-# The mount and mkdir were done above. Now create the symlink.
-if [ -d "$USER_HOME/Maude/.claude" ]; then
-    # Remove ~/.claude if it's a plain directory (not already a symlink)
-    if [ -d "$USER_HOME/.claude" ] && [ ! -L "$USER_HOME/.claude" ]; then
-        rm -rf "$USER_HOME/.claude"
-    fi
-    ln -sfn "$USER_HOME/Maude/.claude" "$USER_HOME/.claude"
-    chown -h "$USERNAME:$USERNAME" "$USER_HOME/.claude"
-    echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
-    # Seed settings.json with bypass permissions (safe inside sandbox)
-    if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
-        cat > "$USER_HOME/.claude/settings.json" << 'SETTINGSEOF'
-{
-  "permissions": {
-    "defaultMode": "bypassPermissions"
-  },
-  "skipDangerousModePermissionPrompt": true
-}
-SETTINGSEOF
-        chown "$USERNAME:$USERNAME" "$USER_HOME/.claude/settings.json"
-        echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
-    fi
-else
-    echo "WARNING: ~/Maude/.claude does not exist, skipping symlink."
-fi
+# ── ~/.claude symlink is created in maude-bootstrap.sh (step 6) ───────
+# The drvfs mount for ~/Maude isn't active until after WSL restart.
+# Creating the symlink here would leave it broken, causing Claude Code's
+# installer to fail with "mkdir: cannot create directory: File exists".
+# The .claude and Projects dirs are pre-created on the Windows side by
+# setup-wsl-maude.ps1 so they exist when the mount activates.
 
 # ── (DISABLED) Real-time sync machinery ──────────────────────────────
 # Commented out — replaced by direct symlinks and ~/Maude/Projects.

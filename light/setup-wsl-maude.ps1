@@ -207,6 +207,9 @@ if ($wtPresent) {
 
 Write-Host "`n[3/7] Setting up host folder ($HostFolderSource)..." -ForegroundColor Green
 New-Item -ItemType Directory -Force -Path $HostFolder | Out-Null
+# Pre-create .claude and Projects so they exist when the drvfs mount activates
+New-Item -ItemType Directory -Force -Path (Join-Path $HostFolder ".claude") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $HostFolder "Projects") | Out-Null
 Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
 
 # Set custom folder icon (PNG -> ICO conversion for desktop.ini)
