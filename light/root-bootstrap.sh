@@ -307,6 +307,34 @@ PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;3
 PS1EOF
 fi
 
+# ── Tab completion for maude command ─────────────────────────────────
+if [ -f "/home/$USERNAME/.bashrc" ]; then
+    grep -q '_maude_complete' "/home/$USERNAME/.bashrc" 2>/dev/null || \
+        cat >> "/home/$USERNAME/.bashrc" << 'COMPEOF'
+
+# Maude tab completion
+_maude_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        local cmds="list ls delete rm help"
+        local projects=""
+        if [ -d "$HOME/Projects" ]; then
+            projects=$(ls -d "$HOME/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
+        fi
+        COMPREPLY=( $(compgen -W "$cmds $projects" -- "$cur") )
+    elif [ "$COMP_CWORD" -eq 2 ] && [[ "$prev" == "delete" || "$prev" == "rm" ]]; then
+        local projects=""
+        if [ -d "$HOME/Projects" ]; then
+            projects=$(ls -d "$HOME/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
+        fi
+        COMPREPLY=( $(compgen -W "$projects" -- "$cur") )
+    fi
+}
+complete -F _maude_complete maude
+COMPEOF
+fi
+
 # ── Install Claude Code ───────────────────────────────────────────────
 echo "Installing Claude Code..."
 su - "$USERNAME" -c '
