@@ -191,13 +191,33 @@ fi
 
 # ── Helper: check if Claude has a previous session for a directory ────
 claude_has_session() {
-    # Claude Code stores sessions under ~/.claude/projects/<absolute-path>/
-    # Use the resolved path to handle symlinks correctly
-    local resolved
-    resolved="$(cd "$1" && pwd -P)"
-    local session_dir="$HOME/.claude/projects${resolved}"
-    [ -d "$session_dir" ] && \
-    find "$session_dir" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .
+    # Claude Code stores sessions under ~/.claude/projects/<path>/
+    # The exact path encoding varies, so try multiple candidates:
+    #   1. Logical path (as typed)
+    #   2. Physical path (symlinks resolved via pwd -P)
+    #   3. Fuzzy match: any session dir ending with the project name
+    local dir="$1"
+    local logical physical
+    logical="$(cd "$dir" 2>/dev/null && pwd)"
+    physical="$(cd "$dir" 2>/dev/null && pwd -P)"
+    local base="$HOME/.claude/projects"
+
+    for candidate in "$base$logical" "$base$physical"; do
+        if [ -d "$candidate" ] && \
+           find "$candidate" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .; then
+            return 0
+        fi
+    done
+
+    # Fallback: search for any session dir matching the project name
+    local name
+    name="$(basename "$dir")"
+    local match
+    match="$(find "$base" -maxdepth 5 -type d -name "$name" -exec \
+        find {} -maxdepth 1 -name "*.jsonl" -size +0c -print -quit \; 2>/dev/null | head -1)"
+    [ -n "$match" ] && return 0
+
+    return 1
 }
 
 # ── Auto-update Claude Code once a week ──────────────────────────────
