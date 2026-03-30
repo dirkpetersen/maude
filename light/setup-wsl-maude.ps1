@@ -311,11 +311,20 @@ $DistroName is already installed. To reinstall, run teardown first:
         # Download Ubuntu 24.04 from the Microsoft Store, install all packages,
         # then re-import as our named template and remove the store distro.
         $storeDistro = "Ubuntu-24.04"
-        # Unregister any existing store distro to ensure a clean template
         $storeExists = $installedDistros | Where-Object { $_.Trim() -eq $storeDistro }
         if ($storeExists) {
-            Write-Host "Removing existing '$storeDistro' for a clean template build..." -ForegroundColor Gray
-            wsl --unregister $storeDistro
+            Write-Host @"
+
+ERROR: '$storeDistro' is already installed as a WSL distro.
+Maude needs to install a fresh '$storeDistro' to build its template.
+
+Please rename or remove it first:
+    wsl --export $storeDistro `$env:TEMP\ubuntu-backup.tar   # backup
+    wsl --unregister $storeDistro                             # remove
+
+Then re-run this setup script.
+"@ -ForegroundColor Red
+            exit 1
         }
         Write-Host "Installing '$storeDistro' from Microsoft Store (first time only)..."
         wsl --install -d $storeDistro --no-launch
