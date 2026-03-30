@@ -260,7 +260,14 @@ $installedDistros = (wsl -l -q 2>&1) -replace "`0", "" | Where-Object { $_.Trim(
 $distroExists = $installedDistros | Where-Object { $_.Trim() -eq $DistroName }
 
 if ($distroExists) {
-    Write-Host "$DistroName is already installed. Skipping import." -ForegroundColor Gray
+    Write-Host @"
+
+$DistroName is already installed. To reinstall, run teardown first:
+
+    curl.exe -sLo `$env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
+
+"@ -ForegroundColor Yellow
+    exit 0
 } else {
     # Use a persistent template distro named "Ubuntu-24.04-Template" with all
     # packages pre-installed.  Avoids re-downloading from the Microsoft Store
