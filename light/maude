@@ -179,10 +179,10 @@ if [ -d "$PROJECT_PATH" ]; then
     if claude_has_session; then
         echo -e "${GREEN}Resuming previous conversation${NC}"
         echo ""
-        exec claude --continue
+        exec claude opus-1m opus-1m --continue
     else
         echo ""
-        exec claude
+        exec claude opus-1m
     fi
 else
     # New project → create, git init, fresh start
@@ -193,5 +193,5 @@ else
     git -C "$PROJECT_PATH" init --quiet
     echo -e "${GREEN}  Initialized git repo${NC}"
     echo ""
-    cd "$PROJECT_PATH" && exec claude
+    cd "$PROJECT_PATH" && exec claude opus-1m
 fi

@@ -386,25 +386,48 @@ $wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTermina
 if (Test-Path $wtSettingsPath) {
     $wtJson    = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
 
-    # Remove any existing profiles for this distro (auto-generated or manual)
-    $wtJson.profiles.list = @(
-        $wtJson.profiles.list | Where-Object {
-            $nm = if ($_.PSObject.Properties['name']) { $_.name } else { '' }
-            $nm -ne $DistroName
-        }
-    )
+    # Hide auto-generated WSL profiles for Maude and the template
+    # (WT regenerates source=Microsoft.WSL profiles — removing them doesn't stick)
+    $hasManualProfile = $false
+    for ($i = 0; $i -lt $wtJson.profiles.list.Count; $i++) {
+        $p   = $wtJson.profiles.list[$i]
+        $nm  = if ($p.PSObject.Properties['name'])   { $p.name }   else { '' }
+        $src = if ($p.PSObject.Properties['source']) { $p.source } else { '' }
 
-    # Create a single clean profile with the Maude icon
-    $newProfile = [PSCustomObject]@{
-        guid        = "{$([guid]::NewGuid().ToString())}"
-        name        = $DistroName
-        commandline = "wsl.exe -d $DistroName"
-        hidden      = $false
+        # Hide auto-generated Maude profile (has source)
+        if ($nm -eq $DistroName -and $src -ne '') {
+            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
+        }
+
+        # Hide template profiles (never need a WT entry)
+        if ($nm -eq 'Ubuntu-24.04-Template') {
+            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
+        }
+
+        # Track if our manual profile already exists
+        if ($nm -eq $DistroName -and $src -eq '') {
+            $hasManualProfile = $true
+            # Update icon in case it changed
+            if (Test-Path $iconDst) {
+                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+            }
+            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
+        }
     }
-    if (Test-Path $iconDst) {
-        $newProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+
+    # Create our manual profile if it doesn't exist yet
+    if (-not $hasManualProfile) {
+        $newProfile = [PSCustomObject]@{
+            guid        = "{$([guid]::NewGuid().ToString())}"
+            name        = $DistroName
+            commandline = "wsl.exe -d $DistroName"
+            hidden      = $false
+        }
+        if (Test-Path $iconDst) {
+            $newProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+        }
+        $wtJson.profiles.list += $newProfile
     }
-    $wtJson.profiles.list += $newProfile
 
     $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
     Write-Host "Windows Terminal profile created for $DistroName." -ForegroundColor Gray
