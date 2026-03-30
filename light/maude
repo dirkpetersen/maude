@@ -189,37 +189,6 @@ if ! command -v claude >/dev/null 2>&1; then
     esac
 fi
 
-# ── Helper: check if Claude has a previous session for a directory ────
-claude_has_session() {
-    # Claude Code stores sessions under ~/.claude/projects/<path>/
-    # The exact path encoding varies, so try multiple candidates:
-    #   1. Logical path (as typed)
-    #   2. Physical path (symlinks resolved via pwd -P)
-    #   3. Fuzzy match: any session dir ending with the project name
-    local dir="$1"
-    local logical physical
-    logical="$(cd "$dir" 2>/dev/null && pwd)"
-    physical="$(cd "$dir" 2>/dev/null && pwd -P)"
-    local base="$HOME/.claude/projects"
-
-    for candidate in "$base$logical" "$base$physical"; do
-        if [ -d "$candidate" ] && \
-           find "$candidate" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .; then
-            return 0
-        fi
-    done
-
-    # Fallback: search for any session dir matching the project name
-    local name
-    name="$(basename "$dir")"
-    local match
-    match="$(find "$base" -maxdepth 5 -type d -name "$name" -exec \
-        find {} -maxdepth 1 -name "*.jsonl" -size +0c -print -quit \; 2>/dev/null | head -1)"
-    [ -n "$match" ] && return 0
-
-    return 1
-}
-
 # ── Auto-update Claude Code once a week ──────────────────────────────
 claude_maybe_update() {
     local stamp="$HOME/.claude/.last-update-check"
@@ -243,14 +212,8 @@ if [ -d "$PROJECT_PATH" ]; then
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     claude_maybe_update
     cd "$PROJECT_PATH"
-    if claude_has_session "$PROJECT_PATH"; then
-        echo -e "${GREEN}Resuming previous conversation${NC}"
-        echo ""
-        claude opus-1m --continue || claude opus-1m
-    else
-        echo ""
-        exec claude opus-1m
-    fi
+    echo ""
+    claude opus-1m --continue || exec claude opus-1m
 else
     # New project → create, git init, fresh start
     echo -e "${CYAN}Creating new project:${NC} $PROJECT_NAME"
