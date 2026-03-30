@@ -218,6 +218,8 @@ if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
     printf "\n"
     printf "  ${Y}mom install <pkg>${N}   Install system packages (no sudo needed)\n"
     printf "\n"
+    printf "  ${B}Tips:${N} Select text to copy | Alt+Shift+${B}+${N} split vertical | Alt+Shift+${B}-${N} split horizontal\n"
+    printf "\n"
 fi
 WELCOME
 chmod +x /etc/profile.d/maude-welcome.sh

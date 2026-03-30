@@ -433,6 +433,9 @@ $wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTermina
 if (Test-Path $wtSettingsPath) {
     $wtJson    = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
 
+    # Enable copy-on-select: marking text copies it to clipboard automatically
+    $wtJson | Add-Member -NotePropertyName 'copyOnSelect' -NotePropertyValue $true -Force
+
     # Hide auto-generated WSL profiles for Maude and the template.
     # WT regenerates source=Microsoft.WSL profiles — removing them doesn't stick.
     # If the auto-generated profile doesn't exist yet (WT creates them lazily),
