@@ -247,8 +247,8 @@ WantedBy=multi-user.target
 SVCEOF
 
 # Create log directory
-mkdir -p "$USER_HOME/.local/state"
-chown -R "$USERNAME:$USERNAME" "$USER_HOME/.local/state"
+mkdir -p "$USER_HOME/.local/state" "$USER_HOME/.local/bin"
+chown -R "$USERNAME:$USERNAME" "$USER_HOME/.local"
 
 systemctl enable maude-sync.service 2>/dev/null || true
 echo "Real-time sync service installed (maude-sync)."
