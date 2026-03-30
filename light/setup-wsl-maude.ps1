@@ -29,6 +29,20 @@ param(
     [string]$InstallDir  = "$env:LOCALAPPDATA\Maude"
 )
 
+# ── Locate Windows Terminal settings.json ─────────────────────────────
+# Supports Store, Preview, and non-Store (winget/scoop) installs.
+function Find-WTSettingsPath {
+    $candidates = @(
+        Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+        Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
+        Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\settings.json"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { return $c }
+    }
+    return $null
+}
+
 # ── Resolve script directory and download missing files from GitHub ───
 # $PSScriptRoot is empty when run via iex. Even when set, the user may
 # have downloaded only setup-wsl-maude.ps1 — companion files may be missing.
@@ -331,8 +345,8 @@ $DistroName is already installed. To reinstall, run teardown first:
         }
         # Remove the store distro and its WT profile (no longer needed)
         wsl --unregister $storeDistro
-        $wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
-        if (Test-Path $wtSettingsPath) {
+        $wtSettingsPath = Find-WTSettingsPath
+        if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
             $wtJson = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
             $countBefore = $wtJson.profiles.list.Count
             $wtJson.profiles.list = @(
@@ -432,8 +446,8 @@ if (Test-Path $iconSrc) {
     Copy-Item -Path $iconSrc -Destination $iconDst -Force
 }
 
-$wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
-if (Test-Path $wtSettingsPath) {
+$wtSettingsPath = Find-WTSettingsPath
+if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
     $wtJson    = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
 
     # Enable copy-on-select: marking text copies it to clipboard automatically

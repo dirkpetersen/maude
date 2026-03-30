@@ -32,8 +32,14 @@ Write-Host "=== Maude WSL Teardown ===" -ForegroundColor Cyan
 # ── Step 1: Remove Windows Terminal profile + desktop shortcut ───  # runs as current user
 
 Write-Host "`n[1/4] Cleaning up Windows Terminal profile..." -ForegroundColor Green
-$wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
-if (Test-Path $wtSettingsPath) {
+# Locate WT settings (supports Store, Preview, and non-Store installs)
+$wtCandidates = @(
+    Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+    Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
+    Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\settings.json"
+)
+$wtSettingsPath = $wtCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($wtSettingsPath) {
     $wtJson   = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
     $before   = $wtJson.profiles.list.Count
     $wtJson.profiles.list = @(
