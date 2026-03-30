@@ -246,7 +246,7 @@ if [ -d "$PROJECT_PATH" ]; then
     if claude_has_session "$PROJECT_PATH"; then
         echo -e "${GREEN}Resuming previous conversation${NC}"
         echo ""
-        exec claude opus-1m --continue
+        claude opus-1m --continue || claude opus-1m
     else
         echo ""
         exec claude opus-1m
