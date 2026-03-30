@@ -196,10 +196,28 @@ claude_has_session() {
     find "$session_dir" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .
 }
 
+# ── Auto-update Claude Code once a week ──────────────────────────────
+claude_maybe_update() {
+    local stamp="$HOME/.claude/.last-update-check"
+    local now
+    now=$(date +%s)
+    local last=0
+    if [ -f "$stamp" ]; then
+        last=$(cat "$stamp" 2>/dev/null || echo 0)
+    fi
+    local week=$((7 * 24 * 60 * 60))
+    if [ $((now - last)) -ge $week ]; then
+        echo -e "${CYAN}Checking for Claude Code updates...${NC}"
+        claude update 2>/dev/null || true
+        echo "$now" > "$stamp"
+    fi
+}
+
 # Check if project already exists
 if [ -d "$PROJECT_PATH" ]; then
     # Existing project
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
+    claude_maybe_update
     cd "$PROJECT_PATH"
     if claude_has_session; then
         echo -e "${GREEN}Resuming previous conversation${NC}"
