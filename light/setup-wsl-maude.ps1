@@ -370,20 +370,18 @@ $filesToCopy = @("root-bootstrap.sh", "maude-bootstrap.sh", "maude")
 foreach ($f in $filesToCopy) {
     $src = Join-Path $ScriptDir $f
     if (Test-Path $src) {
-        $bytes = [System.IO.File]::ReadAllBytes($src)
-        $bytes | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$f && sed -i 's/\r$//' /tmp/$f && chmod +x /tmp/$f"
+        Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$f && sed -i 's/\r$//' /tmp/$f && chmod +x /tmp/$f"
     }
 }
 
 # Copy maude launcher to /tmp/maude-launcher (used by maude-bootstrap.sh)
 $maudeLauncher = Join-Path $ScriptDir "maude"
 if (Test-Path $maudeLauncher) {
-    $bytes = [System.IO.File]::ReadAllBytes($maudeLauncher)
-    $bytes | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
+    Get-Content $maudeLauncher -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
 }
 
 # Write host folder path to /tmp so root-bootstrap.sh can configure fstab
-[System.Text.Encoding]::ASCII.GetBytes($HostFolder) | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
+$HostFolder | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
 
 # Run root-bootstrap.sh (no package piping — packages are baked into the template)
 wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser
