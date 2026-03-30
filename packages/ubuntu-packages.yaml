@@ -70,9 +70,6 @@ packages:
   - python3-dev
   - pipx
 
-  # --- Node.js (via NodeSource repo, but this is the fallback) ---
-  - nodejs
-  - npm
 
   # --- Go ---
   - golang-go
@@ -115,6 +112,10 @@ packages:
   - iotop
   - nethogs
   - prometheus-node-exporter
+
+  # --- Desktop integration ---
+  - xdg-utils
+  - wslu                    # WSL utilities (wslview, wslpath, etc.)
 
   # --- Misc dev tools ---
   - sqlite3

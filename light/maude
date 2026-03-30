@@ -1,7 +1,7 @@
 #!/bin/bash
 # maude - Quick project launcher for Claude Code
 # Usage:
-#   maude <name>         Create/open a project and launch Claude Code
+#   maude project-name         Create/open a project and launch Claude Code
 #   maude list           Show all available projects
 #   maude delete <name>  Move a project to Projects/.deleted (with confirmation)
 #   maude help           Show this help message
@@ -23,7 +23,7 @@ show_help() {
     echo ""
     echo -e "${BOLD}maude${NC} - Quick project launcher for Claude Code"
     echo ""
-    echo -e "  ${CYAN}maude <name>${NC}        Open a project (creates it if it doesn't exist)"
+    echo -e "  ${CYAN}maude project-name${NC}        Open a project (creates it if it doesn't exist)"
     echo -e "  ${CYAN}maude list${NC}          Show all available projects"
     echo -e "  ${CYAN}maude delete <name>${NC} Delete a project (moves to .deleted/)"
     echo -e "  ${CYAN}maude help${NC}          Show this help message"
@@ -75,7 +75,7 @@ list_projects() {
         fi
     done
     echo ""
-    echo "Open any project with:  maude <name>"
+    echo "Open any project with:  maude project-name"
     echo ""
 }
 
@@ -164,13 +164,26 @@ PROJECT_PATH="$PROJECTS_DIR/$PROJECT_NAME"
 # Create the Projects folder if it doesn't exist yet
 mkdir -p "$PROJECTS_DIR"
 
+# ── Helper: check if Claude has a previous session for a directory ────
+claude_has_session() {
+    local session_dir="$HOME/.claude/projects$(pwd)"
+    [ -d "$session_dir" ] && \
+    find "$session_dir" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .
+}
+
 # Check if project already exists
 if [ -d "$PROJECT_PATH" ]; then
-    # Existing project → resume with --continue
+    # Existing project
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
-    echo -e "${GREEN}Resuming previous conversation${NC}"
-    echo ""
-    cd "$PROJECT_PATH" && exec claude --continue
+    cd "$PROJECT_PATH"
+    if claude_has_session; then
+        echo -e "${GREEN}Resuming previous conversation${NC}"
+        echo ""
+        exec claude --continue
+    else
+        echo ""
+        exec claude
+    fi
 else
     # New project → create, git init, fresh start
     echo -e "${CYAN}Creating new project:${NC} $PROJECT_NAME"

@@ -66,9 +66,6 @@ packages:
   - python3-devel
   - pipx
 
-  # --- Node.js ---
-  - nodejs
-  - npm
 
   # --- Go ---
   - golang
@@ -110,6 +107,9 @@ packages:
   - iotop
   - nethogs
   - prometheus-node-exporter
+
+  # --- Desktop integration ---
+  - xdg-utils
 
   # --- Misc dev tools ---
   - sqlite

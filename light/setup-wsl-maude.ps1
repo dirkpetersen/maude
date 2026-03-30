@@ -7,10 +7,15 @@
     Idempotent script that:
     1. Installs WSL2 (if not present)
     2. Installs Windows Terminal (if not present)
-    3. Imports Ubuntu 24.04 as a WSL distro named "Maude"
-    4. Runs root-bootstrap.sh  (user, mom, PATH, packages, welcome screen)
-    5. Runs maude-bootstrap.sh (dev-station, maude launcher, PS1)
-    6. Opens Maude in Windows Terminal
+    3. Creates a shared host folder (OneDrive or Documents) with custom icon
+    4. Imports Ubuntu 24.04 as a WSL distro named "Maude"
+    5. Runs root-bootstrap.sh  (user, mom, PATH, packages, sandbox mount)
+    6. Runs maude-bootstrap.sh (dev-station, maude launcher, PS1)
+    7. Opens Maude in Windows Terminal
+
+    The distro is sandboxed: automatic Windows drive mounting is disabled,
+    and only the shared Maude folder is mounted into /home/maude/Maude
+    via drvfs + /etc/fstab.
 
 .NOTES
     Run from an elevated PowerShell prompt:
@@ -51,11 +56,86 @@ function Get-WslPath($winPath) {
     wsl -d $DistroName -u root -- wslpath -u ($winPath -replace '\\', '/')
 }
 
+# ── Helper: convert a PNG file to ICO format ──
+# Writes a valid ICO container that embeds the PNG data directly.
+# Works with any PNG size; Explorer picks the best fit.
+function Convert-PngToIco($pngPath, $icoPath) {
+    $pngBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $pngPath).Path)
+
+    # Read PNG dimensions from IHDR chunk (bytes 16-23)
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Image]::FromFile((Resolve-Path $pngPath).Path)
+    $w = [Math]::Min($img.Width, 256)
+    $h = [Math]::Min($img.Height, 256)
+    $img.Dispose()
+
+    # ICO uses 0 to mean 256
+    $wb = if ($w -eq 256) { [byte]0 } else { [byte]$w }
+    $hb = if ($h -eq 256) { [byte]0 } else { [byte]$h }
+
+    $ms = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter($ms)
+
+    # ICO header: reserved(2) + type=1(2) + count=1(2)
+    $bw.Write([UInt16]0)      # reserved
+    $bw.Write([UInt16]1)      # type: 1 = ICO
+    $bw.Write([UInt16]1)      # image count
+
+    # Directory entry: w(1) h(1) colors(1) reserved(1) planes(2) bpp(2) size(4) offset(4)
+    $bw.Write($wb)            # width
+    $bw.Write($hb)            # height
+    $bw.Write([byte]0)        # color palette count (0 = no palette)
+    $bw.Write([byte]0)        # reserved
+    $bw.Write([UInt16]1)      # color planes
+    $bw.Write([UInt16]32)     # bits per pixel
+    $bw.Write([UInt32]$pngBytes.Length)  # image data size
+    $bw.Write([UInt32]22)     # offset to image data (6 header + 16 entry)
+
+    # PNG data
+    $bw.Write($pngBytes)
+    $bw.Flush()
+
+    [System.IO.File]::WriteAllBytes($icoPath, $ms.ToArray())
+    $bw.Dispose()
+    $ms.Dispose()
+}
+
+# ── Detect host folder (OneDrive for Business > OneDrive > Documents) ──
+# Priority: env vars first (set by OneDrive client), then folder scan, then Documents.
+# OneDrive for Business folders are named "OneDrive - <Organization>" (varies by org).
+
+if ($env:OneDriveCommercial) {
+    $HostFolder = Join-Path $env:OneDriveCommercial "Maude"
+    $HostFolderSource = "OneDrive for Business"
+} elseif ($env:OneDriveConsumer) {
+    $HostFolder = Join-Path $env:OneDriveConsumer "Maude"
+    $HostFolderSource = "OneDrive Personal"
+} elseif ($env:OneDrive) {
+    $HostFolder = Join-Path $env:OneDrive "Maude"
+    $HostFolderSource = "OneDrive"
+} else {
+    # Env vars not set — scan user profile for OneDrive folders
+    $odBusiness = Get-ChildItem -Path $env:USERPROFILE -Directory -Filter "OneDrive - *" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($odBusiness) {
+        $HostFolder = Join-Path $odBusiness.FullName "Maude"
+        $HostFolderSource = "OneDrive for Business ($($odBusiness.Name))"
+    } else {
+        $odPersonal = Join-Path $env:USERPROFILE "OneDrive"
+        if (Test-Path $odPersonal) {
+            $HostFolder = Join-Path $odPersonal "Maude"
+            $HostFolderSource = "OneDrive Personal"
+        } else {
+            $HostFolder = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "Maude"
+            $HostFolderSource = "Documents"
+        }
+    }
+}
+
 Write-Host "=== Maude WSL Setup ===" -ForegroundColor Cyan
 
 # ── Step 1: Install WSL2 ──                                       # REQUIRES ADMIN
 
-Write-Host "`n[1/6] Checking WSL..." -ForegroundColor Green
+Write-Host "`n[1/7] Checking WSL..." -ForegroundColor Green
 if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
     Write-Host "WSL is already installed." -ForegroundColor Gray
 } else {
@@ -68,7 +148,7 @@ if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
 
 # ── Step 2: Install Windows Terminal ──                            # does NOT require admin
 
-Write-Host "`n[2/6] Checking Windows Terminal..." -ForegroundColor Green
+Write-Host "`n[2/7] Checking Windows Terminal..." -ForegroundColor Green
 $wtPresent = (Get-Command wt.exe -ErrorAction SilentlyContinue) -or
              (Get-AppxPackage -Name "Microsoft.WindowsTerminal" -ErrorAction SilentlyContinue)
 if ($wtPresent) {
@@ -83,33 +163,140 @@ if ($wtPresent) {
     Write-Host "Windows Terminal installed." -ForegroundColor Gray
 }
 
-# ── Step 3: Import Ubuntu 24.04 as "Maude" ──                     # REQUIRES ADMIN (wsl --install, --import, --unregister)
-# WSL -l -q outputs UTF-16 LE with embedded null bytes; strip them before matching.
+# ── Step 3: Create shared host folder with icon ──                 # does NOT require admin
 
-Write-Host "`n[3/6] Checking $DistroName WSL distro..." -ForegroundColor Green
+Write-Host "`n[3/7] Setting up host folder ($HostFolderSource)..." -ForegroundColor Green
+New-Item -ItemType Directory -Force -Path $HostFolder | Out-Null
+Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
+
+# Set custom folder icon (PNG -> ICO conversion for desktop.ini)
+$iconSrc = Join-Path $PSScriptRoot "maude.png"
+if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $PSScriptRoot "..\maude.png" }
+
+if (Test-Path $iconSrc) {
+    try {
+        $icoPath = Join-Path $HostFolder "maude.ico"
+        $desktopIni = Join-Path $HostFolder "desktop.ini"
+        # Clear hidden+system attributes from previous run so we can overwrite
+        foreach ($f in @($icoPath, $desktopIni)) {
+            if (Test-Path $f) { attrib -h -s "$f" }
+        }
+        Convert-PngToIco $iconSrc $icoPath
+
+        # desktop.ini tells Explorer to use the custom icon
+        "[.ShellClassInfo]`r`nIconResource=$icoPath,0" | Set-Content $desktopIni -Encoding Unicode
+        attrib +h +s "$desktopIni"
+        attrib +h +s "$icoPath"
+
+        # Mark folder as System so Explorer reads desktop.ini
+        attrib +s "$HostFolder"
+        Write-Host "Folder icon set." -ForegroundColor Gray
+    } catch {
+        Write-Host "Could not set folder icon: $_" -ForegroundColor Yellow
+    }
+}
+
+# ── Parse package list (needed for template creation) ────────────────
+
+$packagesYaml = Join-Path $PSScriptRoot "..\packages\ubuntu-packages.yaml"
+$packageList = ""
+if (Test-Path $packagesYaml) {
+    $packages = @(
+        (Get-Content $packagesYaml) |
+            Where-Object { $_ -match '^\s+-\s+\S' } |
+            ForEach-Object { ($_ -replace '^\s+-\s+', '' -replace '\s*#.*$', '').Trim() } |
+            Where-Object { $_ -ne "" }
+    )
+    $packageList = ($packages -join "`n") -replace "`r", ""
+    Write-Host "  $($packages.Count) packages from ubuntu-packages.yaml"
+}
+
+# ── Step 4: Import Ubuntu 24.04 as "Maude" ──                     # REQUIRES ADMIN (wsl --install, --import, --unregister)
+# WSL -l -q outputs UTF-16 LE with embedded null bytes; strip them before matching.
+# Packages are pre-installed into the template so rebuilds are fast (~30s vs ~5min).
+
+Write-Host "`n[4/7] Checking $DistroName WSL distro..." -ForegroundColor Green
 $installedDistros = (wsl -l -q 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
 $distroExists = $installedDistros | Where-Object { $_.Trim() -eq $DistroName }
 
 if ($distroExists) {
     Write-Host "$DistroName is already installed. Skipping import." -ForegroundColor Gray
 } else {
-    # Use a persistent Ubuntu-24.04 template distro to avoid re-downloading
-    # from the Microsoft Store on every rebuild.  The template is kept around
-    # after the first run; teardown-wsl-maude.ps1 -IncludeTemplate removes it.
-    $templateDistro = "Ubuntu-24.04"
+    # Use a persistent template distro named "Ubuntu-24.04-Template" with all
+    # packages pre-installed.  Avoids re-downloading from the Microsoft Store
+    # and re-installing packages on every rebuild.
+    # teardown-wsl-maude.ps1 -IncludeTemplate removes it.
+    $templateDistro = "Ubuntu-24.04-Template"
+    $templateDir    = "$env:LOCALAPPDATA\Maude-Template"
     $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
 
     $templateExists = (wsl -l -q 2>&1) -replace "`0", "" |
         Where-Object { $_.Trim() -eq $templateDistro }
     if ($templateExists) {
-        Write-Host "Using existing '$templateDistro' template (fast path)." -ForegroundColor Gray
+        Write-Host "Using existing '$templateDistro' (fast path)." -ForegroundColor Gray
     } else {
-        Write-Host "Installing '$templateDistro' template from Microsoft Store (first time only)..."
-        wsl --install -d $templateDistro --no-launch
+        # Download Ubuntu 24.04 from the Microsoft Store, install all packages,
+        # then re-import as our named template and remove the store distro.
+        $storeDistro = "Ubuntu-24.04"
+        Write-Host "Installing '$storeDistro' from Microsoft Store (first time only)..."
+        wsl --install -d $storeDistro --no-launch
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: wsl --install -d $templateDistro failed." -ForegroundColor Red
+            Write-Host "ERROR: wsl --install -d $storeDistro failed." -ForegroundColor Red
             exit 1
         }
+
+        # Install packages into the store distro before exporting as template.
+        # This bakes packages into the template so every rebuild starts with them.
+        Write-Host "Installing packages into template (this takes a few minutes)..."
+        if ($packageList) {
+            $packageList | wsl -d $storeDistro -u root -- bash -c "
+                export DEBIAN_FRONTEND=noninteractive
+                printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+                chmod +x /usr/sbin/policy-rc.d
+                apt-get update -q
+                apt-get install -y -q software-properties-common
+                add-apt-repository -y universe
+                apt-get update -q
+                cat | tr -d '\r' | xargs apt-get install -y -q --no-install-recommends
+                rm -f /usr/sbin/policy-rc.d
+                apt-get clean
+            "
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "WARNING: Some packages may have failed to install." -ForegroundColor Yellow
+            }
+        }
+
+        Write-Host "Exporting rootfs from '$storeDistro'..."
+        wsl --export $storeDistro $rootfsTar
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: wsl --export failed." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "Re-importing as '$templateDistro'..."
+        New-Item -ItemType Directory -Force -Path $templateDir | Out-Null
+        wsl --import $templateDistro $templateDir $rootfsTar --version 2
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: wsl --import template failed." -ForegroundColor Red
+            exit 1
+        }
+        # Remove the store distro and its WT profile (no longer needed)
+        wsl --unregister $storeDistro
+        $wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+        if (Test-Path $wtSettingsPath) {
+            $wtJson = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
+            $countBefore = $wtJson.profiles.list.Count
+            $wtJson.profiles.list = @(
+                $wtJson.profiles.list | Where-Object {
+                    $nm = if ($_.PSObject.Properties['name']) { $_.name } else { '' }
+                    $nm.Trim() -ne $storeDistro
+                }
+            )
+            if ($wtJson.profiles.list.Count -lt $countBefore) {
+                $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
+            }
+        }
+        Remove-Item -Path $rootfsTar -ErrorAction SilentlyContinue
+        Write-Host "'$templateDistro' created with packages." -ForegroundColor Gray
     }
 
     Write-Host "Exporting template rootfs..."
@@ -127,18 +314,19 @@ if ($distroExists) {
         exit 1
     }
 
-    # Keep the template — only remove the temporary tarball
     Remove-Item -Path $rootfsTar -ErrorAction SilentlyContinue
-    Write-Host "$DistroName imported from '$templateDistro' template." -ForegroundColor Gray
+    Write-Host "$DistroName imported from '$templateDistro'." -ForegroundColor Gray
 }
 
-# ── Step 4: Run root-bootstrap.sh ──                              # does NOT require Windows admin (runs inside WSL as root)
-# Copies the script into /tmp, strips CRLF, then runs it.
-# Package names from ubuntu-packages.yaml are piped via stdin.
+# ── Step 5: Run root-bootstrap.sh ──                              # does NOT require Windows admin (runs inside WSL as root)
+# Copies scripts into /tmp, strips CRLF, then runs root-bootstrap.sh.
+# Packages are already in the template — root-bootstrap only does user/config setup.
+# Host folder path is written to /tmp/maude-hostfolder for sandbox mount config.
 
-Write-Host "`n[4/6] Running root bootstrap..." -ForegroundColor Green
+Write-Host "`n[5/7] Running root bootstrap..." -ForegroundColor Green
 
 # Copy bootstrap scripts and maude launcher into the distro's /tmp
+# All file copies happen BEFORE wsl --terminate so Windows paths are still accessible.
 $filesToCopy = @("root-bootstrap.sh", "maude-bootstrap.sh", "maude")
 foreach ($f in $filesToCopy) {
     $src = Join-Path $PSScriptRoot $f
@@ -148,44 +336,33 @@ foreach ($f in $filesToCopy) {
     }
 }
 
-# Parse packages from YAML (PowerShell side — no python3-yaml needed in the rootfs)
-$packagesYaml = Join-Path $PSScriptRoot "..\packages\ubuntu-packages.yaml"
-$packageList = ""
-if (Test-Path $packagesYaml) {
-    $packages = @(
-        (Get-Content $packagesYaml) |
-            Where-Object { $_ -match '^\s+-\s+\S' } |
-            ForEach-Object { ($_ -replace '^\s+-\s+', '' -replace '\s*#.*$', '').Trim() } |
-            Where-Object { $_ -ne "" }
-    )
-    $packageList = ($packages -join "`n") -replace "`r", ""
-    Write-Host "  $($packages.Count) packages queued from ubuntu-packages.yaml"
+# Copy maude launcher to /tmp/maude-launcher (used by maude-bootstrap.sh)
+$maudeLauncher = Join-Path $PSScriptRoot "maude"
+if (Test-Path $maudeLauncher) {
+    $wslSrc = Get-WslPath $maudeLauncher
+    wsl -d $DistroName -u root -- bash -c "cp '$wslSrc' /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
 }
 
-# Run root-bootstrap.sh with package list piped via stdin
-if ($packageList) {
-    $packageList | wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser
-} else {
-    wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser
-}
+# Write host folder path to /tmp so root-bootstrap.sh can configure fstab
+$hostFolderTmp = "$env:TEMP\maude-hostfolder.txt"
+[System.IO.File]::WriteAllText($hostFolderTmp, $HostFolder, [System.Text.Encoding]::ASCII)
+$wslHostTmp = Get-WslPath $hostFolderTmp
+wsl -d $DistroName -u root -- bash -c "cp '$wslHostTmp' /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
+
+# Run root-bootstrap.sh (no package piping — packages are baked into the template)
+wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Root bootstrap failed." -ForegroundColor Red
     exit 1
 }
 
-# Restart so /etc/wsl.conf default user takes effect
+# Restart so /etc/wsl.conf takes effect (default user + automount disabled)
 wsl --terminate $DistroName
 
-# ── Step 5: Run maude-bootstrap.sh ──                             # does NOT require admin
+# ── Step 6: Run maude-bootstrap.sh ──                             # does NOT require admin
+# All files were copied to /tmp before terminate; no Windows paths needed here.
 
-Write-Host "`n[5/6] Running user bootstrap..." -ForegroundColor Green
-
-# Copy the maude launcher to /tmp for the user script to pick up
-$maudeLauncher = Join-Path $PSScriptRoot "maude"
-if (Test-Path $maudeLauncher) {
-    $wslLauncher = Get-WslPath $maudeLauncher
-    wsl -d $DistroName -u root -- bash -c "cp '$wslLauncher' /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
-}
+Write-Host "`n[6/7] Running user bootstrap..." -ForegroundColor Green
 
 wsl -d $DistroName -u $DefaultUser -- bash /tmp/maude-bootstrap.sh
 if ($LASTEXITCODE -ne 0) {
@@ -208,33 +385,70 @@ if (Test-Path $iconSrc) {
 $wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
 if (Test-Path $wtSettingsPath) {
     $wtJson    = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
-    $profiles  = $wtJson.profiles.list
-    $modified  = $false
 
-    for ($i = 0; $i -lt $profiles.Count; $i++) {
-        $p = $profiles[$i]
-        $src = if ($p.PSObject.Properties['source']) { $p.source } else { '' }
-        $nm  = if ($p.PSObject.Properties['name'])   { $p.name   } else { '' }
-        if (($src -match 'WSL|Wsl') -and ($nm -match "(?i)^$DistroName$")) {
-            $profiles[$i].name = $DistroName
-            if (Test-Path $iconDst) {
-                $profiles[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
-            }
-            $modified = $true
+    # Remove any existing profiles for this distro (auto-generated or manual)
+    $wtJson.profiles.list = @(
+        $wtJson.profiles.list | Where-Object {
+            $nm = if ($_.PSObject.Properties['name']) { $_.name } else { '' }
+            $nm -ne $DistroName
         }
-    }
+    )
 
-    if ($modified) {
-        $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
-        Write-Host "Windows Terminal profile updated (name + icon)." -ForegroundColor Gray
+    # Create a single clean profile with the Maude icon
+    $newProfile = [PSCustomObject]@{
+        guid        = "{$([guid]::NewGuid().ToString())}"
+        name        = $DistroName
+        commandline = "wsl.exe -d $DistroName"
+        hidden      = $false
     }
+    if (Test-Path $iconDst) {
+        $newProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+    }
+    $wtJson.profiles.list += $newProfile
+
+    $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
+    Write-Host "Windows Terminal profile created for $DistroName." -ForegroundColor Gray
 } else {
     Write-Host "Windows Terminal settings not found, skipping profile config." -ForegroundColor Gray
 }
 
-# ── Step 6: Open Maude in Windows Terminal ──                     # does NOT require admin
+# ── Create desktop shortcut (Maude icon → Windows Terminal) ──    # does NOT require admin
 
-Write-Host "`n[6/6] Opening $DistroName..." -ForegroundColor Green
+$desktopPath = [Environment]::GetFolderPath('Desktop')
+$shortcutFile = Join-Path $desktopPath "$DistroName.lnk"
+$icoFile = Join-Path $InstallDir "maude.ico"
+
+# Convert maude.png → maude.ico for the shortcut (lnk files require ico)
+$iconSrc = Join-Path $PSScriptRoot "maude.png"
+if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $PSScriptRoot "..\maude.png" }
+
+if (Test-Path $iconSrc) {
+    try {
+        New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+        Convert-PngToIco $iconSrc $icoFile
+    } catch {
+        Write-Host "Could not convert icon: $_" -ForegroundColor Yellow
+    }
+}
+
+# Find wt.exe path for the shortcut target
+$wtExe = (Get-Command wt.exe -ErrorAction SilentlyContinue).Source
+if ($wtExe) {
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($shortcutFile)
+    $sc.TargetPath = $wtExe
+    $sc.Arguments = "-p `"$DistroName`""
+    $sc.Description = "Open $DistroName in Windows Terminal"
+    if (Test-Path $icoFile) { $sc.IconLocation = "$icoFile,0" }
+    $sc.Save()
+    Write-Host "Desktop shortcut created: $shortcutFile" -ForegroundColor Gray
+} else {
+    Write-Host "wt.exe not found, skipping desktop shortcut." -ForegroundColor Yellow
+}
+
+# ── Step 7: Open Maude in Windows Terminal ──                     # does NOT require admin
+
+Write-Host "`n[7/7] Opening $DistroName..." -ForegroundColor Green
 if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
     wt new-tab -- wsl -d $DistroName
 } else {

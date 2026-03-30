@@ -5,15 +5,17 @@
 
 .DESCRIPTION
     Idempotent teardown that:
-    1. Unregisters the Maude WSL distro (deletes the virtual disk)
-    2. Removes the install directory (%LOCALAPPDATA%\Maude)
+    1. Removes the Windows Terminal profile and desktop shortcut (no admin needed)
+    2. Unregisters the Maude WSL distro (requires admin — self-elevates)
+    3. Removes the install directory
+    4. Optionally removes the Ubuntu-24.04-Template distro
 
     By default the Ubuntu-24.04 template distro is kept so the next
     setup-wsl-maude.ps1 run is fast (no Microsoft Store download).
     Pass -IncludeTemplate to remove it too.
 
 .NOTES
-    Run from an elevated PowerShell prompt:
+    Run from a PowerShell prompt (admin not required — script self-elevates):
         Set-ExecutionPolicy Bypass -Scope Process -Force
         .\teardown-wsl-maude.ps1                  # keep template
         .\teardown-wsl-maude.ps1 -IncludeTemplate # remove everything
@@ -25,26 +27,59 @@ param(
     [switch]$IncludeTemplate
 )
 
-# ── Self-elevate to Administrator if needed ──
+Write-Host "=== Maude WSL Teardown ===" -ForegroundColor Cyan
 
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Not running as Administrator. Attempting to elevate..." -ForegroundColor Yellow
+# ── Step 1: Remove Windows Terminal profile + desktop shortcut ───  # runs as current user
+
+Write-Host "`n[1/4] Cleaning up Windows Terminal profile..." -ForegroundColor Green
+$wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+if (Test-Path $wtSettingsPath) {
+    $wtJson   = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
+    $before   = $wtJson.profiles.list.Count
+    $wtJson.profiles.list = @(
+        $wtJson.profiles.list | Where-Object {
+            $nm = if ($_.PSObject.Properties['name']) { $_.name } else { '' }
+            $nm -ne $DistroName
+        }
+    )
+    if ($wtJson.profiles.list.Count -lt $before) {
+        $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
+        Write-Host "$DistroName profile removed from Windows Terminal." -ForegroundColor Gray
+    } else {
+        Write-Host "No $DistroName profile found in Windows Terminal." -ForegroundColor Gray
+    }
+} else {
+    Write-Host "Windows Terminal settings not found, skipping." -ForegroundColor Gray
+}
+
+$shortcutFile = Join-Path ([Environment]::GetFolderPath('Desktop')) "$DistroName.lnk"
+if (Test-Path $shortcutFile) {
+    Remove-Item -Path $shortcutFile -Force
+    Write-Host "$DistroName desktop shortcut removed." -ForegroundColor Gray
+}
+
+# ── Self-elevate to Administrator for WSL operations ──
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    Write-Host "`nElevating to Administrator for WSL operations..." -ForegroundColor Yellow
     try {
-        $args = "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
-        if ($IncludeTemplate) { $args += " -IncludeTemplate" }
-        Start-Process powershell.exe -Verb RunAs -ArgumentList $args
+        $elevateArgs = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -DistroName `"$DistroName`" -InstallDir `"$InstallDir`""
+        if ($IncludeTemplate) { $elevateArgs += " -IncludeTemplate" }
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $elevateArgs -Wait
     } catch {
-        Write-Host "ERROR: This script requires Administrator privileges." -ForegroundColor Red
+        Write-Host "ERROR: Administrator privileges required for WSL operations." -ForegroundColor Red
     }
     exit
 }
 
-Write-Host "=== Maude WSL Teardown ===" -ForegroundColor Cyan
+# ── Below here runs elevated ──
 
-# ── Step 1: Unregister the Maude WSL distro ──                    # REQUIRES ADMIN
+# ── Step 2: Unregister the Maude WSL distro ──                    # REQUIRES ADMIN
 
-Write-Host "`n[1/3] Checking for $DistroName WSL distro..." -ForegroundColor Green
+Write-Host "`n[2/4] Checking for $DistroName WSL distro..." -ForegroundColor Green
 $installedDistros = (wsl -l -q 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
 $distroExists = $installedDistros | Where-Object { $_.Trim() -eq $DistroName }
 
@@ -60,9 +95,9 @@ if ($distroExists) {
     Write-Host "$DistroName is not installed. Nothing to unregister." -ForegroundColor Gray
 }
 
-# ── Step 2: Remove the install directory ──                        # does NOT require admin
+# ── Step 3: Remove the install directory ──
 
-Write-Host "`n[2/3] Removing install directory..." -ForegroundColor Green
+Write-Host "`n[3/4] Removing install directory..." -ForegroundColor Green
 if (Test-Path $InstallDir) {
     Remove-Item -Path $InstallDir -Recurse -Force
     Write-Host "Removed $InstallDir" -ForegroundColor Gray
@@ -70,21 +105,26 @@ if (Test-Path $InstallDir) {
     Write-Host "$InstallDir does not exist. Nothing to remove." -ForegroundColor Gray
 }
 
-# ── Step 3: Optionally remove the Ubuntu-24.04 template ──        # REQUIRES ADMIN
+# ── Step 4: Optionally remove the Ubuntu-24.04-Template ──        # REQUIRES ADMIN
 
-$templateDistro = "Ubuntu-24.04"
+$templateDistro = "Ubuntu-24.04-Template"
+$templateDir    = "$env:LOCALAPPDATA\Maude-Template"
 $templateExists = $installedDistros | Where-Object { $_.Trim() -eq $templateDistro }
 
 if ($IncludeTemplate) {
-    Write-Host "`n[3/3] Removing '$templateDistro' template..." -ForegroundColor Green
+    Write-Host "`n[4/4] Removing '$templateDistro'..." -ForegroundColor Green
     if ($templateExists) {
         wsl --unregister $templateDistro
-        Write-Host "'$templateDistro' template removed." -ForegroundColor Gray
+        Write-Host "'$templateDistro' unregistered." -ForegroundColor Gray
     } else {
-        Write-Host "'$templateDistro' template not found." -ForegroundColor Gray
+        Write-Host "'$templateDistro' not found." -ForegroundColor Gray
+    }
+    if (Test-Path $templateDir) {
+        Remove-Item -Path $templateDir -Recurse -Force
+        Write-Host "Removed $templateDir" -ForegroundColor Gray
     }
 } else {
-    Write-Host "`n[3/3] Keeping '$templateDistro' template for fast rebuilds." -ForegroundColor Green
+    Write-Host "`n[4/4] Keeping '$templateDistro' for fast rebuilds." -ForegroundColor Green
     if ($templateExists) {
         Write-Host "  (pass -IncludeTemplate to remove it too)" -ForegroundColor Gray
     }

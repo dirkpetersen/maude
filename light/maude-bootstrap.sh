@@ -7,13 +7,105 @@ set -e
 
 echo "=== Maude user bootstrap ==="
 
-# ── Ensure directories exist ──────────────────────────────────────────
+# ── Ensure directories and PATH ──────────────────────────────────────
 mkdir -p "$HOME/bin" "$HOME/.local/bin" "$HOME/Projects"
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
 # ── Install dev-station (shell-setup, claude-wrapper, nodejs, AWS CLI) ─
 # Always pulled fresh from GitHub to pick up latest changes.
+# Run without set -e so partial failures don't abort the rest of bootstrap.
 echo "Running dev-station installer..."
+set +e
 curl -fsSL 'https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/dev-station-install.sh' | bash
+set -e
+
+# ── Install Bun + kanna-code ──────────────────────────────────────────
+if ! command -v bun >/dev/null 2>&1; then
+    echo "Installing Bun..."
+    curl -fsSL https://bun.sh/install | bash
+    export BUN_INSTALL="$HOME/.bun"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+fi
+echo "Installing kanna-code..."
+bun install -g kanna-code
+
+# ── Clone Anthropic skills repo and install Claude Code skills ────────
+SKILLS_REPO="$HOME/gh/anthropic-skills"
+mkdir -p "$HOME/gh"
+if [ ! -d "$SKILLS_REPO" ]; then
+    echo "Cloning Anthropic skills repo..."
+    git clone https://github.com/anthropics/skills.git "$SKILLS_REPO"
+fi
+
+SKILLS_DIR="$HOME/.claude/skills"
+mkdir -p "$SKILLS_DIR"
+for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
+    if [ -d "$SKILLS_REPO/skills/$skill" ]; then
+        ln -sfn "$SKILLS_REPO/skills/$skill" "$SKILLS_DIR/$skill"
+        echo "  Linked skill: $skill"
+    else
+        echo "  WARNING: skill '$skill' not found in repo"
+    fi
+done
+
+# ── Claude Code: bypass permissions (safe inside sandbox) ────────────
+mkdir -p "$HOME/.claude"
+cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  }
+}
+SETTINGSEOF
+echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+
+# ── Claude Code: project instructions ────────────────────────────────
+cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
+# Maude Sandbox
+
+## Shared Folder
+
+`~/Maude` is a mounted folder shared with the Windows host (via drvfs).
+It is the **only** path the user can access from both Windows and WSL.
+
+Use `~/Maude` for any files the user needs to open or exchange:
+- Documents: `.docx`, `.xlsx`, `.pptx`, `.pdf`
+- Data files, images, exports, downloads
+- Anything the user drags in from Windows or asks you to produce for them
+
+When the user asks you to create a document, spreadsheet, presentation,
+or any file they will open on the Windows side, **always write it to
+`~/Maude`** (or a subfolder of it).
+
+## Project Backups
+
+`~/Projects` and `~/.claude` are automatically synced every hour to
+`~/Maude/Projects` and `~/Maude/.claude` so that project work is
+preserved on the host even if the WSL distro is removed.
+
+## Package Installation
+
+Use `mom install <package>` to install system packages — no sudo needed.
+CLAUDEEOF
+echo "Claude Code: CLAUDE.md created."
+
+# ── Hourly backup of Projects and .claude to shared folder ───────────
+SYNC_SCRIPT="$HOME/bin/maude-sync.sh"
+cat > "$SYNC_SCRIPT" << 'SYNCEOF'
+#!/bin/bash
+# maude-sync.sh — back up Projects and .claude to the shared Maude folder
+MAUDE_DIR="$HOME/Maude"
+[ -d "$MAUDE_DIR" ] || exit 0
+
+rsync -a --delete "$HOME/Projects/" "$MAUDE_DIR/Projects/" 2>/dev/null
+rsync -a --delete --exclude 'settings.json' "$HOME/.claude/" "$MAUDE_DIR/.claude/" 2>/dev/null
+SYNCEOF
+chmod +x "$SYNC_SCRIPT"
+
+# Install cron job (idempotent)
+( crontab -l 2>/dev/null | grep -v 'maude-sync.sh'; \
+  echo "0 * * * * $SYNC_SCRIPT" ) | crontab -
+echo "Hourly backup cron installed (Projects + .claude → ~/Maude)."
 
 # ── Install maude launcher (if copied to /tmp by setup script) ────────
 if [ -f /tmp/maude-launcher ] && [ ! -f "$HOME/.local/bin/maude" ]; then
