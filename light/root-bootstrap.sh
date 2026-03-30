@@ -171,19 +171,20 @@ mkdir -p "$USER_HOME/bin" "$USER_HOME/.local/bin" "$USER_HOME/.local/state"
 chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
-# Create the target dir on the shared mount so it exists before symlinking.
-if [ -d "$USER_HOME/Maude" ]; then
-    su - "$USERNAME" -c 'mkdir -p "$HOME/Maude/.claude" "$HOME/Maude/Projects"'
-    # Remove ~/.claude if it's a plain directory (not already a symlink)
-    if [ -d "$USER_HOME/.claude" ] && [ ! -L "$USER_HOME/.claude" ]; then
-        rm -rf "$USER_HOME/.claude"
-    fi
-    ln -sfn "$USER_HOME/Maude/.claude" "$USER_HOME/.claude"
-    chown -h "$USERNAME:$USERNAME" "$USER_HOME/.claude"
-    echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
-    # Seed settings.json with bypass permissions (safe inside sandbox)
-    if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
-        cat > "$USER_HOME/.claude/settings.json" << 'SETTINGSEOF'
+# Create the target dir and symlink regardless of whether ~/Maude is
+# mounted yet (the mount may only be active after a WSL restart).
+mkdir -p "$USER_HOME/Maude/.claude" "$USER_HOME/Maude/Projects"
+chown -R "$USERNAME:$USERNAME" "$USER_HOME/Maude"
+# Remove ~/.claude if it's a plain directory (not already a symlink)
+if [ -d "$USER_HOME/.claude" ] && [ ! -L "$USER_HOME/.claude" ]; then
+    rm -rf "$USER_HOME/.claude"
+fi
+ln -sfn "$USER_HOME/Maude/.claude" "$USER_HOME/.claude"
+chown -h "$USERNAME:$USERNAME" "$USER_HOME/.claude"
+echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
+# Seed settings.json with bypass permissions (safe inside sandbox)
+if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
+    cat > "$USER_HOME/.claude/settings.json" << 'SETTINGSEOF'
 {
   "permissions": {
     "defaultMode": "bypassPermissions"
@@ -191,9 +192,8 @@ if [ -d "$USER_HOME/Maude" ]; then
   "skipDangerousModePermissionPrompt": true
 }
 SETTINGSEOF
-        chown "$USERNAME:$USERNAME" "$USER_HOME/.claude/settings.json"
-        echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
-    fi
+    chown "$USERNAME:$USERNAME" "$USER_HOME/.claude/settings.json"
+    echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
 fi
 
 # ── (DISABLED) Real-time sync machinery ──────────────────────────────
