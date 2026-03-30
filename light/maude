@@ -164,6 +164,31 @@ PROJECT_PATH="$PROJECTS_DIR/$PROJECT_NAME"
 # Create the Projects folder if it doesn't exist yet
 mkdir -p "$PROJECTS_DIR"
 
+# ── Ensure Claude Code is installed ──────────────────────────────────
+if ! command -v claude >/dev/null 2>&1; then
+    echo -e "${YELLOW}Claude Code is not installed.${NC}"
+    echo ""
+    read -r -p "Install it now? [Y/n] " answer
+    case "$answer" in
+        [Nn]*)
+            echo -e "${RED}Cannot launch projects without Claude Code.${NC}"
+            exit 1
+            ;;
+        *)
+            echo "Installing Claude Code..."
+            curl -fsSL https://claude.ai/install.sh | bash -s -- -y
+            export PATH="$HOME/.claude/bin:$HOME/.local/bin:$PATH"
+            if ! command -v claude >/dev/null 2>&1; then
+                echo -e "${RED}Installation failed. Please install manually:${NC}"
+                echo "  curl -fsSL https://claude.ai/install.sh | bash"
+                exit 1
+            fi
+            echo -e "${GREEN}Claude Code installed.${NC}"
+            echo ""
+            ;;
+    esac
+fi
+
 # ── Helper: check if Claude has a previous session for a directory ────
 claude_has_session() {
     local session_dir="$HOME/.claude/projects$(pwd)"
@@ -179,7 +204,7 @@ if [ -d "$PROJECT_PATH" ]; then
     if claude_has_session; then
         echo -e "${GREEN}Resuming previous conversation${NC}"
         echo ""
-        exec claude opus-1m opus-1m --continue
+        exec claude opus-1m --continue
     else
         echo ""
         exec claude opus-1m
