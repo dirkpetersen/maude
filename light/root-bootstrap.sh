@@ -293,8 +293,12 @@ fi
 # ── PS1: replace hostname with underscore ─────────────────────────────
 if [ -f "/home/$USERNAME/.bashrc" ]; then
     grep -q 'MAUDE_PS1' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        printf '\n# Maude PS1: show user@_ instead of user@hostname\nMAUDE_PS1=1\nPS1='"'"'${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '"'"'\n' \
-            >> "/home/$USERNAME/.bashrc"
+        cat >> "/home/$USERNAME/.bashrc" << 'PS1EOF'
+
+# Maude PS1: show user@_ instead of user@hostname
+MAUDE_PS1=1
+PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+PS1EOF
 fi
 
 # ── Install packages from stdin (fallback — normally baked into template) ─
