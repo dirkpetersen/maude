@@ -318,11 +318,15 @@ $DistroName is already installed. To reinstall, run teardown first:
 ERROR: '$storeDistro' is already installed as a WSL distro.
 Maude needs to install a fresh '$storeDistro' to build its template.
 
-Please rename or remove it first:
-    wsl --export $storeDistro `$env:TEMP\ubuntu-backup.tar   # backup
-    wsl --unregister $storeDistro                             # remove
+To back up and remove it, run these commands:
 
-Then re-run this setup script.
+    wsl --export $storeDistro `$env:TEMP\ubuntu-2404-backup.tar
+    wsl --unregister $storeDistro
+
+Then re-run this setup script. To restore your distro later:
+
+    wsl --import $storeDistro `$env:LOCALAPPDATA\$storeDistro `$env:TEMP\ubuntu-2404-backup.tar
+
 "@ -ForegroundColor Red
             exit 1
         }
