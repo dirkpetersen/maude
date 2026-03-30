@@ -52,10 +52,25 @@ if (Test-Path $wtSettingsPath) {
     Write-Host "Windows Terminal settings not found, skipping." -ForegroundColor Gray
 }
 
-$shortcutFile = Join-Path ([Environment]::GetFolderPath('Desktop')) "$DistroName.lnk"
-if (Test-Path $shortcutFile) {
-    Remove-Item -Path $shortcutFile -Force
-    Write-Host "$DistroName desktop shortcut removed." -ForegroundColor Gray
+# Check both local and OneDrive desktops for shortcut
+$desktopPaths = @([Environment]::GetFolderPath('Desktop'))
+$userDesktop = Join-Path $env:USERPROFILE "Desktop"
+if ($userDesktop -ne $desktopPaths[0]) { $desktopPaths += $userDesktop }
+# Also check OneDrive desktops
+foreach ($od in @($env:OneDriveCommercial, $env:OneDriveConsumer, $env:OneDrive)) {
+    if ($od) {
+        $odDesktop = Join-Path $od "Desktop"
+        if ((Test-Path $odDesktop) -and ($desktopPaths -notcontains $odDesktop)) {
+            $desktopPaths += $odDesktop
+        }
+    }
+}
+foreach ($dp in $desktopPaths) {
+    $shortcutFile = Join-Path $dp "$DistroName.lnk"
+    if (Test-Path $shortcutFile) {
+        Remove-Item -Path $shortcutFile -Force
+        Write-Host "$DistroName desktop shortcut removed from $dp." -ForegroundColor Gray
+    }
 }
 
 # ── Self-elevate to Administrator for WSL operations ──
