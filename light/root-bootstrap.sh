@@ -271,7 +271,7 @@ if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
     printf "${G} | |  | | (_| | |_| | (_| |  __/${N}\n"
     printf "${G} |_|  |_|\__,_|\__,_|\__,_|\___|${N}\n"
     printf "\n"
-    printf "  ${B}Agentic coding sandbox${N}  —  Ubuntu 24.04 LTS\n"
+    printf "  ${B}Agentic coding sandbox${N}  -  Ubuntu 24.04 LTS\n"
     printf "\n"
     printf "  ${C}maude project-name${N}   Create or open a coding project\n"
     printf "  ${C}maude list${N}           Show your projects\n"
@@ -299,6 +299,12 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
 MAUDE_PS1=1
 PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 PS1EOF
+fi
+
+# ── Install maude launcher (if copied to /tmp by setup script) ────────
+if [ -f /tmp/maude-launcher ]; then
+    install -m 755 -o "$USERNAME" -g "$USERNAME" /tmp/maude-launcher "/home/$USERNAME/.local/bin/maude"
+    echo "'maude' launcher installed to ~/.local/bin/maude"
 fi
 
 # ── Install packages from stdin (fallback — normally baked into template) ─
