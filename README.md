@@ -9,6 +9,14 @@
 
 **Ready-to-run sandbox appliance for agentic coding**
 
+> ## **Looking to get started? Use [Maude Light](light/) — the current production implementation.**
+>
+> Maude Light is a lightweight WSL2 sandbox that deploys Ubuntu 24.04 with Claude Code
+> in a single PowerShell command. See the **[light/ README](light/README.md)** for install instructions.
+>
+> The full appliance described below (Ubuntu 26.04 VM/Docker with web-term, appmotel, and Traefik)
+> is **alpha-level** and under active development.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Ubuntu 26.04](https://img.shields.io/badge/Ubuntu-26.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://releases.ubuntu.com/26.04/)
 [![Build WSL](https://github.com/dirkpetersen/maude/actions/workflows/build-wsl.yml/badge.svg)](https://github.com/dirkpetersen/maude/actions/workflows/build-wsl.yml)
