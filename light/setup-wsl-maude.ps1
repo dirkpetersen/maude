@@ -311,16 +311,17 @@ $DistroName is already installed. To reinstall, run teardown first:
         # Download Ubuntu 24.04 from the Microsoft Store, install all packages,
         # then re-import as our named template and remove the store distro.
         $storeDistro = "Ubuntu-24.04"
+        # Unregister any existing store distro to ensure a clean template
         $storeExists = $installedDistros | Where-Object { $_.Trim() -eq $storeDistro }
         if ($storeExists) {
-            Write-Host "Using existing '$storeDistro' distro to build template." -ForegroundColor Gray
-        } else {
-            Write-Host "Installing '$storeDistro' from Microsoft Store (first time only)..."
-            wsl --install -d $storeDistro --no-launch
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "ERROR: wsl --install -d $storeDistro failed." -ForegroundColor Red
-                exit 1
-            }
+            Write-Host "Removing existing '$storeDistro' for a clean template build..." -ForegroundColor Gray
+            wsl --unregister $storeDistro
+        }
+        Write-Host "Installing '$storeDistro' from Microsoft Store (first time only)..."
+        wsl --install -d $storeDistro --no-launch
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: wsl --install -d $storeDistro failed." -ForegroundColor Red
+            exit 1
         }
 
         # Install packages into the store distro before exporting as template.
