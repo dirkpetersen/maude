@@ -191,7 +191,11 @@ fi
 
 # ── Helper: check if Claude has a previous session for a directory ────
 claude_has_session() {
-    local session_dir="$HOME/.claude/projects$(pwd)"
+    # Claude Code stores sessions under ~/.claude/projects/<absolute-path>/
+    # Use the resolved path to handle symlinks correctly
+    local resolved
+    resolved="$(cd "$1" && pwd -P)"
+    local session_dir="$HOME/.claude/projects${resolved}"
     [ -d "$session_dir" ] && \
     find "$session_dir" -maxdepth 1 -name "*.jsonl" -size +0c 2>/dev/null | grep -q .
 }
@@ -219,7 +223,7 @@ if [ -d "$PROJECT_PATH" ]; then
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     claude_maybe_update
     cd "$PROJECT_PATH"
-    if claude_has_session; then
+    if claude_has_session "$PROJECT_PATH"; then
         echo -e "${GREEN}Resuming previous conversation${NC}"
         echo ""
         exec claude opus-1m --continue
