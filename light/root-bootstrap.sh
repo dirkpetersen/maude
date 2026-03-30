@@ -301,6 +301,14 @@ PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;3
 PS1EOF
 fi
 
+# ── Install Claude Code ───────────────────────────────────────────────
+echo "Installing Claude Code..."
+su - "$USERNAME" -c '
+    curl -fsSL https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/claude-wrapper.sh \
+        -o "$HOME/.local/bin/claude" && chmod +x "$HOME/.local/bin/claude" && echo "claude-wrapper installed" || \
+    { curl -fsSL https://claude.ai/install.sh | bash -s latest; }
+'
+
 # ── Install maude launcher (if copied to /tmp by setup script) ────────
 if [ -f /tmp/maude-launcher ]; then
     install -m 755 -o "$USERNAME" -g "$USERNAME" /tmp/maude-launcher "/home/$USERNAME/.local/bin/maude"
