@@ -89,23 +89,9 @@ Use `mom install <package>` to install system packages — no sudo needed.
 CLAUDEEOF
 echo "Claude Code: CLAUDE.md created."
 
-# ── Hourly backup of Projects and .claude to shared folder ───────────
-SYNC_SCRIPT="$HOME/bin/maude-sync.sh"
-cat > "$SYNC_SCRIPT" << 'SYNCEOF'
-#!/bin/bash
-# maude-sync.sh — back up Projects and .claude to the shared Maude folder
-MAUDE_DIR="$HOME/Maude"
-[ -d "$MAUDE_DIR" ] || exit 0
-
-rsync -a --delete "$HOME/Projects/" "$MAUDE_DIR/Projects/" 2>/dev/null
-rsync -a --delete --exclude 'settings.json' "$HOME/.claude/" "$MAUDE_DIR/.claude/" 2>/dev/null
-SYNCEOF
-chmod +x "$SYNC_SCRIPT"
-
-# Install cron job (idempotent)
-( crontab -l 2>/dev/null | grep -v 'maude-sync.sh'; \
-  echo "0 * * * * $SYNC_SCRIPT" ) | crontab -
-echo "Hourly backup cron installed (Projects + .claude → ~/Maude)."
+# ── Remove legacy cron sync (replaced by lsyncd systemd service) ─────
+crontab -l 2>/dev/null | grep -v 'maude-sync.sh' | crontab - 2>/dev/null || true
+rm -f "$HOME/bin/maude-sync.sh"
 
 # ── Install maude launcher (if copied to /tmp by setup script) ────────
 if [ -f /tmp/maude-launcher ] && [ ! -f "$HOME/.local/bin/maude" ]; then

@@ -31,7 +31,7 @@ for i in 1 2 3 4 5; do
     echo "apt-get update failed (attempt $i/5), retrying in 3s..."
     sleep 3
 done
-apt-get install -y -q sudo curl git ca-certificates software-properties-common
+apt-get install -y -q sudo curl git ca-certificates software-properties-common cron lsyncd rsync
 echo "Enabling universe repository..."
 add-apt-repository -y universe
 apt-get update -q
@@ -44,6 +44,11 @@ if ! id "$USERNAME" >/dev/null 2>&1; then
 else
     echo "User '$USERNAME' already exists."
 fi
+
+# ── Sudoers: allow reboot/shutdown without password ──────────────────
+printf '%s ALL=(ALL) NOPASSWD: /sbin/reboot, /sbin/shutdown, /sbin/poweroff\n' \
+    "$USERNAME" > /etc/sudoers.d/maude-reboot
+chmod 440 /etc/sudoers.d/maude-reboot
 
 # ── Install mom (setuid package manager) ──────────────────────────────
 groupadd --system --gid 100 "$MOM_GROUP" 2>/dev/null || true
@@ -84,6 +89,9 @@ fi
 # Automatic mounting of Windows drives (C:\, D:\, etc.) is disabled for
 # sandbox isolation.  Only the shared Maude folder is mounted via fstab.
 cat > /etc/wsl.conf << WSLEOF
+[boot]
+systemd = true
+
 [user]
 default=$USERNAME
 
@@ -151,6 +159,97 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
     grep -qxF '. /etc/profile.d/maude-path.sh' "/home/$USERNAME/.bashrc" 2>/dev/null || \
         printf '\n# Maude PATH\n. /etc/profile.d/maude-path.sh\n' >> "/home/$USERNAME/.bashrc"
 fi
+
+# ── Real-time sync: ~/Projects and ~/.claude ↔ ~/Maude ────────────────
+# On boot: restore from ~/Maude if local dirs are empty (new instance).
+# After restore: lsyncd watches local dirs and mirrors changes to ~/Maude.
+USER_HOME="/home/$USERNAME"
+
+# Restore script — runs once at boot before lsyncd starts
+cat > "$USER_HOME/bin/maude-restore.sh" << RESTOREEOF
+#!/bin/bash
+# maude-restore.sh — populate empty dirs from shared Maude folder on boot
+MAUDE_DIR="\$HOME/Maude"
+[ -d "\$MAUDE_DIR" ] || exit 0
+
+# Restore .claude if local is empty but backup exists
+if [ -d "\$MAUDE_DIR/.claude" ] && [ "\$(ls -A "\$MAUDE_DIR/.claude" 2>/dev/null)" ]; then
+    if [ ! -d "\$HOME/.claude" ] || [ -z "\$(ls -A "\$HOME/.claude" 2>/dev/null)" ]; then
+        echo "maude-restore: restoring ~/.claude from ~/Maude/.claude"
+        mkdir -p "\$HOME/.claude"
+        rsync -a "\$MAUDE_DIR/.claude/" "\$HOME/.claude/"
+    fi
+fi
+
+# Restore Projects if local is empty but backup exists
+if [ -d "\$MAUDE_DIR/Projects" ] && [ "\$(ls -A "\$MAUDE_DIR/Projects" 2>/dev/null)" ]; then
+    if [ ! -d "\$HOME/Projects" ] || [ -z "\$(ls -A "\$HOME/Projects" 2>/dev/null)" ]; then
+        echo "maude-restore: restoring ~/Projects from ~/Maude/Projects"
+        mkdir -p "\$HOME/Projects"
+        rsync -a "\$MAUDE_DIR/Projects/" "\$HOME/Projects/"
+    fi
+fi
+RESTOREEOF
+chmod +x "$USER_HOME/bin/maude-restore.sh"
+chown "$USERNAME:$USERNAME" "$USER_HOME/bin/maude-restore.sh"
+
+# lsyncd config — watches local dirs, mirrors to ~/Maude in real time
+mkdir -p /etc/lsyncd
+cat > /etc/lsyncd/maude-sync.conf.lua << LSYNCDEOF
+settings {
+    logfile    = "$USER_HOME/.local/state/maude-sync.log",
+    statusFile = "$USER_HOME/.local/state/maude-sync.status",
+    nodaemon   = true,
+}
+
+sync {
+    default.rsync,
+    source = "$USER_HOME/Projects",
+    target = "$USER_HOME/Maude/Projects",
+    delay  = 3,
+    delete = true,
+    rsync  = {
+        archive = true,
+    }
+}
+
+sync {
+    default.rsync,
+    source = "$USER_HOME/.claude",
+    target = "$USER_HOME/Maude/.claude",
+    delay  = 3,
+    delete = true,
+    rsync  = {
+        archive = true,
+        _extra  = { "--exclude=settings.json" },
+    }
+}
+LSYNCDEOF
+
+# systemd service — restore on boot, then real-time sync via lsyncd
+cat > /etc/systemd/system/maude-sync.service << SVCEOF
+[Unit]
+Description=Maude file sync (restore + lsyncd)
+After=local-fs.target
+
+[Service]
+Type=simple
+User=$USERNAME
+ExecStartPre=$USER_HOME/bin/maude-restore.sh
+ExecStart=/usr/bin/lsyncd /etc/lsyncd/maude-sync.conf.lua
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+# Create log directory
+mkdir -p "$USER_HOME/.local/state"
+chown -R "$USERNAME:$USERNAME" "$USER_HOME/.local/state"
+
+systemctl enable maude-sync.service 2>/dev/null || true
+echo "Real-time sync service installed (maude-sync)."
 
 # ── Welcome screen ────────────────────────────────────────────────────
 # Displayed once per interactive login session.

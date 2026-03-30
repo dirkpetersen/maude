@@ -29,21 +29,55 @@ param(
     [string]$InstallDir  = "$env:LOCALAPPDATA\Maude"
 )
 
+# ── When run via iex (downloaded string), $PSScriptRoot is empty ─────
+# Download all needed files from GitHub to a temp directory.
+$GH_RAW = "https://raw.githubusercontent.com/dirkpetersen/maude/main"
+
+if (-not $PSScriptRoot -or $PSScriptRoot -eq '') {
+    $PSScriptRoot = Join-Path $env:TEMP "maude-setup"
+    New-Item -ItemType Directory -Force -Path $PSScriptRoot | Out-Null
+    $wc = New-Object Net.WebClient
+    $filesToDownload = @(
+        @{ Url = "$GH_RAW/light/root-bootstrap.sh";    Dest = "root-bootstrap.sh" }
+        @{ Url = "$GH_RAW/light/maude-bootstrap.sh";   Dest = "maude-bootstrap.sh" }
+        @{ Url = "$GH_RAW/light/maude";                Dest = "maude" }
+        @{ Url = "$GH_RAW/maude.png";                   Dest = "maude.png" }
+        @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml" }
+    )
+    foreach ($dl in $filesToDownload) {
+        $destPath = Join-Path $PSScriptRoot $dl.Dest
+        $destDir  = Split-Path $destPath -Parent
+        if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
+        try {
+            $wc.DownloadFile($dl.Url, $destPath)
+        } catch {
+            Write-Host "WARNING: Could not download $($dl.Url): $_" -ForegroundColor Yellow
+        }
+    }
+    Write-Host "Running from downloaded scripts (iex mode)." -ForegroundColor Gray
+}
+
 # ── Self-elevate to Administrator if needed ──
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Not running as Administrator. Attempting to elevate..." -ForegroundColor Yellow
     try {
-        Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        if ($PSCommandPath) {
+            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        } else {
+            # Running via iex — re-download and run the script elevated
+            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1'))"
+            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command `"$cmd`""
+        }
     } catch {
         Write-Host @"
 
 ERROR: This script requires Administrator privileges.
-Please run PowerShell as Administrator and execute:
+Please right-click PowerShell → "Run as Administrator", then run:
 
     Set-ExecutionPolicy Bypass -Scope Process -Force
-    .\setup-wsl-maude.ps1
+    iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1'))
 
 "@ -ForegroundColor Red
     }
