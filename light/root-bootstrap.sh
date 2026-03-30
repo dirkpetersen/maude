@@ -181,6 +181,19 @@ if [ -d "$USER_HOME/Maude" ]; then
     ln -sfn "$USER_HOME/Maude/.claude" "$USER_HOME/.claude"
     chown -h "$USERNAME:$USERNAME" "$USER_HOME/.claude"
     echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
+    # Seed settings.json with bypass permissions (safe inside sandbox)
+    if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
+        cat > "$USER_HOME/.claude/settings.json" << 'SETTINGSEOF'
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true
+}
+SETTINGSEOF
+        chown "$USERNAME:$USERNAME" "$USER_HOME/.claude/settings.json"
+        echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+    fi
 fi
 
 # ── (DISABLED) Real-time sync machinery ──────────────────────────────

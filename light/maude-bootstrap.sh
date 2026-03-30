@@ -50,15 +50,19 @@ done
 
 # ── Claude Code: bypass permissions (safe inside sandbox) ────────────
 # ~/.claude is a symlink to ~/Maude/.claude (created by root-bootstrap)
+# Only write if not already seeded by root-bootstrap
 mkdir -p "$HOME/.claude" 2>/dev/null || true
-cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'
+if [ ! -f "$HOME/.claude/settings.json" ]; then
+    cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'
 {
   "permissions": {
     "defaultMode": "bypassPermissions"
-  }
+  },
+  "skipDangerousModePermissionPrompt": true
 }
 SETTINGSEOF
-echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+    echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+fi
 
 # ── Claude Code: project instructions ────────────────────────────────
 cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
