@@ -139,15 +139,21 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
 fi
 
 # ── PATH enforcement: ~/bin first, ~/.local/bin at end ────────────────
-printf '%s\n' \
-    'mkdir -p "$HOME/bin" "$HOME/.local/bin"' \
-    'case ":$PATH:" in' \
-    '    *":$HOME/bin:"*) ;;' \
-    '    *) PATH="$HOME/bin:$PATH" ;;' \
-    'esac' \
-    'PATH="${PATH//:$HOME\/.local\/bin/}:$HOME/.local/bin"' \
-    'export PATH' \
-    > /etc/profile.d/maude-path.sh
+cat > /etc/profile.d/maude-path.sh << 'PATHEOF'
+mkdir -p "$HOME/bin" "$HOME/.local/bin"
+# Remove ~/bin and ~/.local/bin from wherever they are in PATH
+_clean="$PATH"
+_clean="${_clean//$HOME\/bin:/}"
+_clean="${_clean//$HOME\/.local\/bin:/}"
+_clean="${_clean%:$HOME/bin}"
+_clean="${_clean%:$HOME/.local/bin}"
+# Re-add: ~/bin first, ~/.local/bin last
+PATH="$HOME/bin:$_clean:$HOME/.local/bin"
+# Remove empty segments
+PATH="${PATH//::/:}"
+export PATH
+unset _clean
+PATHEOF
 chmod +x /etc/profile.d/maude-path.sh
 
 # Hook into /etc/skel/.bashrc (for future users)

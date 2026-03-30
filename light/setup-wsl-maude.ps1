@@ -394,10 +394,14 @@ if ($LASTEXITCODE -ne 0) {
 wsl --terminate $DistroName
 
 # ── Step 6: Run maude-bootstrap.sh ──                             # does NOT require admin
-# All files were copied to /tmp before terminate; no Windows paths needed here.
+# /tmp is cleared after wsl --terminate, so re-pipe the script.
 
 Write-Host "`n[6/7] Running user bootstrap..." -ForegroundColor Green
 
+$bootstrapSrc = Join-Path $ScriptDir "maude-bootstrap.sh"
+if (Test-Path $bootstrapSrc) {
+    Get-Content $bootstrapSrc -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-bootstrap.sh && sed -i 's/\r$//' /tmp/maude-bootstrap.sh && chmod +x /tmp/maude-bootstrap.sh"
+}
 wsl -d $DistroName -u $DefaultUser -- bash /tmp/maude-bootstrap.sh
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: User bootstrap had errors." -ForegroundColor Yellow
