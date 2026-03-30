@@ -8,7 +8,7 @@ set -e
 echo "=== Maude user bootstrap ==="
 
 # ── Ensure directories and PATH ──────────────────────────────────────
-mkdir -p "$HOME/bin" "$HOME/.local/bin" "$HOME/Projects"
+mkdir -p "$HOME/bin" "$HOME/.local/bin" "$HOME/Maude/Projects"
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
 # ── Install dev-station (shell-setup, claude-wrapper, nodejs, AWS CLI) ─
@@ -49,7 +49,8 @@ for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator 
 done
 
 # ── Claude Code: bypass permissions (safe inside sandbox) ────────────
-mkdir -p "$HOME/.claude"
+# ~/.claude is a symlink to ~/Maude/.claude (created by root-bootstrap)
+mkdir -p "$HOME/.claude" 2>/dev/null || true
 cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'
 {
   "permissions": {
@@ -77,21 +78,17 @@ When the user asks you to create a document, spreadsheet, presentation,
 or any file they will open on the Windows side, **always write it to
 `~/Maude`** (or a subfolder of it).
 
-## Project Backups
+## Projects
 
-`~/Projects` and `~/.claude` are automatically synced every hour to
-`~/Maude/Projects` and `~/Maude/.claude` so that project work is
-preserved on the host even if the WSL distro is removed.
+Projects live in `~/Maude/Projects` which is on the shared host mount.
+Your work is automatically preserved on the Windows side even if the
+WSL distro is removed. `~/.claude` is also a symlink to `~/Maude/.claude`.
 
 ## Package Installation
 
 Use `mom install <package>` to install system packages — no sudo needed.
 CLAUDEEOF
 echo "Claude Code: CLAUDE.md created."
-
-# ── Remove legacy cron sync (replaced by lsyncd systemd service) ─────
-crontab -l 2>/dev/null | grep -v 'maude-sync.sh' | crontab - 2>/dev/null || true
-rm -f "$HOME/bin/maude-sync.sh"
 
 # ── Install maude launcher (if copied to /tmp by setup script) ────────
 if [ -f /tmp/maude-launcher ] && [ ! -f "$HOME/.local/bin/maude" ]; then

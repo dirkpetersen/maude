@@ -8,7 +8,7 @@
 #
 # Tab completion: type "maude ban<Tab>" to auto-complete project names
 
-PROJECTS_DIR="$HOME/Projects"
+PROJECTS_DIR="$HOME/Maude/Projects"
 
 # Colors
 GREEN='\033[0;32m'
