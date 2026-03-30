@@ -338,7 +338,11 @@ fi
 # ── Install Claude Code ───────────────────────────────────────────────
 echo "Installing Claude Code..."
 su - "$USERNAME" -c '
-    curl -fsSL https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/claude-wrapper.sh | bash || \
+    mkdir -p "$HOME/.local/bin" "$HOME/bin"
+    curl -fsSL https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/claude-wrapper.sh \
+        -o "$HOME/.local/bin/claude-wrapper.sh" && chmod +x "$HOME/.local/bin/claude-wrapper.sh" \
+        && ln -sfn "$HOME/.local/bin/claude-wrapper.sh" "$HOME/bin/claude" \
+        && echo "claude-wrapper installed" || \
     { curl -fsSL https://claude.ai/install.sh | bash -s latest; }
 '
 
