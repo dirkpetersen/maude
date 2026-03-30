@@ -89,6 +89,25 @@ Windows host
   Only mount: ~/Maude via /etc/fstab drvfs entry
 ```
 
+## Future: macOS Support
+
+Maude Light could be ported to macOS using [Lima](https://github.com/lima-vm/lima) (lightweight Linux VMs via Apple Virtualization.framework, `brew install lima`). [OrbStack](https://orbstack.dev/) is a polished commercial alternative.
+
+**What changes:**
+
+| Windows (current) | Mac equivalent |
+|---|---|
+| `setup-wsl-maude.ps1` (PowerShell) | `setup-maude.sh` (bash) |
+| `wsl --import` / `--export` | `limactl create` with a YAML config |
+| drvfs mount via `/etc/fstab` | Lima `mounts:` config (virtiofs) |
+| `wsl.conf` automount=false | Lima default -- no host mounts unless configured |
+| Windows Terminal profile + icon | Not needed -- `limactl shell Maude` or alias |
+| Desktop `.lnk` shortcut | macOS `.app` bundle or Dock alias (optional) |
+| `curl.exe` (not `curl`) | `curl` works natively |
+| OneDrive folder detection | `~/Documents` or iCloud Drive detection |
+
+**What stays the same:** `root-bootstrap.sh`, `maude-bootstrap.sh`, the `maude` launcher, the `~/.claude` symlink strategy, `ubuntu-packages.yaml`, and all tooling (Claude Code, mom, dev-station, skills) run identically inside the Linux VM. The main work is replacing the ~500-line PowerShell orchestrator with a ~200-line bash script that drives Lima instead of WSL.
+
 ## Files
 
 | File | Runs as | Purpose |
