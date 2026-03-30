@@ -47,6 +47,7 @@ function Find-WTSettingsPath {
 # $PSScriptRoot is empty when run via iex. Even when set, the user may
 # have downloaded only setup-wsl-maude.ps1 — companion files may be missing.
 $GH_RAW = "https://raw.githubusercontent.com/dirkpetersen/maude/main"
+$cacheBust = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
 if ($PSScriptRoot -and $PSScriptRoot -ne '') {
     $ScriptDir = $PSScriptRoot
@@ -55,7 +56,7 @@ if ($PSScriptRoot -and $PSScriptRoot -ne '') {
     New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null
 }
 
-# Download any missing companion files from GitHub
+# Always download companion files from GitHub (cache-bust to avoid stale CDN copies)
 $filesToDownload = @(
     @{ Url = "$GH_RAW/light/root-bootstrap.sh";       Dest = "root-bootstrap.sh" }
     @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh" }
@@ -66,14 +67,12 @@ $filesToDownload = @(
 $wc = New-Object Net.WebClient
 foreach ($dl in $filesToDownload) {
     $destPath = Join-Path $ScriptDir $dl.Dest
-    if (-not (Test-Path $destPath)) {
-        $destDir = Split-Path $destPath -Parent
-        if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
-        try {
-            $wc.DownloadFile($dl.Url, $destPath)
-        } catch {
-            Write-Host "WARNING: Could not download $($dl.Url): $_" -ForegroundColor Yellow
-        }
+    $destDir = Split-Path $destPath -Parent
+    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
+    try {
+        $wc.DownloadFile("$($dl.Url)?cache=$cacheBust", $destPath)
+    } catch {
+        Write-Host "WARNING: Could not download $($dl.Url): $_" -ForegroundColor Yellow
     }
 }
 
@@ -87,7 +86,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
             Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
         } else {
             # Running via iex — re-download and run the script elevated
-            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1'))"
+            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust'))"
             Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command `"$cmd`""
         }
     } catch {
