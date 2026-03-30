@@ -2,6 +2,8 @@
 
 A lightweight WSL2 sandbox for agentic coding with [Claude Code](https://claude.ai/code). Deploys Ubuntu 24.04 as an isolated WSL distro with a single shared folder to the Windows host.
 
+<img width="582" height="386" alt="image" src="https://github.com/user-attachments/assets/03c212a9-d248-4196-ace7-118a44acba09" />
+
 ## What you get
 
 - **Sandboxed Ubuntu 24.04** — Windows drive automount is disabled; only one folder (`~/Maude`) is shared with the host via drvfs
