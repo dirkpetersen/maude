@@ -30,22 +30,26 @@ param(
 )
 
 # ── When run via iex (downloaded string), $PSScriptRoot is empty ─────
-# Download all needed files from GitHub to a temp directory.
+# $PSScriptRoot is a read-only automatic variable — cannot be assigned.
+# Use $ScriptDir as a writable equivalent throughout this script.
 $GH_RAW = "https://raw.githubusercontent.com/dirkpetersen/maude/main"
 
-if (-not $PSScriptRoot -or $PSScriptRoot -eq '') {
-    $PSScriptRoot = Join-Path $env:TEMP "maude-setup"
-    New-Item -ItemType Directory -Force -Path $PSScriptRoot | Out-Null
+if ($PSScriptRoot -and $PSScriptRoot -ne '') {
+    $ScriptDir = $PSScriptRoot
+} else {
+    # Download all needed files from GitHub to a temp directory
+    $ScriptDir = Join-Path $env:TEMP "maude-setup"
+    New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null
     $wc = New-Object Net.WebClient
     $filesToDownload = @(
-        @{ Url = "$GH_RAW/light/root-bootstrap.sh";    Dest = "root-bootstrap.sh" }
-        @{ Url = "$GH_RAW/light/maude-bootstrap.sh";   Dest = "maude-bootstrap.sh" }
-        @{ Url = "$GH_RAW/light/maude";                Dest = "maude" }
-        @{ Url = "$GH_RAW/maude.png";                   Dest = "maude.png" }
+        @{ Url = "$GH_RAW/light/root-bootstrap.sh";       Dest = "root-bootstrap.sh" }
+        @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh" }
+        @{ Url = "$GH_RAW/light/maude";                   Dest = "maude" }
+        @{ Url = "$GH_RAW/maude.png";                     Dest = "maude.png" }
         @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml" }
     )
     foreach ($dl in $filesToDownload) {
-        $destPath = Join-Path $PSScriptRoot $dl.Dest
+        $destPath = Join-Path $ScriptDir $dl.Dest
         $destDir  = Split-Path $destPath -Parent
         if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
         try {
@@ -204,8 +208,8 @@ New-Item -ItemType Directory -Force -Path $HostFolder | Out-Null
 Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
 
 # Set custom folder icon (PNG -> ICO conversion for desktop.ini)
-$iconSrc = Join-Path $PSScriptRoot "maude.png"
-if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $PSScriptRoot "..\maude.png" }
+$iconSrc = Join-Path $ScriptDir "maude.png"
+if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $ScriptDir "..\maude.png" }
 
 if (Test-Path $iconSrc) {
     try {
@@ -232,7 +236,7 @@ if (Test-Path $iconSrc) {
 
 # ── Parse package list (needed for template creation) ────────────────
 
-$packagesYaml = Join-Path $PSScriptRoot "..\packages\ubuntu-packages.yaml"
+$packagesYaml = Join-Path $ScriptDir "..\packages\ubuntu-packages.yaml"
 $packageList = ""
 if (Test-Path $packagesYaml) {
     $packages = @(
@@ -363,7 +367,7 @@ Write-Host "`n[5/7] Running root bootstrap..." -ForegroundColor Green
 # All file copies happen BEFORE wsl --terminate so Windows paths are still accessible.
 $filesToCopy = @("root-bootstrap.sh", "maude-bootstrap.sh", "maude")
 foreach ($f in $filesToCopy) {
-    $src = Join-Path $PSScriptRoot $f
+    $src = Join-Path $ScriptDir $f
     if (Test-Path $src) {
         $wslSrc = Get-WslPath $src
         wsl -d $DistroName -u root -- bash -c "cp '$wslSrc' /tmp/$f && sed -i 's/\r$//' /tmp/$f && chmod +x /tmp/$f"
@@ -371,7 +375,7 @@ foreach ($f in $filesToCopy) {
 }
 
 # Copy maude launcher to /tmp/maude-launcher (used by maude-bootstrap.sh)
-$maudeLauncher = Join-Path $PSScriptRoot "maude"
+$maudeLauncher = Join-Path $ScriptDir "maude"
 if (Test-Path $maudeLauncher) {
     $wslSrc = Get-WslPath $maudeLauncher
     wsl -d $DistroName -u root -- bash -c "cp '$wslSrc' /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
@@ -405,9 +409,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # ── Configure Windows Terminal profile (name + icon) ──           # does NOT require admin
 
-$iconSrc = Join-Path $PSScriptRoot "maude.png"
+$iconSrc = Join-Path $ScriptDir "maude.png"
 if (-not (Test-Path $iconSrc)) {
-    $iconSrc = Join-Path $PSScriptRoot "..\maude.png"
+    $iconSrc = Join-Path $ScriptDir "..\maude.png"
 }
 $iconDst = Join-Path $InstallDir "maude.png"
 
@@ -476,8 +480,8 @@ $shortcutFile = Join-Path $desktopPath "$DistroName.lnk"
 $icoFile = Join-Path $InstallDir "maude.ico"
 
 # Convert maude.png → maude.ico for the shortcut (lnk files require ico)
-$iconSrc = Join-Path $PSScriptRoot "maude.png"
-if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $PSScriptRoot "..\maude.png" }
+$iconSrc = Join-Path $ScriptDir "maude.png"
+if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $ScriptDir "..\maude.png" }
 
 if (Test-Path $iconSrc) {
     try {
