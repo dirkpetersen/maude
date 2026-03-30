@@ -124,7 +124,17 @@ if [ -n "$HOST_FOLDER" ]; then
     fi
     # Mount now so directories created later land on the host filesystem
     if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
-        mount "$MOUNT_POINT" 2>/dev/null || echo "WARNING: mount failed, will activate on next WSL restart."
+        if mount "$MOUNT_POINT"; then
+            echo "Mounted $MOUNT_POINT"
+        else
+            echo "WARNING: mount $MOUNT_POINT failed (will activate on next WSL restart)."
+        fi
+    fi
+    # Create .claude and Projects on the mounted host filesystem
+    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        mkdir -p "$MOUNT_POINT/.claude" "$MOUNT_POINT/Projects"
+        chown "$USERNAME:$USERNAME" "$MOUNT_POINT/.claude" "$MOUNT_POINT/Projects"
+        echo "Created .claude and Projects on host mount."
     fi
     echo "Sandbox mount configured: $HOST_FOLDER -> $MOUNT_POINT"
 else
@@ -175,9 +185,8 @@ mkdir -p "$USER_HOME/bin" "$USER_HOME/.local/bin" "$USER_HOME/.local/state"
 chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
-# ~/Maude must be mounted (done above) before creating dirs on it.
-if mountpoint -q "$USER_HOME/Maude" 2>/dev/null || [ -d "$USER_HOME/Maude" ]; then
-    su - "$USERNAME" -c 'mkdir -p "$HOME/Maude/.claude" "$HOME/Maude/Projects"'
+# The mount and mkdir were done above. Now create the symlink.
+if [ -d "$USER_HOME/Maude/.claude" ]; then
     # Remove ~/.claude if it's a plain directory (not already a symlink)
     if [ -d "$USER_HOME/.claude" ] && [ ! -L "$USER_HOME/.claude" ]; then
         rm -rf "$USER_HOME/.claude"
@@ -199,7 +208,7 @@ SETTINGSEOF
         echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
     fi
 else
-    echo "WARNING: ~/Maude not mounted, skipping .claude symlink (will be created on next boot)."
+    echo "WARNING: ~/Maude/.claude does not exist, skipping symlink."
 fi
 
 # ── (DISABLED) Real-time sync machinery ──────────────────────────────
