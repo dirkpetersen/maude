@@ -122,6 +122,10 @@ if [ -n "$HOST_FOLDER" ]; then
         printf '%s %s drvfs defaults,uid=%s,gid=%s 0 0\n' \
             "$FSTAB_SRC" "$MOUNT_POINT" "$USER_UID" "$USER_GID" >> /etc/fstab
     fi
+    # Mount now so directories created later land on the host filesystem
+    if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        mount "$MOUNT_POINT" 2>/dev/null || echo "WARNING: mount failed, will activate on next WSL restart."
+    fi
     echo "Sandbox mount configured: $HOST_FOLDER -> $MOUNT_POINT"
 else
     echo "WARNING: No host folder path found, skipping sandbox mount."
@@ -171,20 +175,19 @@ mkdir -p "$USER_HOME/bin" "$USER_HOME/.local/bin" "$USER_HOME/.local/state"
 chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
-# Create the target dir and symlink regardless of whether ~/Maude is
-# mounted yet (the mount may only be active after a WSL restart).
-mkdir -p "$USER_HOME/Maude/.claude" "$USER_HOME/Maude/Projects"
-chown -R "$USERNAME:$USERNAME" "$USER_HOME/Maude"
-# Remove ~/.claude if it's a plain directory (not already a symlink)
-if [ -d "$USER_HOME/.claude" ] && [ ! -L "$USER_HOME/.claude" ]; then
-    rm -rf "$USER_HOME/.claude"
-fi
-ln -sfn "$USER_HOME/Maude/.claude" "$USER_HOME/.claude"
-chown -h "$USERNAME:$USERNAME" "$USER_HOME/.claude"
-echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
-# Seed settings.json with bypass permissions (safe inside sandbox)
-if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
-    cat > "$USER_HOME/.claude/settings.json" << 'SETTINGSEOF'
+# ~/Maude must be mounted (done above) before creating dirs on it.
+if mountpoint -q "$USER_HOME/Maude" 2>/dev/null || [ -d "$USER_HOME/Maude" ]; then
+    su - "$USERNAME" -c 'mkdir -p "$HOME/Maude/.claude" "$HOME/Maude/Projects"'
+    # Remove ~/.claude if it's a plain directory (not already a symlink)
+    if [ -d "$USER_HOME/.claude" ] && [ ! -L "$USER_HOME/.claude" ]; then
+        rm -rf "$USER_HOME/.claude"
+    fi
+    ln -sfn "$USER_HOME/Maude/.claude" "$USER_HOME/.claude"
+    chown -h "$USERNAME:$USERNAME" "$USER_HOME/.claude"
+    echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
+    # Seed settings.json with bypass permissions (safe inside sandbox)
+    if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
+        cat > "$USER_HOME/.claude/settings.json" << 'SETTINGSEOF'
 {
   "permissions": {
     "defaultMode": "bypassPermissions"
@@ -192,8 +195,11 @@ if [ ! -f "$USER_HOME/.claude/settings.json" ]; then
   "skipDangerousModePermissionPrompt": true
 }
 SETTINGSEOF
-    chown "$USERNAME:$USERNAME" "$USER_HOME/.claude/settings.json"
-    echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+        chown "$USERNAME:$USERNAME" "$USER_HOME/.claude/settings.json"
+        echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+    fi
+else
+    echo "WARNING: ~/Maude not mounted, skipping .claude symlink (will be created on next boot)."
 fi
 
 # ── (DISABLED) Real-time sync machinery ──────────────────────────────
