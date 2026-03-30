@@ -307,17 +307,20 @@ $DistroName is already installed. To reinstall, run teardown first:
 
     $templateExists = (wsl -l -q 2>&1) -replace "`0", "" |
         Where-Object { $_.Trim() -eq $templateDistro }
-    if ($templateExists) {
-        Write-Host "Using existing '$templateDistro' (fast path)." -ForegroundColor Gray
-    } else {
+    if (-not $templateExists) {
         # Download Ubuntu 24.04 from the Microsoft Store, install all packages,
         # then re-import as our named template and remove the store distro.
         $storeDistro = "Ubuntu-24.04"
-        Write-Host "Installing '$storeDistro' from Microsoft Store (first time only)..."
-        wsl --install -d $storeDistro --no-launch
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: wsl --install -d $storeDistro failed." -ForegroundColor Red
-            exit 1
+        $storeExists = $installedDistros | Where-Object { $_.Trim() -eq $storeDistro }
+        if ($storeExists) {
+            Write-Host "Using existing '$storeDistro' distro to build template." -ForegroundColor Gray
+        } else {
+            Write-Host "Installing '$storeDistro' from Microsoft Store (first time only)..."
+            wsl --install -d $storeDistro --no-launch
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "ERROR: wsl --install -d $storeDistro failed." -ForegroundColor Red
+                exit 1
+            }
         }
 
         # Install packages into the store distro before exporting as template.
@@ -341,20 +344,21 @@ $DistroName is already installed. To reinstall, run teardown first:
             }
         }
 
+        # Export store distro, import as template, keep tar for Maude import below
         Write-Host "Exporting rootfs from '$storeDistro'..."
         wsl --export $storeDistro $rootfsTar
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: wsl --export failed." -ForegroundColor Red
             exit 1
         }
-        Write-Host "Re-importing as '$templateDistro'..."
+        Write-Host "Importing as '$templateDistro'..."
         New-Item -ItemType Directory -Force -Path $templateDir | Out-Null
         wsl --import $templateDistro $templateDir $rootfsTar --version 2
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: wsl --import template failed." -ForegroundColor Red
             exit 1
         }
-        # Remove the store distro and its WT profile (no longer needed)
+        # Remove the store distro and clean up its WT profile
         wsl --unregister $storeDistro
         $wtSettingsPath = Find-WTSettingsPath
         if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
@@ -370,15 +374,20 @@ $DistroName is already installed. To reinstall, run teardown first:
                 $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
             }
         }
-        Remove-Item -Path $rootfsTar -ErrorAction SilentlyContinue
         Write-Host "'$templateDistro' created with packages." -ForegroundColor Gray
+    } else {
+        Write-Host "Using existing '$templateDistro' (fast path)." -ForegroundColor Gray
     }
 
-    Write-Host "Exporting template rootfs..."
-    wsl --export $templateDistro $rootfsTar
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: wsl --export failed." -ForegroundColor Red
-        exit 1
+    # Export template and import as Maude
+    # (on first run, the rootfs tar already exists from the template creation above)
+    if (-not (Test-Path $rootfsTar)) {
+        Write-Host "Exporting template rootfs..."
+        wsl --export $templateDistro $rootfsTar
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: wsl --export failed." -ForegroundColor Red
+            exit 1
+        }
     }
 
     Write-Host "Importing as '$DistroName'..."
@@ -388,7 +397,6 @@ $DistroName is already installed. To reinstall, run teardown first:
         Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
         exit 1
     }
-
     Remove-Item -Path $rootfsTar -ErrorAction SilentlyContinue
     Write-Host "$DistroName imported from '$templateDistro'." -ForegroundColor Gray
 }
