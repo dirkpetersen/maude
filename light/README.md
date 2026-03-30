@@ -64,6 +64,23 @@ After install, open the **Maude** profile in Windows Terminal (or the desktop sh
   mom install <pkg>    Install system packages (no sudo needed)
 ```
 
+### Document analysis
+
+Drop files into your `Maude` folder on Windows, then ask Claude to analyze them. Supported formats:
+
+- **PDFs** -- extract text, tables, and structured data
+- **Word docs** (.docx) -- read and parse content
+- **Spreadsheets** (.xlsx, .csv) -- read, analyze, and compute on data
+- **PowerPoint** (.pptx) -- extract text and structure from slides
+
+Claude can summarize, compare multiple documents, extract specific data (names, dates, figures, clauses), identify patterns or inconsistencies, and generate new documents from the analysis. Output files (reports, spreadsheets, presentations) are written to `~/Maude` so you can open them directly on Windows.
+
+Example workflow:
+1. Copy your documents into the `Maude` folder on Windows
+2. Open the Maude terminal and run `maude my-analysis`
+3. Ask Claude: *"Summarize the three PDFs in ~/Maude"* or *"Compare these two contracts and list the differences"*
+4. Find the output in your `Maude` folder on Windows
+
 ### Shared folder
 
 `~/Maude` is mounted from your Windows host (OneDrive or Documents). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce.
