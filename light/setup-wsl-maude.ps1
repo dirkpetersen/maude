@@ -29,28 +29,31 @@ param(
     [string]$InstallDir  = "$env:LOCALAPPDATA\Maude"
 )
 
-# ── When run via iex (downloaded string), $PSScriptRoot is empty ─────
-# $PSScriptRoot is a read-only automatic variable — cannot be assigned.
-# Use $ScriptDir as a writable equivalent throughout this script.
+# ── Resolve script directory and download missing files from GitHub ───
+# $PSScriptRoot is empty when run via iex. Even when set, the user may
+# have downloaded only setup-wsl-maude.ps1 — companion files may be missing.
 $GH_RAW = "https://raw.githubusercontent.com/dirkpetersen/maude/main"
 
 if ($PSScriptRoot -and $PSScriptRoot -ne '') {
     $ScriptDir = $PSScriptRoot
 } else {
-    # Download all needed files from GitHub to a temp directory
     $ScriptDir = Join-Path $env:TEMP "maude-setup"
     New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null
-    $wc = New-Object Net.WebClient
-    $filesToDownload = @(
-        @{ Url = "$GH_RAW/light/root-bootstrap.sh";       Dest = "root-bootstrap.sh" }
-        @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh" }
-        @{ Url = "$GH_RAW/light/maude";                   Dest = "maude" }
-        @{ Url = "$GH_RAW/maude.png";                     Dest = "maude.png" }
-        @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml" }
-    )
-    foreach ($dl in $filesToDownload) {
-        $destPath = Join-Path $ScriptDir $dl.Dest
-        $destDir  = Split-Path $destPath -Parent
+}
+
+# Download any missing companion files from GitHub
+$filesToDownload = @(
+    @{ Url = "$GH_RAW/light/root-bootstrap.sh";       Dest = "root-bootstrap.sh" }
+    @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh" }
+    @{ Url = "$GH_RAW/light/maude";                   Dest = "maude" }
+    @{ Url = "$GH_RAW/maude.png";                     Dest = "maude.png" }
+    @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml" }
+)
+$wc = New-Object Net.WebClient
+foreach ($dl in $filesToDownload) {
+    $destPath = Join-Path $ScriptDir $dl.Dest
+    if (-not (Test-Path $destPath)) {
+        $destDir = Split-Path $destPath -Parent
         if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
         try {
             $wc.DownloadFile($dl.Url, $destPath)
@@ -58,7 +61,6 @@ if ($PSScriptRoot -and $PSScriptRoot -ne '') {
             Write-Host "WARNING: Could not download $($dl.Url): $_" -ForegroundColor Yellow
         }
     }
-    Write-Host "Running from downloaded scripts (iex mode)." -ForegroundColor Gray
 }
 
 # ── Self-elevate to Administrator if needed ──
