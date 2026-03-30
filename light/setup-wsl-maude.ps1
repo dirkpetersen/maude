@@ -433,9 +433,13 @@ $wtSettingsPath = Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTermina
 if (Test-Path $wtSettingsPath) {
     $wtJson    = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
 
-    # Hide auto-generated WSL profiles for Maude and the template
-    # (WT regenerates source=Microsoft.WSL profiles — removing them doesn't stick)
-    $hasManualProfile = $false
+    # Hide auto-generated WSL profiles for Maude and the template.
+    # WT regenerates source=Microsoft.WSL profiles — removing them doesn't stick.
+    # If the auto-generated profile doesn't exist yet (WT creates them lazily),
+    # we insert a pre-hidden stub so WT won't create a visible duplicate later.
+    $hasManualProfile   = $false
+    $hasAutoProfile     = $false
+    $hasTemplateProfile = $false
     for ($i = 0; $i -lt $wtJson.profiles.list.Count; $i++) {
         $p   = $wtJson.profiles.list[$i]
         $nm  = if ($p.PSObject.Properties['name'])   { $p.name }   else { '' }
@@ -444,11 +448,13 @@ if (Test-Path $wtSettingsPath) {
         # Hide auto-generated Maude profile (has source)
         if ($nm -eq $DistroName -and $src -ne '') {
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
+            $hasAutoProfile = $true
         }
 
         # Hide template profiles (never need a WT entry)
         if ($nm -eq 'Ubuntu-24.04-Template') {
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
+            $hasTemplateProfile = $true
         }
 
         # Track if our manual profile already exists
@@ -460,6 +466,27 @@ if (Test-Path $wtSettingsPath) {
             }
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
         }
+    }
+
+    # Insert pre-hidden stubs for auto-generated profiles so WT doesn't
+    # create visible ones later when it discovers the new WSL distros.
+    if (-not $hasAutoProfile) {
+        $autoStub = [PSCustomObject]@{
+            guid   = "{$([guid]::NewGuid().ToString())}"
+            name   = $DistroName
+            source = "Windows.Terminal.Wsl"
+            hidden = $true
+        }
+        $wtJson.profiles.list += $autoStub
+    }
+    if (-not $hasTemplateProfile) {
+        $templateStub = [PSCustomObject]@{
+            guid   = "{$([guid]::NewGuid().ToString())}"
+            name   = "Ubuntu-24.04-Template"
+            source = "Windows.Terminal.Wsl"
+            hidden = $true
+        }
+        $wtJson.profiles.list += $templateStub
     }
 
     # Create our manual profile if it doesn't exist yet
