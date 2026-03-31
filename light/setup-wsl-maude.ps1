@@ -302,7 +302,6 @@ $DistroName is already installed. To reinstall, run teardown first:
     # and re-installing packages on every rebuild.
     # teardown-wsl-maude.ps1 -IncludeTemplate removes it.
     $templateDistro = "Ubuntu-24.04-Template"
-    $templateDir    = "$env:LOCALAPPDATA\Maude-Template"
     $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
 
     $templateExists = (wsl -l -q 2>&1) -replace "`0", "" |
@@ -375,14 +374,15 @@ foreach ($f in $filesToCopy) {
     $src = Join-Path $ScriptDir $f
     if (Test-Path $src) {
         Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$f && sed -i 's/\r$//' /tmp/$f && chmod +x /tmp/$f"
+    } else {
+        Write-Host "ERROR: Required file '$f' not found in $ScriptDir" -ForegroundColor Red
+        exit 1
     }
 }
 
-# Copy maude launcher to /tmp/maude-launcher (used by maude-bootstrap.sh)
-$maudeLauncher = Join-Path $ScriptDir "maude"
-if (Test-Path $maudeLauncher) {
-    Get-Content $maudeLauncher -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
-}
+# Copy maude launcher to /tmp/maude-launcher (used by root-bootstrap.sh)
+$src = Join-Path $ScriptDir "maude"
+Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
 
 # Write host folder path to /tmp so root-bootstrap.sh can configure fstab
 $HostFolder | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"

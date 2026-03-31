@@ -180,14 +180,6 @@ chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 # The .claude and Projects dirs are pre-created on the Windows side by
 # setup-wsl-maude.ps1 so they exist when the mount activates.
 
-# ── (DISABLED) Real-time sync machinery ──────────────────────────────
-# Commented out — replaced by direct symlinks and ~/Maude/Projects.
-# May be re-enabled in a future release.
-#
-# Previously used lsyncd (inotify) to mirror ~/Projects and ~/.claude
-# to ~/Maude in real time, with restore-on-boot for fresh instances.
-# See git history for the full implementation.
-
 # ── Welcome screen ────────────────────────────────────────────────────
 # Displayed once per interactive login session.
 cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'

@@ -51,13 +51,20 @@ done
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
 # The drvfs mount is now active (WSL was restarted between step 5 and 6).
 # .claude and Projects dirs were pre-created on Windows by setup-wsl-maude.ps1.
-if [ -d "$HOME/Maude/.claude" ] && [ ! -L "$HOME/.claude" ]; then
+if [ -d "$HOME/Maude/.claude" ]; then
     # Remove plain ~/.claude dir if it exists (e.g. created by Claude Code installer)
-    [ -d "$HOME/.claude" ] && rm -rf "$HOME/.claude"
-    ln -sfn "$HOME/Maude/.claude" "$HOME/.claude"
-    echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
+    if [ -d "$HOME/.claude" ] && [ ! -L "$HOME/.claude" ]; then
+        rm -rf "$HOME/.claude"
+    fi
+    if [ ! -L "$HOME/.claude" ]; then
+        ln -sfn "$HOME/Maude/.claude" "$HOME/.claude"
+        echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
+    fi
+else
+    # Mount not active — create plain directory as fallback
+    mkdir -p "$HOME/.claude"
+    echo "WARNING: ~/Maude/.claude not found, using local ~/.claude"
 fi
-mkdir -p "$HOME/.claude" 2>/dev/null || true
 
 # ── Claude Code: bypass permissions (safe inside sandbox) ────────────
 if [ ! -f "$HOME/.claude/settings.json" ]; then
