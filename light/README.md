@@ -81,6 +81,25 @@ Example workflow:
 3. Ask Claude: *"Summarize the three PDFs in ~/Maude"* or *"Compare these two contracts and list the differences"*
 4. Find the output in your `Maude` folder on Windows
 
+### Web apps & browser auto-launch
+
+By default, Maude disables WSL interop (no access to Windows executables) for sandbox isolation. Tools like [kanna](https://github.com/jakemor/kanna) that auto-launch a browser won't be able to open Windows browsers.
+
+To enable browser auto-launch, run these steps inside Maude:
+
+```bash
+# 1. Enable interop (edit wsl.conf as root)
+sudo sed -i 's/enabled = false/enabled = true/' /etc/wsl.conf
+
+# 2. Install xdg-utils and wslu (provides wslview)
+mom install xdg-utils wslu
+
+# 3. Restart WSL (from PowerShell)
+#    wsl --terminate Maude
+```
+
+After restart, `xdg-open https://...` will open URLs in your Windows default browser via `wslview`.
+
 ### Shared folder
 
 `~/Maude` is mounted from your Windows host (OneDrive or Documents). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce.

@@ -100,6 +100,7 @@ enabled = false
 mountFsTab = true
 
 [interop]
+enabled = false
 appendWindowsPath = false
 WSLEOF
 
