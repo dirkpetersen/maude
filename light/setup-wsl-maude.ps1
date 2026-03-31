@@ -103,12 +103,6 @@ Please right-click PowerShell → "Run as Administrator", then run:
     exit
 }
 
-# ── Helper: convert a Windows path to a WSL path ──
-
-function Get-WslPath($winPath) {
-    wsl -d $DistroName -u root -- wslpath -u ($winPath -replace '\\', '/')
-}
-
 # ── Helper: convert a PNG file to ICO format ──
 # Writes a valid ICO container that embeds the PNG data directly.
 # Works with any PNG size; Explorer picks the best fit.

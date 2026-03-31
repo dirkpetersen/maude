@@ -29,25 +29,6 @@ fi
 echo "Installing kanna-code..."
 bun install -g kanna-code
 
-# ── Clone Anthropic skills repo and install Claude Code skills ────────
-SKILLS_REPO="$HOME/gh/anthropic-skills"
-mkdir -p "$HOME/gh"
-if [ ! -d "$SKILLS_REPO" ]; then
-    echo "Cloning Anthropic skills repo..."
-    git clone https://github.com/anthropics/skills.git "$SKILLS_REPO"
-fi
-
-SKILLS_DIR="$HOME/.claude/skills"
-mkdir -p "$SKILLS_DIR"
-for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
-    if [ -d "$SKILLS_REPO/skills/$skill" ]; then
-        ln -sfn "$SKILLS_REPO/skills/$skill" "$SKILLS_DIR/$skill"
-        echo "  Linked skill: $skill"
-    else
-        echo "  WARNING: skill '$skill' not found in repo"
-    fi
-done
-
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
 # The drvfs mount is now active (WSL was restarted between step 5 and 6).
 # .claude and Projects dirs were pre-created on Windows by setup-wsl-maude.ps1.
@@ -115,17 +96,6 @@ if [ -f /tmp/maude-launcher ] && [ ! -f "$HOME/.local/bin/maude" ]; then
     echo "'maude' launcher installed to ~/.local/bin/maude"
 elif [ -f "$HOME/.local/bin/maude" ]; then
     echo "'maude' launcher already installed."
-fi
-
-# ── PS1: replace hostname with underscore ─────────────────────────────
-# Only add if not already customized
-if ! grep -q 'MAUDE_PS1' "$HOME/.bashrc" 2>/dev/null; then
-    cat >> "$HOME/.bashrc" << 'PS1EOF'
-
-# Maude PS1: show user@_ instead of user@hostname
-MAUDE_PS1=1
-PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-PS1EOF
 fi
 
 echo "=== User bootstrap complete ==="
