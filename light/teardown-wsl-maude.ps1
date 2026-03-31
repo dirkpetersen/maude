@@ -129,7 +129,6 @@ if (Test-Path $InstallDir) {
 # ── Step 4: Optionally remove the Ubuntu-24.04-Template ──        # REQUIRES ADMIN
 
 $templateDistro = "Ubuntu-24.04-Template"
-$templateDir    = "$env:LOCALAPPDATA\Maude-Template"
 $templateExists = $installedDistros | Where-Object { $_.Trim() -eq $templateDistro }
 
 if ($IncludeTemplate) {
@@ -139,10 +138,6 @@ if ($IncludeTemplate) {
         Write-Host "'$templateDistro' unregistered." -ForegroundColor Gray
     } else {
         Write-Host "'$templateDistro' not found." -ForegroundColor Gray
-    }
-    if (Test-Path $templateDir) {
-        Remove-Item -Path $templateDir -Recurse -Force
-        Write-Host "Removed $templateDir" -ForegroundColor Gray
     }
 } else {
     Write-Host "`n[4/4] Keeping '$templateDistro' for fast rebuilds." -ForegroundColor Green

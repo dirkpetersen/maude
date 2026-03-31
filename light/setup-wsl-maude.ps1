@@ -360,23 +360,23 @@ $DistroName is already installed. To reinstall, run teardown first:
 
 Write-Host "`n[5/7] Running root bootstrap..." -ForegroundColor Green
 
-# Copy bootstrap scripts and maude launcher into the distro's /tmp
-# Pipe file content via stdin — the distro may have automount disabled from
-# a previous template build, so /mnt/c/ paths are not available.
-$filesToCopy = @("root-bootstrap.sh", "maude-bootstrap.sh", "maude")
-foreach ($f in $filesToCopy) {
-    $src = Join-Path $ScriptDir $f
+# Pipe files into the distro's /tmp via stdin — automount is disabled so
+# /mnt/c/ paths are not available.
+# Only root-bootstrap.sh and maude-launcher are needed in step 5.
+# maude-bootstrap.sh is re-piped in step 6 (after wsl --terminate clears /tmp).
+$filesToPipe = @(
+    @{ Src = "root-bootstrap.sh";  Dst = "root-bootstrap.sh" }
+    @{ Src = "maude";              Dst = "maude-launcher" }
+)
+foreach ($f in $filesToPipe) {
+    $src = Join-Path $ScriptDir $f.Src
     if (Test-Path $src) {
-        Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$f && sed -i 's/\r$//' /tmp/$f && chmod +x /tmp/$f"
+        Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$($f.Dst) && sed -i 's/\r$//' /tmp/$($f.Dst) && chmod +x /tmp/$($f.Dst)"
     } else {
-        Write-Host "ERROR: Required file '$f' not found in $ScriptDir" -ForegroundColor Red
+        Write-Host "ERROR: Required file '$($f.Src)' not found in $ScriptDir" -ForegroundColor Red
         exit 1
     }
 }
-
-# Copy maude launcher to /tmp/maude-launcher (used by root-bootstrap.sh)
-$src = Join-Path $ScriptDir "maude"
-Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-launcher && sed -i 's/\r$//' /tmp/maude-launcher && chmod +x /tmp/maude-launcher"
 
 # Write host folder path to /tmp so root-bootstrap.sh can configure fstab
 $HostFolder | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
@@ -397,9 +397,11 @@ wsl --terminate $DistroName
 Write-Host "`n[6/7] Running user bootstrap..." -ForegroundColor Green
 
 $bootstrapSrc = Join-Path $ScriptDir "maude-bootstrap.sh"
-if (Test-Path $bootstrapSrc) {
-    Get-Content $bootstrapSrc -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-bootstrap.sh && sed -i 's/\r$//' /tmp/maude-bootstrap.sh && chmod +x /tmp/maude-bootstrap.sh"
+if (-not (Test-Path $bootstrapSrc)) {
+    Write-Host "ERROR: Required file 'maude-bootstrap.sh' not found in $ScriptDir" -ForegroundColor Red
+    exit 1
 }
+Get-Content $bootstrapSrc -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-bootstrap.sh && sed -i 's/\r$//' /tmp/maude-bootstrap.sh && chmod +x /tmp/maude-bootstrap.sh"
 wsl -d $DistroName -u $DefaultUser -- bash /tmp/maude-bootstrap.sh
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: User bootstrap had errors." -ForegroundColor Yellow

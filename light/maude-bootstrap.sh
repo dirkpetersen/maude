@@ -90,12 +90,4 @@ Use `mom install <package>` to install system packages — no sudo needed.
 CLAUDEEOF
 echo "Claude Code: CLAUDE.md created."
 
-# ── Install maude launcher (if copied to /tmp by setup script) ────────
-if [ -f /tmp/maude-launcher ] && [ ! -f "$HOME/.local/bin/maude" ]; then
-    install -m 755 /tmp/maude-launcher "$HOME/.local/bin/maude"
-    echo "'maude' launcher installed to ~/.local/bin/maude"
-elif [ -f "$HOME/.local/bin/maude" ]; then
-    echo "'maude' launcher already installed."
-fi
-
 echo "=== User bootstrap complete ==="
