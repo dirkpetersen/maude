@@ -347,42 +347,58 @@ $DistroName is already installed. To reinstall, run teardown first:
     $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
 
     if (-not (Test-WslDistro $templateDistro)) {
-        # Install Ubuntu 24.04 as the template distro.
+        # Install Ubuntu as the template distro.
+        # Try Ubuntu-24.04 first; if unavailable online, fall back to "Ubuntu".
         # Newer WSL supports --name to install under a custom name directly.
-        # Older WSL (e.g. Windows Server) does not -- fall back to installing
-        # as "Ubuntu-24.04", then export+import to rename it.
+        # Older WSL (e.g. Windows Server) does not -- fall back to plain install
+        # then export+import to rename.
         Write-Host "Installing '$templateDistro' from Microsoft Store (first time only)..."
 
-        $nameSupported = $true
-        wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
-        if ($LASTEXITCODE -ne 0) {
-            # Could be a ghost entry or --name not supported. Try ghost cleanup first.
-            Write-Host "Install failed - clearing ghost entry and retrying..." -ForegroundColor Yellow
-            wsl --unregister $templateDistro 2>$null
-            wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
-            if ($LASTEXITCODE -ne 0) {
-                # --name flag not supported; fall back to plain install
-                $nameSupported = $false
-                Write-Host "Falling back to plain Ubuntu-24.04 install (older WSL)..." -ForegroundColor Yellow
-                wsl --unregister "Ubuntu-24.04" 2>$null
-                wsl --install -d Ubuntu-24.04 --no-launch
-                if ($LASTEXITCODE -ne 0) {
-                    wsl --unregister "Ubuntu-24.04" 2>$null
-                    wsl --install -d Ubuntu-24.04 --no-launch
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Host "ERROR: wsl --install failed." -ForegroundColor Red
-                        exit 1
-                    }
-                }
+        $nameSupported = $false
+        $plainDistro   = $null
+
+        # Try each distro name with --name first
+        foreach ($distro in @("Ubuntu-24.04", "Ubuntu")) {
+            wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $nameSupported = $true
+                break
             }
+            # Ghost entry? Clear and retry with --name
+            wsl --unregister $templateDistro 2>$null
+            wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $nameSupported = $true
+                break
+            }
+            # Try plain install (no --name) for older WSL
+            wsl --unregister $distro 2>$null
+            wsl --install -d $distro --no-launch 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $plainDistro = $distro
+                break
+            }
+            # Ghost cleanup + retry plain install
+            wsl --unregister $distro 2>$null
+            wsl --install -d $distro --no-launch 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $plainDistro = $distro
+                break
+            }
+            Write-Host "'$distro' not available, trying next..." -ForegroundColor Yellow
         }
 
-        # If --name was not supported, rename Ubuntu-24.04 to the template name
-        if (-not $nameSupported) {
-            $fallbackTar = "$env:TEMP\ubuntu-2404-fallback.tar"
-            Write-Host "Renaming 'Ubuntu-24.04' to '$templateDistro'..."
-            wsl --export "Ubuntu-24.04" $fallbackTar
-            wsl --unregister "Ubuntu-24.04" 2>$null
+        if (-not $nameSupported -and -not $plainDistro) {
+            Write-Host "ERROR: Could not install Ubuntu via WSL." -ForegroundColor Red
+            exit 1
+        }
+
+        # If --name was not supported, rename the plain distro to the template name
+        if (-not $nameSupported -and $plainDistro) {
+            $fallbackTar = "$env:TEMP\ubuntu-template-fallback.tar"
+            Write-Host "Renaming '$plainDistro' to '$templateDistro'..." -ForegroundColor Gray
+            wsl --export $plainDistro $fallbackTar
+            wsl --unregister $plainDistro 2>$null
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
             wsl --import $templateDistro $tplDir $fallbackTar --version 2
