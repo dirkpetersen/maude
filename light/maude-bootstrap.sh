@@ -74,6 +74,26 @@ SETTINGSEOF
     echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
 fi
 
+# ── Clone Anthropic skills repo and symlink into ~/.claude/skills ─────
+# Must run AFTER the ~/.claude symlink is created above.
+SKILLS_REPO="$HOME/gh/anthropic-skills"
+mkdir -p "$HOME/gh"
+if [[ ! -d "$SKILLS_REPO" ]]; then
+    echo "Cloning Anthropic skills repo..."
+    git clone https://github.com/anthropics/skills.git "$SKILLS_REPO"
+fi
+
+SKILLS_DIR="$HOME/.claude/skills"
+mkdir -p "$SKILLS_DIR"
+for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
+    if [[ -d "$SKILLS_REPO/skills/$skill" ]]; then
+        ln -sfn "$SKILLS_REPO/skills/$skill" "$SKILLS_DIR/$skill"
+        echo "  Linked skill: $skill"
+    else
+        echo "  WARNING: skill '$skill' not found in repo"
+    fi
+done
+
 # ── Claude Code: project instructions ────────────────────────────────
 cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
 # Maude Sandbox
