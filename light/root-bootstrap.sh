@@ -202,6 +202,7 @@ if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
     printf "  ${B}Agentic coding sandbox${N}  -  Ubuntu 24.04 LTS\n"
     printf "\n"
     printf "  ${C}maude project-name${N}   Create or open a coding project\n"
+    printf "  ${C}maude web${N}            Launch kanna web UI (installs Chromium if needed)\n"
     printf "  ${C}maude list${N}           Show your projects\n"
     printf "  ${C}maude delete name${N}    Delete a project (moves to .deleted/)\n"
     printf "  ${C}maude help${N}           Full usage info\n"
@@ -241,7 +242,7 @@ _maude_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
     if [ "$COMP_CWORD" -eq 1 ]; then
-        local cmds="list ls delete rm help"
+        local cmds="web list ls delete rm help"
         local projects=""
         if [ -d "$HOME/Maude/Projects" ]; then
             projects=$(ls -d "$HOME/Maude/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)

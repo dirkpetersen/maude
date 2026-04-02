@@ -2,6 +2,7 @@
 # maude - Quick project launcher for Claude Code
 # Usage:
 #   maude project-name         Create/open a project and launch Claude Code
+#   maude web            Launch kanna web UI (installs Chromium if needed)
 #   maude list           Show all available projects
 #   maude delete <name>  Move a project to Projects/.deleted (with confirmation)
 #   maude help           Show this help message
@@ -24,9 +25,10 @@ show_help() {
     echo -e "${BOLD}maude${NC} - Quick project launcher for Claude Code"
     echo ""
     echo -e "  ${CYAN}maude project-name${NC}        Open a project (creates it if it doesn't exist)"
-    echo -e "  ${CYAN}maude list${NC}          Show all available projects"
-    echo -e "  ${CYAN}maude delete <name>${NC} Delete a project (moves to .deleted/)"
-    echo -e "  ${CYAN}maude help${NC}          Show this help message"
+    echo -e "  ${CYAN}maude web${NC}                 Launch kanna web UI (installs Chromium if needed)"
+    echo -e "  ${CYAN}maude list${NC}                Show all available projects"
+    echo -e "  ${CYAN}maude delete <name>${NC}       Delete a project (moves to .deleted/)"
+    echo -e "  ${CYAN}maude help${NC}                Show this help message"
     echo ""
     echo "Examples:"
     echo "  maude banana       Open or create the 'banana' project"
@@ -124,6 +126,29 @@ delete_project() {
     esac
 }
 
+# ── Launch kanna web UI ───────────────────────────────────────────────
+launch_web() {
+    # Install Chromium via mom if not present
+    if ! command -v chromium-browser >/dev/null 2>&1; then
+        echo -e "${CYAN}Installing Chromium browser...${NC}"
+        mom install chromium-browser
+        if ! command -v chromium-browser >/dev/null 2>&1; then
+            echo -e "${RED}Error: Failed to install Chromium.${NC}" >&2
+            exit 1
+        fi
+        echo -e "${GREEN}Chromium installed.${NC}"
+    fi
+
+    # Install kanna-code via Bun if not present
+    if ! command -v kanna >/dev/null 2>&1; then
+        echo -e "${CYAN}Installing kanna-code...${NC}"
+        bun install -g kanna-code
+    fi
+
+    echo -e "${GREEN}Launching kanna web UI...${NC}"
+    BROWSER=chromium-browser kanna
+}
+
 # ── Main ──────────────────────────────────────────────────────────────
 
 # No arguments → show help
@@ -136,6 +161,10 @@ fi
 case "$1" in
     help|--help|-h)
         show_help
+        exit 0
+        ;;
+    web)
+        launch_web
         exit 0
         ;;
     list|ls)

@@ -85,24 +85,15 @@ Example workflow:
 3. Ask Claude: *"Summarize the three PDFs in ~/Maude"* or *"Compare these two contracts and list the differences"*
 4. Find the output in your `Maude` folder on Windows
 
-### Web apps & browser auto-launch
+### Web apps & browser
 
-By default, Maude disables WSL interop (no access to Windows executables) for sandbox isolation. Tools like [kanna](https://github.com/jakemor/kanna) that auto-launch a browser won't be able to open Windows browsers.
+[kanna](https://github.com/jakemor/kanna) provides a web-based UI for Claude Code. Maude keeps WSL interop disabled for sandbox isolation, so instead of opening a Windows browser, it runs Chromium inside WSL and displays it on Windows via WSLg.
 
-To enable browser auto-launch, run these steps inside Maude:
-
-```bash
-# 1. Enable interop (edit wsl.conf as root)
-sudo sed -i 's/enabled = false/enabled = true/' /etc/wsl.conf
-
-# 2. Install xdg-utils and wslu (provides wslview)
-mom install xdg-utils wslu
-
-# 3. Restart WSL (from PowerShell)
-#    wsl --terminate Maude
+```
+maude web
 ```
 
-After restart, `xdg-open https://...` will open URLs in your Windows default browser via `wslview`.
+This installs Chromium (via `mom`) on first run if needed, then launches kanna. The Chromium window appears on your Windows desktop through WSLg — no interop or Windows filesystem access required.
 
 ### Shared folder
 
