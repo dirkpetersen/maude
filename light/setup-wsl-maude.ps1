@@ -214,12 +214,16 @@ Write-Host "=== Maude WSL Setup ===" -ForegroundColor Cyan
 
 Write-Host "`n[1/7] Checking WSL..." -ForegroundColor Green
 if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-    # wsl.exe exists but may need a kernel upgrade -- let --install handle it
-    $wslStatus = wsl --status 2>&1
-    if ($LASTEXITCODE -ne 0 -or "$wslStatus" -match 'WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+    # wsl.exe exists but may need a kernel/component upgrade.
+    # Check for known error signatures that require a reboot.
+    $wslStatus = (wsl --status 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0 -or
+        $wslStatus -match 'WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED' -or
+        $wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED' -or
+        $wslStatus -match 'Virtual Machine Platform') {
         Write-Host "WSL needs setup/upgrade..."
         wsl --install --no-distribution
-        Write-Host "WSL updated. A reboot is required before continuing." -ForegroundColor Yellow
+        Write-Host "`nWSL updated. A reboot is required before continuing." -ForegroundColor Yellow
         Read-Host "Press Enter to exit, then re-run this script after rebooting"
         exit
     }
@@ -227,7 +231,7 @@ if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
 } else {
     Write-Host "Installing WSL2 (no distribution)..."
     wsl --install --no-distribution
-    Write-Host "WSL2 installed. A reboot may be required before continuing." -ForegroundColor Yellow
+    Write-Host "`nWSL2 installed. A reboot is required before continuing." -ForegroundColor Yellow
     Read-Host "Press Enter to exit, then re-run this script after rebooting"
     exit
 }
@@ -393,30 +397,58 @@ $DistroName is already installed. To reinstall, run teardown first:
         $nameSupported = $false
         $plainDistro   = $null
 
-        # Try each distro name with --name first
-        foreach ($distro in @("Ubuntu-24.04", "Ubuntu")) {
-            wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+        # Check which distros are available online
+        $onlineList = (wsl --list --online 2>&1) -join "`n"
+
+        # Build candidate list: prefer Ubuntu-24.04, fall back to Ubuntu
+        $candidates = @()
+        if ($onlineList -match 'Ubuntu-24.04') { $candidates += "Ubuntu-24.04" }
+        if ($onlineList -match 'Ubuntu\b')     { $candidates += "Ubuntu" }
+        if ($candidates.Count -eq 0) {
+            # Could not parse online list; try both anyway
+            $candidates = @("Ubuntu-24.04", "Ubuntu")
+        }
+
+        foreach ($distro in $candidates) {
+            Write-Host "Trying '$distro'..." -ForegroundColor Gray
+            # Try with --name first (modern WSL)
+            $output = (wsl --install -d $distro --name $templateDistro --no-launch 2>&1) -join "`n"
             if ($LASTEXITCODE -eq 0) {
                 $nameSupported = $true
                 break
             }
+            # Bail on system-level errors (not distro-specific)
+            if ($output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+                Write-Host "`nWSL needs a reboot before distros can be installed." -ForegroundColor Yellow
+                Write-Host "Run: wsl --install --no-distribution" -ForegroundColor Yellow
+                Write-Host "Then reboot and re-run this setup script." -ForegroundColor Yellow
+                Read-Host "Press Enter to exit"
+                exit
+            }
             # Ghost entry? Clear and retry with --name
             wsl --unregister $templateDistro 2>$null
-            wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+            $output = (wsl --install -d $distro --name $templateDistro --no-launch 2>&1) -join "`n"
             if ($LASTEXITCODE -eq 0) {
                 $nameSupported = $true
                 break
             }
             # Try plain install (no --name) for older WSL
             wsl --unregister $distro 2>$null
-            wsl --install -d $distro --no-launch 2>$null
+            $output = (wsl --install -d $distro --no-launch 2>&1) -join "`n"
             if ($LASTEXITCODE -eq 0) {
                 $plainDistro = $distro
                 break
             }
+            if ($output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+                Write-Host "`nWSL needs a reboot before distros can be installed." -ForegroundColor Yellow
+                Write-Host "Run: wsl --install --no-distribution" -ForegroundColor Yellow
+                Write-Host "Then reboot and re-run this setup script." -ForegroundColor Yellow
+                Read-Host "Press Enter to exit"
+                exit
+            }
             # Ghost cleanup + retry plain install
             wsl --unregister $distro 2>$null
-            wsl --install -d $distro --no-launch 2>$null
+            $output = (wsl --install -d $distro --no-launch 2>&1) -join "`n"
             if ($LASTEXITCODE -eq 0) {
                 $plainDistro = $distro
                 break
