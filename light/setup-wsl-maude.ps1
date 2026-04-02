@@ -231,13 +231,27 @@ $wtPresent = (Get-Command wt.exe -ErrorAction SilentlyContinue) -or
 if ($wtPresent) {
     Write-Host "Windows Terminal is already installed." -ForegroundColor Gray
 } else {
-    Write-Host "Installing Windows Terminal via winget..."
-    winget install --id Microsoft.WindowsTerminal --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "winget failed. Trying AppX fallback..." -ForegroundColor Yellow
-        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.WindowsTerminal_8wekyb3d8bbwe
+    $wtInstalled = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Installing Windows Terminal via winget..."
+        winget install --id Microsoft.WindowsTerminal --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -eq 0) { $wtInstalled = $true }
     }
-    Write-Host "Windows Terminal installed." -ForegroundColor Gray
+    if (-not $wtInstalled) {
+        Write-Host "winget not available or failed. Trying AppX fallback..." -ForegroundColor Yellow
+        try {
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.WindowsTerminal_8wekyb3d8bbwe -ErrorAction Stop
+            $wtInstalled = $true
+        } catch {
+            Write-Host "AppX fallback failed: $_" -ForegroundColor Yellow
+        }
+    }
+    if ($wtInstalled) {
+        Write-Host "Windows Terminal installed." -ForegroundColor Gray
+    } else {
+        Write-Host "Windows Terminal could not be installed (common on Windows Server)." -ForegroundColor Yellow
+        Write-Host "Maude will still work -- launch via: wsl -d $DistroName" -ForegroundColor Yellow
+    }
 }
 
 # ── Step 3: Create shared host folder with icon ──                 # does NOT require admin
@@ -333,18 +347,48 @@ $DistroName is already installed. To reinstall, run teardown first:
     $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
 
     if (-not (Test-WslDistro $templateDistro)) {
-        # Install Ubuntu 24.04 directly as the template (--name avoids
-        # conflicting with any existing Ubuntu-24.04 distro).
+        # Install Ubuntu 24.04 as the template distro.
+        # Newer WSL supports --name to install under a custom name directly.
+        # Older WSL (e.g. Windows Server) does not -- fall back to installing
+        # as "Ubuntu-24.04", then export+import to rename it.
         Write-Host "Installing '$templateDistro' from Microsoft Store (first time only)..."
+
+        $nameSupported = $true
         wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
         if ($LASTEXITCODE -ne 0) {
-            # Ghost entry in Store registry not visible to --list --verbose.
-            # Unregister it and retry once.
+            # Could be a ghost entry or --name not supported. Try ghost cleanup first.
             Write-Host "Install failed - clearing ghost entry and retrying..." -ForegroundColor Yellow
             wsl --unregister $templateDistro 2>$null
             wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "ERROR: wsl --install failed." -ForegroundColor Red
+                # --name flag not supported; fall back to plain install
+                $nameSupported = $false
+                Write-Host "Falling back to plain Ubuntu-24.04 install (older WSL)..." -ForegroundColor Yellow
+                wsl --unregister "Ubuntu-24.04" 2>$null
+                wsl --install -d Ubuntu-24.04 --no-launch
+                if ($LASTEXITCODE -ne 0) {
+                    wsl --unregister "Ubuntu-24.04" 2>$null
+                    wsl --install -d Ubuntu-24.04 --no-launch
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "ERROR: wsl --install failed." -ForegroundColor Red
+                        exit 1
+                    }
+                }
+            }
+        }
+
+        # If --name was not supported, rename Ubuntu-24.04 to the template name
+        if (-not $nameSupported) {
+            $fallbackTar = "$env:TEMP\ubuntu-2404-fallback.tar"
+            Write-Host "Renaming 'Ubuntu-24.04' to '$templateDistro'..."
+            wsl --export "Ubuntu-24.04" $fallbackTar
+            wsl --unregister "Ubuntu-24.04" 2>$null
+            $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
+            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+            wsl --import $templateDistro $tplDir $fallbackTar --version 2
+            Remove-Item -Path $fallbackTar -ErrorAction SilentlyContinue
+            if (-not (Test-WslDistro $templateDistro)) {
+                Write-Host "ERROR: Failed to create template distro." -ForegroundColor Red
                 exit 1
             }
         }
