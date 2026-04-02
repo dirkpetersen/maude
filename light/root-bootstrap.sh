@@ -14,7 +14,7 @@ MOM_GROUP="users"
 # Read package list from stdin immediately (before any command can consume it)
 # Strip \r — PowerShell pipes CRLF even after -replace on the PS side.
 PACKAGES=""
-if [ ! -t 0 ]; then
+if [[ ! -t 0 ]]; then
     PACKAGES=$(cat | tr -d '\r')
 fi
 
@@ -54,7 +54,7 @@ chmod 440 /etc/sudoers.d/maude-reboot
 groupadd --system --gid 100 "$MOM_GROUP" 2>/dev/null || true
 usermod -aG "$MOM_GROUP" "$USERNAME" 2>/dev/null || true
 
-if [ ! -x /usr/local/bin/mom ]; then
+if [[ ! -x /usr/local/bin/mom ]]; then
     _arch=$(uname -m)
     case "$_arch" in
         x86_64)  _arch="amd64" ;;
@@ -70,18 +70,18 @@ if [ ! -x /usr/local/bin/mom ]; then
 fi
 
 mkdir -p /etc/mom
-if [ ! -f /etc/mom/mom.conf ]; then
+if [[ ! -f /etc/mom/mom.conf ]]; then
     printf 'group = %s\ndeny_list = /etc/mom/deny.list\nlog_file = /var/log/mom.log\n' \
         "$MOM_GROUP" > /etc/mom/mom.conf
 fi
-if [ ! -f /etc/mom/deny.list ]; then
+if [[ ! -f /etc/mom/deny.list ]]; then
     printf '# mom deny list\nnmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n' \
         > /etc/mom/deny.list
 fi
 
 # ── Read host folder path (written by setup-wsl-maude.ps1) ──────────
 HOST_FOLDER=""
-if [ -f /tmp/maude-hostfolder ]; then
+if [[ -f /tmp/maude-hostfolder ]]; then
     HOST_FOLDER=$(cat /tmp/maude-hostfolder)
 fi
 
@@ -108,7 +108,7 @@ WSLEOF
 usermod -d "/home/$USERNAME" "$USERNAME" 2>/dev/null || true
 
 # ── Sandbox mount: host folder → /home/<user>/Maude via drvfs ────────
-if [ -n "$HOST_FOLDER" ]; then
+if [[ -n "$HOST_FOLDER" ]]; then
     MOUNT_POINT="/home/$USERNAME/Maude"
     mkdir -p "$MOUNT_POINT"
     chown "$USERNAME:$USERNAME" "$MOUNT_POINT"
@@ -137,7 +137,7 @@ chown "$USERNAME:$USERNAME" "/home/$USERNAME/.hushlogin"
 
 # ── Ensure interactive shells start in home dir ──────────────────────
 # WSL imported distros may start in / instead of the user's home.
-if [ -f "/home/$USERNAME/.bashrc" ]; then
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -qxF 'cd ~' "/home/$USERNAME/.bashrc" 2>/dev/null || \
         printf '\n# Start in home directory\ncd ~\n' >> "/home/$USERNAME/.bashrc"
 fi
@@ -165,7 +165,7 @@ grep -qxF '. /etc/profile.d/maude-path.sh' /etc/skel/.bashrc 2>/dev/null || \
     printf '\n# Maude PATH\n. /etc/profile.d/maude-path.sh\n' >> /etc/skel/.bashrc
 
 # Hook into existing user's .bashrc
-if [ -f "/home/$USERNAME/.bashrc" ]; then
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -qxF '. /etc/profile.d/maude-path.sh' "/home/$USERNAME/.bashrc" 2>/dev/null || \
         printf '\n# Maude PATH\n. /etc/profile.d/maude-path.sh\n' >> "/home/$USERNAME/.bashrc"
 fi
@@ -185,7 +185,7 @@ chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 # Displayed once per interactive login session.
 cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'
 # Show welcome only in interactive terminals and only once per session
-if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
+if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     export MAUDE_WELCOMED=1
     G='\033[1;32m'   # bright green
     C='\033[1;36m'   # bright cyan
@@ -211,7 +211,7 @@ if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
     printf "\n"
     printf "  ${B}Screen split tip:${N} Alt & Shift & ${B}+${N} (vertical) | Alt & Shift & ${B}-${N} (horizontal)\n"
     printf "\n"
-    if [ ! -f "$HOME/.aws/credentials" ] && [ ! -f "$HOME/.azure/clauderc" ]; then
+    if [[ ! -f "$HOME/.aws/credentials" ]] && [[ ! -f "$HOME/.azure/clauderc" ]]; then
         printf "  ${Y}LLM service credentials not yet set up.${N}\n"
         printf "  ${Y}Either paste export statements for Azure credentials${N}\n"
         printf "  ${Y}or run \"aws --profile bedrock configure\" for Amazon credentials.${N}\n"
@@ -222,13 +222,13 @@ WELCOME
 chmod +x /etc/profile.d/maude-welcome.sh
 
 # Hook welcome into user's .bashrc (profile.d only runs for login shells)
-if [ -f "/home/$USERNAME/.bashrc" ]; then
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -qxF '. /etc/profile.d/maude-welcome.sh' "/home/$USERNAME/.bashrc" 2>/dev/null || \
         printf '\n# Maude welcome\n. /etc/profile.d/maude-welcome.sh\n' >> "/home/$USERNAME/.bashrc"
 fi
 
 # ── PS1: replace hostname with underscore ─────────────────────────────
-if [ -f "/home/$USERNAME/.bashrc" ]; then
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -q 'MAUDE_PS1' "/home/$USERNAME/.bashrc" 2>/dev/null || \
         cat >> "/home/$USERNAME/.bashrc" << 'PS1EOF'
 
@@ -239,7 +239,7 @@ PS1EOF
 fi
 
 # ── Tab completion for maude command ─────────────────────────────────
-if [ -f "/home/$USERNAME/.bashrc" ]; then
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -q '_maude_complete' "/home/$USERNAME/.bashrc" 2>/dev/null || \
         cat >> "/home/$USERNAME/.bashrc" << 'COMPEOF'
 
@@ -247,16 +247,16 @@ if [ -f "/home/$USERNAME/.bashrc" ]; then
 _maude_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    if [ "$COMP_CWORD" -eq 1 ]; then
+    if [[ "$COMP_CWORD" -eq 1 ]]; then
         local cmds="web list ls delete rm help"
         local projects=""
-        if [ -d "$HOME/Maude/Projects" ]; then
+        if [[ -d "$HOME/Maude/Projects" ]]; then
             projects=$(ls -d "$HOME/Maude/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
         fi
         COMPREPLY=( $(compgen -W "$cmds $projects" -- "$cur") )
     elif [ "$COMP_CWORD" -eq 2 ] && [[ "$prev" == "delete" || "$prev" == "rm" ]]; then
         local projects=""
-        if [ -d "$HOME/Maude/Projects" ]; then
+        if [[ -d "$HOME/Maude/Projects" ]]; then
             projects=$(ls -d "$HOME/Maude/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
         fi
         COMPREPLY=( $(compgen -W "$projects" -- "$cur") )
@@ -278,13 +278,13 @@ su - "$USERNAME" -c '
 '
 
 # ── Install maude launcher (if copied to /tmp by setup script) ────────
-if [ -f /tmp/maude-launcher ]; then
+if [[ -f /tmp/maude-launcher ]]; then
     install -m 755 -o "$USERNAME" -g "$USERNAME" /tmp/maude-launcher "/home/$USERNAME/.local/bin/maude"
     echo "'maude' launcher installed to ~/.local/bin/maude"
 fi
 
 # ── Install packages from stdin (fallback — normally baked into template) ─
-if [ -n "$PACKAGES" ]; then
+if [[ -n "$PACKAGES" ]]; then
     echo "Installing packages..."
     echo "$PACKAGES" | xargs apt-get install -y -q --no-install-recommends
 fi

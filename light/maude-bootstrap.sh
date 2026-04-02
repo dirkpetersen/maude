@@ -32,12 +32,12 @@ bun install -g kanna-code
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
 # The drvfs mount is now active (WSL was restarted between step 5 and 6).
 # .claude and Projects dirs were pre-created on Windows by setup-wsl-maude.ps1.
-if [ -d "$HOME/Maude/.claude" ]; then
+if [[ -d "$HOME/Maude/.claude" ]]; then
     # Remove plain ~/.claude dir if it exists (e.g. created by Claude Code installer)
-    if [ -d "$HOME/.claude" ] && [ ! -L "$HOME/.claude" ]; then
+    if [[ -d "$HOME/.claude" ]] && [[ ! -L "$HOME/.claude" ]]; then
         rm -rf "$HOME/.claude"
     fi
-    if [ ! -L "$HOME/.claude" ]; then
+    if [[ ! -L "$HOME/.claude" ]]; then
         ln -sfn "$HOME/Maude/.claude" "$HOME/.claude"
         echo "~/.claude symlinked to ~/Maude/.claude (host-persistent)."
     fi
@@ -48,7 +48,7 @@ else
 fi
 
 # ── Claude Code: bypass permissions (safe inside sandbox) ────────────
-if [ ! -f "$HOME/.claude/settings.json" ]; then
+if [[ ! -f "$HOME/.claude/settings.json" ]]; then
     cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'
 {
   "permissions": {

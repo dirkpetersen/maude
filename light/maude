@@ -50,11 +50,11 @@ list_projects() {
     # Collect project directories
     local projects=()
     for d in "$PROJECTS_DIR"/*/; do
-        [ -d "$d" ] || continue
+        [[ -d "$d" ]] || continue
         projects+=("$(basename "$d")")
     done
 
-    if [ ${#projects[@]} -eq 0 ]; then
+    if [[ ${#projects[@]} -eq 0 ]]; then
         echo ""
         echo -e "${YELLOW}No projects yet!${NC}"
         echo ""
@@ -70,7 +70,7 @@ list_projects() {
     echo ""
     for name in "${projects[@]}"; do
         local path="$PROJECTS_DIR/$name"
-        if [ -d "$path/.git" ]; then
+        if [[ -d "$path/.git" ]]; then
             echo -e "  ${GREEN}$name${NC}"
         else
             echo -e "  ${YELLOW}$name${NC}  (no git repo)"
@@ -85,7 +85,7 @@ list_projects() {
 delete_project() {
     local name="$1"
 
-    if [ -z "$name" ]; then
+    if [[ -z "$name" ]]; then
         echo -e "${RED}Error: Please specify a project name.${NC}" >&2
         echo "" >&2
         echo "Usage:  maude delete <project-name>" >&2
@@ -95,7 +95,7 @@ delete_project() {
     local path="$PROJECTS_DIR/$name"
     local deleted_dir="$PROJECTS_DIR/.deleted"
 
-    if [ ! -d "$path" ]; then
+    if [[ ! -d "$path" ]]; then
         echo -e "${RED}Error: Project '$name' does not exist.${NC}" >&2
         exit 1
     fi
@@ -110,7 +110,7 @@ delete_project() {
         [Yy]|[Yy][Ee][Ss])
             mkdir -p "$deleted_dir"
             # If a previously deleted version exists, remove it first
-            if [ -d "$deleted_dir/$name" ]; then
+            if [[ -d "$deleted_dir/$name" ]]; then
                 rm -rf "$deleted_dir/$name"
             fi
             mv "$path" "$deleted_dir/$name"
@@ -152,7 +152,7 @@ launch_web() {
 # ── Main ──────────────────────────────────────────────────────────────
 
 # No arguments → show help
-if [ $# -eq 0 ]; then
+if [[ $# -eq 0 ]]; then
     show_help
     exit 0
 fi
@@ -224,11 +224,11 @@ claude_maybe_update() {
     local now
     now=$(date +%s)
     local last=0
-    if [ -f "$stamp" ]; then
+    if [[ -f "$stamp" ]]; then
         last=$(cat "$stamp" 2>/dev/null || echo 0)
     fi
     local week=$((7 * 24 * 60 * 60))
-    if [ $((now - last)) -ge $week ]; then
+    if [[ $((now - last)) -ge $week ]]; then
         echo -e "${CYAN}Checking for Claude Code updates...${NC}"
         claude update 2>/dev/null || true
         echo "$now" > "$stamp"
@@ -236,7 +236,7 @@ claude_maybe_update() {
 }
 
 # Check if project already exists
-if [ -d "$PROJECT_PATH" ]; then
+if [[ -d "$PROJECT_PATH" ]]; then
     # Existing project
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     claude_maybe_update
