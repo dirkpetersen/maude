@@ -482,9 +482,26 @@ $DistroName is already installed. To reinstall, run teardown first:
             Write-Host "'$distro' not available, trying next..." -ForegroundColor Yellow
         }
 
+        # Method 2: Direct download from Canonical (Windows Server without Store)
         if (-not $nameSupported -and -not $plainDistro) {
-            Write-Host "ERROR: Could not install Ubuntu via WSL." -ForegroundColor Red
-            exit 1
+            Write-Host "Microsoft Store not available. Downloading Ubuntu rootfs from Canonical..." -ForegroundColor Yellow
+            $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz"
+            $rootfsGz  = Join-Path $env:TEMP "ubuntu-noble-rootfs.tar.gz"
+            curl.exe -sL -o $rootfsGz "$rootfsUrl"
+            if (-not (Test-Path $rootfsGz) -or (Get-Item $rootfsGz).Length -lt 1MB) {
+                Write-Host "ERROR: Failed to download Ubuntu rootfs." -ForegroundColor Red
+                exit 1
+            }
+            $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
+            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+            Write-Host "Importing as '$templateDistro'..."
+            wsl --import $templateDistro $tplDir $rootfsGz --version 2
+            Remove-Item -Path $rootfsGz -ErrorAction SilentlyContinue
+            if (-not (Test-WslDistro $templateDistro)) {
+                Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
+                exit 1
+            }
+            $nameSupported = $true
         }
 
         # Verify WSL is actually operational before proceeding.
