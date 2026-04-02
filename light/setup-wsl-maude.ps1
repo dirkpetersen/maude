@@ -214,34 +214,23 @@ Write-Host "=== Maude WSL Setup ===" -ForegroundColor Cyan
 
 Write-Host "`n[1/7] Checking WSL..." -ForegroundColor Green
 
-# On Windows Server, wsl --install may not enable all required features.
-# Explicitly check and enable Virtual Machine Platform + WSL.
 $needsReboot = $false
-$vmPlatform = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
-$wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
-
-if ($vmPlatform -and $vmPlatform.State -ne 'Enabled') {
-    Write-Host "Enabling Virtual Machine Platform..."
-    dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
-    $needsReboot = $true
-}
-if ($wslFeature -and $wslFeature.State -ne 'Enabled') {
-    Write-Host "Enabling Windows Subsystem for Linux..."
-    dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-    $needsReboot = $true
-}
 
 if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-    if (-not $needsReboot) {
-        # wsl.exe exists and features are enabled -- verify it's operational
-        $wslStatus = (wsl --status 2>&1) -join "`n"
-        if ($wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-            Write-Host "WSL needs setup/upgrade..."
-            wsl --install --no-distribution
-            $needsReboot = $true
+    # wsl.exe exists -- verify it's actually operational
+    $wslStatus = (wsl --status 2>&1) -join "`n"
+    if ($wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+        # WSL binary exists but VM platform isn't working -- try enabling features
+        Write-Host "WSL needs setup/upgrade..."
+        wsl --install --no-distribution
+        # On Windows Server, wsl --install may not enable all required features.
+        $vmPlatform = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
+        if ($vmPlatform -and $vmPlatform.State -ne 'Enabled') {
+            Write-Host "Enabling Virtual Machine Platform..."
+            dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
         }
-    }
-    if (-not $needsReboot) {
+        $needsReboot = $true
+    } else {
         Write-Host "WSL is already installed." -ForegroundColor Gray
     }
 } else {
