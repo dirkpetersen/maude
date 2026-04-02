@@ -241,24 +241,51 @@ if ($wtPresent) {
     Write-Host "Windows Terminal is already installed." -ForegroundColor Gray
 } else {
     $wtInstalled = $false
+    # Method 1: winget (Desktop Windows with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "Installing Windows Terminal via winget..."
         winget install --id Microsoft.WindowsTerminal --accept-source-agreements --accept-package-agreements
         if ($LASTEXITCODE -eq 0) { $wtInstalled = $true }
     }
+    # Method 2: AppX store registration (Desktop Windows without winget)
     if (-not $wtInstalled) {
-        Write-Host "winget not available or failed. Trying AppX fallback..." -ForegroundColor Yellow
+        Write-Host "Trying AppX store registration..." -ForegroundColor Yellow
         try {
             Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.WindowsTerminal_8wekyb3d8bbwe -ErrorAction Stop
             $wtInstalled = $true
         } catch {
-            Write-Host "AppX fallback failed: $_" -ForegroundColor Yellow
+            Write-Host "AppX registration not available." -ForegroundColor Yellow
+        }
+    }
+    # Method 3: Direct download from GitHub (Windows Server, no Store)
+    if (-not $wtInstalled) {
+        Write-Host "Downloading Windows Terminal from GitHub..." -ForegroundColor Yellow
+        $wtTmp = Join-Path $env:TEMP "wt-install"
+        New-Item -ItemType Directory -Force -Path $wtTmp | Out-Null
+        try {
+            $wtRelease = curl.exe -s "https://api.github.com/repos/microsoft/terminal/releases/latest?cache=$cacheBust" | ConvertFrom-Json
+            $msixUrl = ($wtRelease.assets | Where-Object { $_.name -match '\.msixbundle$' } | Select-Object -First 1).browser_download_url
+            if ($msixUrl) {
+                $vclibsUrl = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
+                $xamlUrl   = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
+                curl.exe -sL -o "$wtTmp\vclibs.appx" $vclibsUrl
+                curl.exe -sL -o "$wtTmp\uixaml.appx" $xamlUrl
+                curl.exe -sL -o "$wtTmp\terminal.msixbundle" $msixUrl
+                Add-AppxPackage -Path "$wtTmp\vclibs.appx" -ErrorAction SilentlyContinue
+                Add-AppxPackage -Path "$wtTmp\uixaml.appx" -ErrorAction SilentlyContinue
+                Add-AppxPackage -Path "$wtTmp\terminal.msixbundle" -ErrorAction Stop
+                $wtInstalled = $true
+            }
+        } catch {
+            Write-Host "GitHub download install failed: $_" -ForegroundColor Yellow
+        } finally {
+            Remove-Item -Recurse -Force -Path $wtTmp -ErrorAction SilentlyContinue
         }
     }
     if ($wtInstalled) {
         Write-Host "Windows Terminal installed." -ForegroundColor Gray
     } else {
-        Write-Host "Windows Terminal could not be installed (common on Windows Server)." -ForegroundColor Yellow
+        Write-Host "Windows Terminal could not be installed." -ForegroundColor Yellow
         Write-Host "Maude will still work -- launch via: wsl -d $DistroName" -ForegroundColor Yellow
     }
 }
