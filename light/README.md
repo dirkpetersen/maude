@@ -1,6 +1,10 @@
 # Maude Light
 
-A lightweight WSL2 sandbox for agentic coding with [Claude Code](https://claude.ai/code). Deploys Ubuntu 24.04 as an isolated WSL distro with a single shared folder to the Windows host.
+A secure WSL2 sandbox for agentic AI coding. By default, WSL instances mount the entire Windows file system, giving both the user and any AI agent unrestricted access to OneDrive, Documents, and everything else on disk. Maude changes that.
+
+Maude creates a single `Maude` subfolder inside OneDrive and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
+
+Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder on OneDrive, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
 
 <img width="582" height="386" alt="image" src="https://github.com/user-attachments/assets/03c212a9-d248-4196-ace7-118a44acba09" />
 
