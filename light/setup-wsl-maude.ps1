@@ -402,19 +402,21 @@ $DistroName is already installed. To reinstall, run teardown first:
             exit 1
         }
 
+        # Verify WSL is actually operational before proceeding.
+        # wsl --install can succeed (download the distro) even when WSL itself
+        # was just enabled and needs a reboot to become functional.
+        $checkDistro = if ($nameSupported) { $templateDistro } else { $plainDistro }
+        wsl -d $checkDistro -- echo ok 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
+            Write-Host "After rebooting, re-run this setup script to finish." -ForegroundColor Yellow
+            Read-Host "Press Enter to exit"
+            exit
+        }
+
         # If --name was not supported, rename the plain distro to the template name
-        # via export+import.  This requires WSL to be fully operational -- if WSL
-        # was just upgraded, a reboot is needed first.
+        # via export+import.
         if (-not $nameSupported -and $plainDistro) {
-            # Quick operational check: can WSL actually run?
-            wsl --status 2>$null | Out-Null
-            wsl -d $plainDistro -- echo ok 2>$null | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
-                Write-Host "After rebooting, re-run this setup script." -ForegroundColor Yellow
-                Read-Host "Press Enter to exit"
-                exit
-            }
             $fallbackTar = "$env:TEMP\ubuntu-template-fallback.tar"
             Write-Host "Renaming '$plainDistro' to '$templateDistro'..." -ForegroundColor Gray
             wsl --export $plainDistro $fallbackTar
