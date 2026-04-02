@@ -445,21 +445,26 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
     # Enable copy-on-select: marking text copies it to clipboard automatically
     $wtJson | Add-Member -NotePropertyName 'copyOnSelect' -NotePropertyValue $true -Force
 
-    # Hide auto-generated WSL profiles for Maude and the template.
-    # WT regenerates source=Microsoft.WSL profiles — removing them doesn't stick.
-    # If the auto-generated profile doesn't exist yet (WT creates them lazily),
-    # we insert a pre-hidden stub so WT won't create a visible duplicate later.
-    $hasManualProfile   = $false
+    # WT auto-generates profiles for WSL distros (source=Windows.Terminal.Wsl)
+    # with deterministic GUIDs.  Rather than fighting the auto-generation with
+    # hidden stubs (which get duplicated because our GUIDs don't match WT's),
+    # we customize the auto-generated Maude profile (set our icon, keep visible)
+    # and hide the template profile.  Stale manual profiles (no source) from
+    # previous installs are removed.
     $hasAutoProfile     = $false
     $hasTemplateProfile = $false
+    $keepProfiles = @()
     for ($i = 0; $i -lt $wtJson.profiles.list.Count; $i++) {
         $p   = $wtJson.profiles.list[$i]
         $nm  = if ($p.PSObject.Properties['name'])   { $p.name }   else { '' }
         $src = if ($p.PSObject.Properties['source']) { $p.source } else { '' }
 
-        # Hide auto-generated Maude profile (has source)
+        # Customize the auto-generated Maude profile: set our icon, ensure visible
         if ($nm -eq $DistroName -and $src -ne '') {
-            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
+            if (Test-Path $iconDst) {
+                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+            }
+            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
             $hasAutoProfile = $true
         }
 
@@ -469,27 +474,26 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
             $hasTemplateProfile = $true
         }
 
-        # Track if our manual profile already exists
-        if ($nm -eq $DistroName -and $src -eq '') {
-            $hasManualProfile = $true
-            # Update icon in case it changed
-            if (Test-Path $iconDst) {
-                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
-            }
-            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
-        }
-    }
+        # Remove stale manual profiles from previous installs (no source)
+        if ($nm -eq $DistroName -and $src -eq '') { continue }
 
-    # Insert pre-hidden stubs for auto-generated profiles so WT doesn't
-    # create visible ones later when it discovers the new WSL distros.
+        $keepProfiles += $wtJson.profiles.list[$i]
+    }
+    $wtJson.profiles.list = $keepProfiles
+
+    # If WT hasn't created the auto-generated profile yet, insert one with
+    # source so WT recognizes it as its own and won't create a duplicate.
     if (-not $hasAutoProfile) {
-        $autoStub = [PSCustomObject]@{
+        $autoProfile = [PSCustomObject]@{
             guid   = "{$([guid]::NewGuid().ToString())}"
             name   = $DistroName
             source = "Windows.Terminal.Wsl"
-            hidden = $true
+            hidden = $false
         }
-        $wtJson.profiles.list += $autoStub
+        if (Test-Path $iconDst) {
+            $autoProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+        }
+        $wtJson.profiles.list += $autoProfile
     }
     if (-not $hasTemplateProfile) {
         $templateStub = [PSCustomObject]@{
@@ -499,20 +503,6 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
             hidden = $true
         }
         $wtJson.profiles.list += $templateStub
-    }
-
-    # Create our manual profile if it doesn't exist yet
-    if (-not $hasManualProfile) {
-        $newProfile = [PSCustomObject]@{
-            guid        = "{$([guid]::NewGuid().ToString())}"
-            name        = $DistroName
-            commandline = "wsl.exe -d $DistroName"
-            hidden      = $false
-        }
-        if (Test-Path $iconDst) {
-            $newProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
-        }
-        $wtJson.profiles.list += $newProfile
     }
 
     $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8

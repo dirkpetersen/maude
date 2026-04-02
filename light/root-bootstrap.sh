@@ -187,10 +187,10 @@ cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'
 # Show welcome only in interactive terminals and only once per session
 if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
     export MAUDE_WELCOMED=1
-    G='\033[0;32m'   # green
-    C='\033[1;36m'   # cyan
-    Y='\033[1;33m'   # yellow
-    B='\033[1m'      # bold
+    G='\033[1;32m'   # bright green
+    C='\033[1;36m'   # bright cyan
+    Y='\033[1;33m'   # bright yellow
+    B='\033[1;37m'   # bright white
     N='\033[0m'      # reset
     printf "\n"
     printf "${G}  __  __                 _      ${N}\n"
