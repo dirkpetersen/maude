@@ -103,6 +103,24 @@ Please right-click PowerShell → "Run as Administrator", then run:
     exit
 }
 
+# ── Check free disk space on C: drive ────────────────────────────────
+$cDrive = Get-PSDrive -Name C
+$freeGB = [math]::Round($cDrive.Free / 1GB, 1)
+Write-Host "Free disk space on C: drive: ${freeGB} GB" -ForegroundColor Cyan
+
+$removeTplAfterInstall = $false
+if ($freeGB -lt 5) {
+    Write-Host "`nWARNING: Very low disk space (${freeGB} GB free)!" -ForegroundColor Red
+    Write-Host "Maude may not function properly with less than 5 GB free." -ForegroundColor Red
+    Write-Host "Press Ctrl+C within 10 seconds to cancel installation..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 10
+    $removeTplAfterInstall = $true
+} elseif ($freeGB -lt 10) {
+    Write-Host "NOTE: Less than 10 GB free. The Ubuntu template will be removed after" -ForegroundColor Yellow
+    Write-Host "install to free disk space (reinstalls will take longer)." -ForegroundColor Yellow
+    $removeTplAfterInstall = $true
+}
+
 # ── Helper: reliably test if a WSL distro is registered ───────────────
 # wsl -l -q has UTF-16/null-byte encoding issues.
 # wsl --list --verbose is more robust: parse the NAME column directly.
@@ -566,7 +584,13 @@ if ($wtExe) {
     Write-Host "wt.exe not found, skipping desktop shortcut." -ForegroundColor Yellow
 }
 
-# ── Step 7: Done ──
+# ── Step 7: Cleanup & Done ──
+
+if ($removeTplAfterInstall -and (Test-WslDistro $templateDistro)) {
+    Write-Host "`nRemoving Ubuntu template to free disk space (low disk: ${freeGB} GB)..." -ForegroundColor Yellow
+    wsl --unregister $templateDistro 2>$null
+    Write-Host "Template removed. Note: future reinstalls will take longer." -ForegroundColor Yellow
+}
 
 Write-Host "`nMaude setup complete!" -ForegroundColor Cyan
 Write-Host "Launch Maude from the desktop shortcut or Windows Terminal." -ForegroundColor Green

@@ -12,7 +12,7 @@ Beyond security, Maude addresses **manageability**: IT departments are often con
 
 - **Sandboxed Ubuntu 24.04** — Windows drive automount is disabled; only one folder (`~/Maude`) is shared with the host via drvfs
 - **Claude Code in yolo mode** — all tool permissions auto-approved (safe inside the sandbox)
-- **Pre-installed dev tools** — Python, Go, Rust, build-essential, git, GitHub CLI, ripgrep, and [90+ packages](../packages/ubuntu-packages.yaml)
+- **Pre-installed dev tools** — Python, Node.js 24, Go, Rust, build-essential, git, GitHub CLI, ripgrep, and [90+ packages](../packages/ubuntu-packages.yaml)
 - **[mom](https://github.com/dirkpetersen/mom)** — install additional system packages without sudo (`mom install <pkg>`)
 - **[Claude Code skills](https://github.com/anthropics/skills)** — pdf, docx, xlsx, pptx, and more pre-linked
 - **Project launcher** — `maude project-name` creates a project folder, initializes git, and launches Claude Code
@@ -42,6 +42,14 @@ The setup script will:
 7. Create a Windows Terminal profile and desktop shortcut with the Maude icon
 
 On subsequent runs, step 3 is skipped (the template already exists), so rebuilds are fast.
+
+### Disk space
+
+The installer checks free space on C: at startup and prints it in gigabytes:
+
+- **>= 10 GB free** — normal install; the Ubuntu template is kept for fast future reinstalls
+- **5--10 GB free** — install proceeds but the template is automatically removed afterward to reclaim space (reinstalls will be slower)
+- **< 5 GB free** — warning that Maude may not function properly; you get 10 seconds to press Ctrl+C to cancel before the install continues
 
 ## Uninstall
 
