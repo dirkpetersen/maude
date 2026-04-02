@@ -214,6 +214,15 @@ Write-Host "=== Maude WSL Setup ===" -ForegroundColor Cyan
 
 Write-Host "`n[1/7] Checking WSL..." -ForegroundColor Green
 if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+    # wsl.exe exists but may need a kernel upgrade -- let --install handle it
+    $wslStatus = wsl --status 2>&1
+    if ($LASTEXITCODE -ne 0 -or "$wslStatus" -match 'WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+        Write-Host "WSL needs setup/upgrade..."
+        wsl --install --no-distribution
+        Write-Host "WSL updated. A reboot is required before continuing." -ForegroundColor Yellow
+        Read-Host "Press Enter to exit, then re-run this script after rebooting"
+        exit
+    }
     Write-Host "WSL is already installed." -ForegroundColor Gray
 } else {
     Write-Host "Installing WSL2 (no distribution)..."
@@ -394,10 +403,27 @@ $DistroName is already installed. To reinstall, run teardown first:
         }
 
         # If --name was not supported, rename the plain distro to the template name
+        # via export+import.  This requires WSL to be fully operational -- if WSL
+        # was just upgraded, a reboot is needed first.
         if (-not $nameSupported -and $plainDistro) {
+            # Quick operational check: can WSL actually run?
+            wsl --status 2>$null | Out-Null
+            wsl -d $plainDistro -- echo ok 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
+                Write-Host "After rebooting, re-run this setup script." -ForegroundColor Yellow
+                Read-Host "Press Enter to exit"
+                exit
+            }
             $fallbackTar = "$env:TEMP\ubuntu-template-fallback.tar"
             Write-Host "Renaming '$plainDistro' to '$templateDistro'..." -ForegroundColor Gray
             wsl --export $plainDistro $fallbackTar
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "ERROR: wsl --export failed. A reboot may be required." -ForegroundColor Red
+                Write-Host "After rebooting, re-run this setup script." -ForegroundColor Yellow
+                Read-Host "Press Enter to exit"
+                exit
+            }
             wsl --unregister $plainDistro 2>$null
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
