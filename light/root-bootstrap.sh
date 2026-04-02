@@ -211,6 +211,12 @@ if [ -t 1 ] && [ -z "$MAUDE_WELCOMED" ]; then
     printf "\n"
     printf "  ${B}Screen split tip:${N} Alt & Shift & ${B}+${N} (vertical) | Alt & Shift & ${B}-${N} (horizontal)\n"
     printf "\n"
+    if [ ! -f "$HOME/.aws/credentials" ] && [ ! -f "$HOME/.azure/clauderc" ]; then
+        printf "  ${Y}LLM service credentials not yet set up.${N}\n"
+        printf "  ${Y}Either paste export statements for Azure credentials${N}\n"
+        printf "  ${Y}or run \"aws --profile bedrock configure\" for Amazon credentials.${N}\n"
+        printf "\n"
+    fi
 fi
 WELCOME
 chmod +x /etc/profile.d/maude-welcome.sh
