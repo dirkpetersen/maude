@@ -469,7 +469,8 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
         # Customize the auto-generated Maude profile: set our icon, ensure visible
         if ($nm -eq $DistroName -and $src -ne '') {
             if (Test-Path $iconDst) {
-                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+                $wtIconPath = $iconDst -replace '\\', '/'
+                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
             }
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
             $hasAutoProfile = $true
@@ -490,21 +491,23 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
 
     # If WT hasn't created the auto-generated profile yet, insert one with
     # source so WT recognizes it as its own and won't create a duplicate.
+    # If WT hasn't created the auto-generated profile yet, insert a fragment
+    # WITHOUT a guid — WT will merge our icon into its auto-generated profile
+    # by matching name + source, avoiding GUID conflicts.
     if (-not $hasAutoProfile) {
         $autoProfile = [PSCustomObject]@{
-            guid   = "{$([guid]::NewGuid().ToString())}"
             name   = $DistroName
             source = "Windows.Terminal.Wsl"
             hidden = $false
         }
         if (Test-Path $iconDst) {
-            $autoProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $iconDst -Force
+            $wtIconPath = $iconDst -replace '\\', '/'
+            $autoProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
         }
         $wtJson.profiles.list += $autoProfile
     }
     if (-not $hasTemplateProfile) {
         $templateStub = [PSCustomObject]@{
-            guid   = "{$([guid]::NewGuid().ToString())}"
             name   = "Ubuntu-24.04-Template"
             source = "Windows.Terminal.Wsl"
             hidden = $true
