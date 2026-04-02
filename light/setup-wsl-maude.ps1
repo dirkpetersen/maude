@@ -213,26 +213,47 @@ Write-Host "=== Maude WSL Setup ===" -ForegroundColor Cyan
 # ── Step 1: Install WSL2 ──                                       # REQUIRES ADMIN
 
 Write-Host "`n[1/7] Checking WSL..." -ForegroundColor Green
+
+# On Windows Server, wsl --install may not enable all required features.
+# Explicitly check and enable Virtual Machine Platform + WSL.
+$needsReboot = $false
+$vmPlatform = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
+$wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
+
+if ($vmPlatform -and $vmPlatform.State -ne 'Enabled') {
+    Write-Host "Enabling Virtual Machine Platform..."
+    dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+    $needsReboot = $true
+}
+if ($wslFeature -and $wslFeature.State -ne 'Enabled') {
+    Write-Host "Enabling Windows Subsystem for Linux..."
+    dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+    $needsReboot = $true
+}
+
 if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-    # wsl.exe exists but may need a kernel/component upgrade.
-    # Check for known error signatures that require a reboot.
-    $wslStatus = (wsl --status 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0 -or
-        $wslStatus -match 'WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED' -or
-        $wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED' -or
-        $wslStatus -match 'Virtual Machine Platform') {
-        Write-Host "WSL needs setup/upgrade..."
-        wsl --install --no-distribution
-        Write-Host "`nWSL updated. A reboot is required before continuing." -ForegroundColor Yellow
-        Read-Host "Press Enter to exit, then re-run this script after rebooting"
-        exit
+    if (-not $needsReboot) {
+        # wsl.exe exists and features are enabled -- verify it's operational
+        $wslStatus = (wsl --status 2>&1) -join "`n"
+        if ($wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+            Write-Host "WSL needs setup/upgrade..."
+            wsl --install --no-distribution
+            $needsReboot = $true
+        }
     }
-    Write-Host "WSL is already installed." -ForegroundColor Gray
+    if (-not $needsReboot) {
+        Write-Host "WSL is already installed." -ForegroundColor Gray
+    }
 } else {
-    Write-Host "Installing WSL2 (no distribution)..."
+    Write-Host "Installing WSL2..."
     wsl --install --no-distribution
-    Write-Host "`nWSL2 installed. A reboot is required before continuing." -ForegroundColor Yellow
-    Read-Host "Press Enter to exit, then re-run this script after rebooting"
+    $needsReboot = $true
+}
+
+if ($needsReboot) {
+    Write-Host "`nA reboot is required before continuing." -ForegroundColor Yellow
+    Write-Host "After rebooting, re-run this setup script." -ForegroundColor Yellow
+    Read-Host "Press Enter to exit"
     exit
 }
 
@@ -409,50 +430,55 @@ $DistroName is already installed. To reinstall, run teardown first:
             $candidates = @("Ubuntu-24.04", "Ubuntu")
         }
 
+        # Helper: run wsl command, capture output as plain text (handles UTF-16)
+        function Invoke-Wsl {
+            param([string[]]$Args)
+            $tmp = Join-Path $env:TEMP "wsl-output-$PID.txt"
+            $proc = Start-Process -FilePath wsl.exe -ArgumentList $Args -NoNewWindow -Wait -PassThru `
+                -RedirectStandardOutput $tmp -RedirectStandardError "$tmp.err"
+            $out = ""
+            if (Test-Path $tmp)       { $out += Get-Content $tmp -Raw -ErrorAction SilentlyContinue }
+            if (Test-Path "$tmp.err") { $out += Get-Content "$tmp.err" -Raw -ErrorAction SilentlyContinue }
+            Remove-Item $tmp, "$tmp.err" -ErrorAction SilentlyContinue
+            return @{ ExitCode = $proc.ExitCode; Output = "$out" }
+        }
+
         foreach ($distro in $candidates) {
             Write-Host "Trying '$distro'..." -ForegroundColor Gray
+
             # Try with --name first (modern WSL)
-            $output = (wsl --install -d $distro --name $templateDistro --no-launch 2>&1) -join "`n"
-            if ($LASTEXITCODE -eq 0) {
-                $nameSupported = $true
-                break
-            }
-            # Bail on system-level errors (not distro-specific)
-            if ($output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-                Write-Host "`nWSL needs a reboot before distros can be installed." -ForegroundColor Yellow
-                Write-Host "Run: wsl --install --no-distribution" -ForegroundColor Yellow
-                Write-Host "Then reboot and re-run this setup script." -ForegroundColor Yellow
+            $r = Invoke-Wsl --install -d $distro --name $templateDistro --no-launch
+            if ($r.ExitCode -eq 0) { $nameSupported = $true; break }
+
+            # Bail immediately on system-level errors
+            if ($r.Output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+                Write-Host "`nWSL components are not fully installed. Please reboot and re-run this script." -ForegroundColor Red
                 Read-Host "Press Enter to exit"
                 exit
             }
+
             # Ghost entry? Clear and retry with --name
             wsl --unregister $templateDistro 2>$null
-            $output = (wsl --install -d $distro --name $templateDistro --no-launch 2>&1) -join "`n"
-            if ($LASTEXITCODE -eq 0) {
-                $nameSupported = $true
-                break
-            }
+            $r = Invoke-Wsl --install -d $distro --name $templateDistro --no-launch
+            if ($r.ExitCode -eq 0) { $nameSupported = $true; break }
+
             # Try plain install (no --name) for older WSL
             wsl --unregister $distro 2>$null
-            $output = (wsl --install -d $distro --no-launch 2>&1) -join "`n"
-            if ($LASTEXITCODE -eq 0) {
-                $plainDistro = $distro
-                break
-            }
-            if ($output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-                Write-Host "`nWSL needs a reboot before distros can be installed." -ForegroundColor Yellow
-                Write-Host "Run: wsl --install --no-distribution" -ForegroundColor Yellow
-                Write-Host "Then reboot and re-run this setup script." -ForegroundColor Yellow
+            $r = Invoke-Wsl --install -d $distro --no-launch
+            if ($r.ExitCode -eq 0) { $plainDistro = $distro; break }
+
+            # Bail on system-level errors
+            if ($r.Output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+                Write-Host "`nWSL components are not fully installed. Please reboot and re-run this script." -ForegroundColor Red
                 Read-Host "Press Enter to exit"
                 exit
             }
+
             # Ghost cleanup + retry plain install
             wsl --unregister $distro 2>$null
-            $output = (wsl --install -d $distro --no-launch 2>&1) -join "`n"
-            if ($LASTEXITCODE -eq 0) {
-                $plainDistro = $distro
-                break
-            }
+            $r = Invoke-Wsl --install -d $distro --no-launch
+            if ($r.ExitCode -eq 0) { $plainDistro = $distro; break }
+
             Write-Host "'$distro' not available, trying next..." -ForegroundColor Yellow
         }
 
