@@ -47,6 +47,20 @@ else
     echo "WARNING: ~/Maude/.claude not found, using local ~/.claude"
 fi
 
+# ── Symlink ~/.kanna → ~/Maude/.kanna (kanna data stored on host) ────
+if [[ -d "$HOME/Maude/.kanna" ]]; then
+    if [[ -d "$HOME/.kanna" ]] && [[ ! -L "$HOME/.kanna" ]]; then
+        rm -rf "$HOME/.kanna"
+    fi
+    if [[ ! -L "$HOME/.kanna" ]]; then
+        ln -sfn "$HOME/Maude/.kanna" "$HOME/.kanna"
+        echo "~/.kanna symlinked to ~/Maude/.kanna (host-persistent)."
+    fi
+else
+    mkdir -p "$HOME/.kanna"
+    echo "WARNING: ~/Maude/.kanna not found, using local ~/.kanna"
+fi
+
 # ── Claude Code: bypass permissions (safe inside sandbox) ────────────
 if [[ ! -f "$HOME/.claude/settings.json" ]]; then
     cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'

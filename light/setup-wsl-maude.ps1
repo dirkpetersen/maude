@@ -226,15 +226,22 @@ if ($wtPresent) {
 
 Write-Host "`n[3/7] Setting up host folder ($HostFolderSource)..." -ForegroundColor Green
 New-Item -ItemType Directory -Force -Path $HostFolder | Out-Null
-# Pre-create .claude and Projects so they exist when the drvfs mount activates
+# Pre-create .claude, .kanna, and Projects so they exist when the drvfs mount activates
 $claudeDir = Join-Path $HostFolder ".claude"
+$kannaDir = Join-Path $HostFolder ".kanna"
 $projectsDir = Join-Path $HostFolder "Projects"
 New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+New-Item -ItemType Directory -Force -Path $kannaDir | Out-Null
 New-Item -ItemType Directory -Force -Path $projectsDir | Out-Null
 if (Test-Path $claudeDir) {
     Write-Host "Created $claudeDir" -ForegroundColor Gray
 } else {
     Write-Host "WARNING: Failed to create $claudeDir" -ForegroundColor Yellow
+}
+if (Test-Path $kannaDir) {
+    Write-Host "Created $kannaDir" -ForegroundColor Gray
+} else {
+    Write-Host "WARNING: Failed to create $kannaDir" -ForegroundColor Yellow
 }
 if (Test-Path $projectsDir) {
     Write-Host "Created $projectsDir" -ForegroundColor Gray

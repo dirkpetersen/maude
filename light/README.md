@@ -87,13 +87,13 @@ Example workflow:
 
 ### Web apps & browser
 
-[kanna](https://github.com/jakemor/kanna) provides a web-based UI for Claude Code. Maude keeps WSL interop disabled for sandbox isolation, so instead of opening a Windows browser, it runs Chromium inside WSL and displays it on Windows via WSLg.
+[kanna](https://github.com/jakemor/kanna) provides a web-based UI for Claude Code. WSL2 forwards localhost ports to Windows natively, so kanna is accessible from any Windows browser without enabling interop.
 
 ```
 maude web
 ```
 
-This installs Chromium (via `mom`) on first run if needed, then launches kanna. The Chromium window appears on your Windows desktop through WSLg — no interop or Windows filesystem access required.
+This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the link in the terminal to open it in your Windows browser. Kanna data is stored in `~/Maude/.kanna` (host-persistent via the shared mount).
 
 ### Shared folder
 
@@ -106,13 +106,16 @@ Windows host
   │
   ├── C:\Users\you\OneDrive\Documents\Maude\   ← shared folder (host side)
   │       ├── Projects/                          ← coding projects (directly used by WSL)
-  │       └── .claude/                           ← Claude Code config (symlinked from WSL)
+  │       ├── .claude/                           ← Claude Code config (symlinked from WSL)
+  │       └── .kanna/                            ← kanna web UI data (symlinked from WSL)
   │
   └── WSL2: Maude (Ubuntu 24.04)
         ├── ~/Maude/           ← drvfs mount of shared folder
         │     ├── Projects/    ← coding projects (maude CLI)
-        │     └── .claude/     ← Claude Code config + skills
+        │     ├── .claude/     ← Claude Code config + skills
+        │     └── .kanna/      ← kanna web UI data
         ├── ~/.claude          → symlink to ~/Maude/.claude
+        ├── ~/.kanna           → symlink to ~/Maude/.kanna
         ├── ~/bin/             ← user scripts (front of PATH)
         └── ~/.local/bin/      ← tool binaries (end of PATH)
 
