@@ -120,7 +120,8 @@ WSL distro is removed. `~/.claude` is also a symlink to `~/Maude/.claude`.
 
 ## Package Installation
 
-Use `mom install <package>` to install system packages — no sudo needed.
+Use `mom install -y <package>` to install system packages — no sudo needed.
+Always use `-y` for unattended installs.
 CLAUDEEOF
 echo "Claude Code: CLAUDE.md created."
 

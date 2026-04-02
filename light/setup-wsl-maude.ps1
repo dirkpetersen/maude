@@ -338,6 +338,7 @@ $DistroName is already installed. To reinstall, run teardown first:
             # Avoids passing multi-line strings as bash -c arguments (unreliable via wsl.exe).
             $installScript = @'
 export DEBIAN_FRONTEND=noninteractive
+export TERM=dumb
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
 chmod +x /usr/sbin/policy-rc.d
 apt-get update -q
@@ -565,13 +566,7 @@ if ($wtExe) {
     Write-Host "wt.exe not found, skipping desktop shortcut." -ForegroundColor Yellow
 }
 
-# ── Step 7: Open Maude in Windows Terminal ──                     # does NOT require admin
-
-Write-Host "`n[7/7] Opening $DistroName..." -ForegroundColor Green
-if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
-    wt new-tab -- wsl -d $DistroName
-} else {
-    wsl -d $DistroName
-}
+# ── Step 7: Done ──
 
 Write-Host "`nMaude setup complete!" -ForegroundColor Cyan
+Write-Host "Launch Maude from the desktop shortcut or Windows Terminal." -ForegroundColor Green

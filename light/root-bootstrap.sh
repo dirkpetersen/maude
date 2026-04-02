@@ -7,6 +7,7 @@
 # Host folder path is read from /tmp/maude-hostfolder if present.
 set -e
 export DEBIAN_FRONTEND=noninteractive
+export TERM=dumb
 
 USERNAME="${1:?Usage: root-bootstrap.sh <username>}"
 MOM_GROUP="users"
