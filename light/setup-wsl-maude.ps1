@@ -543,13 +543,20 @@ if (Test-Path $iconSrc) {
     }
 }
 
-# Find wt.exe path for the shortcut target
+# Read the distro's distribution-id from the WSL registry — this is what WT uses internally
+$distroGuid = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss\*" |
+    Where-Object { $_.DistributionName -eq $DistroName }).PSChildName
+
 $wtExe = (Get-Command wt.exe -ErrorAction SilentlyContinue).Source
 if ($wtExe) {
     $ws = New-Object -ComObject WScript.Shell
     $sc = $ws.CreateShortcut($shortcutFile)
     $sc.TargetPath = $wtExe
-    $sc.Arguments = "new-tab -- wsl -d $DistroName"
+    if ($distroGuid) {
+        $sc.Arguments = "new-tab -- C:\Windows\System32\wsl.exe --distribution-id $distroGuid"
+    } else {
+        $sc.Arguments = "new-tab -- wsl -d $DistroName"
+    }
     $sc.Description = "Open $DistroName in Windows Terminal"
     if (Test-Path $icoFile) { $sc.IconLocation = "$icoFile,0" }
     $sc.Save()
