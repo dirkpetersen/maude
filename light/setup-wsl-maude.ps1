@@ -532,6 +532,12 @@ if (Test-Path $iconSrc) {
     try {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
         Convert-PngToIco $iconSrc $icoFile
+        # Overwrite the WSL-generated shortcut icon with ours
+        $shortcutIco = Join-Path $InstallDir "shortcut.ico"
+        if (Test-Path $shortcutIco) {
+            Copy-Item -Path $icoFile -Destination $shortcutIco -Force
+            Write-Host "Replaced shortcut.ico with Maude icon." -ForegroundColor Gray
+        }
     } catch {
         Write-Host "Could not convert icon: $_" -ForegroundColor Yellow
     }
