@@ -315,7 +315,7 @@ $DistroName is already installed. To reinstall, run teardown first:
         if ($LASTEXITCODE -ne 0) {
             # Ghost entry in Store registry not visible to --list --verbose.
             # Unregister it and retry once.
-            Write-Host "Install failed — clearing ghost entry and retrying..." -ForegroundColor Yellow
+            Write-Host "Install failed - clearing ghost entry and retrying..." -ForegroundColor Yellow
             wsl --unregister $templateDistro 2>$null
             wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
             if ($LASTEXITCODE -ne 0) {
@@ -327,18 +327,22 @@ $DistroName is already installed. To reinstall, run teardown first:
         # Install packages into the template.
         Write-Host "Installing packages into template (this takes a few minutes)..."
         if ($packageList) {
-            $packageList | wsl -d $templateDistro -u root -- bash -c "
-                export DEBIAN_FRONTEND=noninteractive
-                printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
-                chmod +x /usr/sbin/policy-rc.d
-                apt-get update -q
-                apt-get install -y -q software-properties-common
-                add-apt-repository -y universe
-                apt-get update -q
-                cat | tr -d '\r' | xargs apt-get install -y -q --no-install-recommends
-                rm -f /usr/sbin/policy-rc.d
-                apt-get clean
-            "
+            # Write the install script to /tmp, then pipe the package list to it.
+            # Avoids passing multi-line strings as bash -c arguments (unreliable via wsl.exe).
+            $installScript = @'
+export DEBIAN_FRONTEND=noninteractive
+printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+chmod +x /usr/sbin/policy-rc.d
+apt-get update -q
+apt-get install -y -q software-properties-common
+add-apt-repository -y universe
+apt-get update -q
+cat | tr -d '\r' | xargs apt-get install -y -q --no-install-recommends
+rm -f /usr/sbin/policy-rc.d
+apt-get clean
+'@
+            $installScript | wsl -d $templateDistro -u root -- bash -c "cat > /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
+            $packageList | wsl -d $templateDistro -u root -- bash /tmp/install-pkgs.sh
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "WARNING: Some packages may have failed to install." -ForegroundColor Yellow
             }
