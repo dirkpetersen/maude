@@ -29,6 +29,12 @@ param(
 
 Write-Host "=== Maude WSL Teardown ===" -ForegroundColor Cyan
 
+# ── Helper: reliably test if a WSL distro exists ─────────────────────
+function Test-WslDistro([string]$name) {
+    wsl -d $name -- exit 2>$null
+    return $LASTEXITCODE -eq 0
+}
+
 # ── Step 1: Remove Windows Terminal profile + desktop shortcut ───  # runs as current user
 
 Write-Host "`n[1/4] Cleaning up Windows Terminal profile..." -ForegroundColor Green
@@ -101,10 +107,7 @@ if (-not $isAdmin) {
 # ── Step 2: Unregister the Maude WSL distro ──                    # REQUIRES ADMIN
 
 Write-Host "`n[2/4] Checking for $DistroName WSL distro..." -ForegroundColor Green
-$installedDistros = (wsl -l -q 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
-$distroExists = $installedDistros | Where-Object { $_.Trim() -eq $DistroName }
-
-if ($distroExists) {
+if (Test-WslDistro $DistroName) {
     Write-Host "Unregistering $DistroName..."
     wsl --unregister $DistroName
     if ($LASTEXITCODE -ne 0) {
@@ -129,11 +132,10 @@ if (Test-Path $InstallDir) {
 # ── Step 4: Optionally remove the Ubuntu-24.04-Template ──        # REQUIRES ADMIN
 
 $templateDistro = "Ubuntu-24.04-Template"
-$templateExists = $installedDistros | Where-Object { $_.Trim() -eq $templateDistro }
 
 if ($IncludeTemplate) {
     Write-Host "`n[4/4] Removing '$templateDistro'..." -ForegroundColor Green
-    if ($templateExists) {
+    if (Test-WslDistro $templateDistro) {
         wsl --unregister $templateDistro
         Write-Host "'$templateDistro' unregistered." -ForegroundColor Gray
     } else {
@@ -141,7 +143,7 @@ if ($IncludeTemplate) {
     }
 } else {
     Write-Host "`n[4/4] Keeping '$templateDistro' for fast rebuilds." -ForegroundColor Green
-    if ($templateExists) {
+    if (Test-WslDistro $templateDistro) {
         Write-Host "  (pass -IncludeTemplate to remove it too)" -ForegroundColor Gray
     }
 }

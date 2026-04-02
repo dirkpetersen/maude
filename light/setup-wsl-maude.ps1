@@ -103,6 +103,15 @@ Please right-click PowerShell → "Run as Administrator", then run:
     exit
 }
 
+# ── Helper: reliably test if a WSL distro exists ─────────────────────
+# wsl -l -q is unreliable: UTF-16 encoding, ghost entries after partial
+# Store installs, and case sensitivity issues.  Probing the distro directly
+# is the only authoritative check.
+function Test-WslDistro([string]$name) {
+    wsl -d $name -- exit 2>$null
+    return $LASTEXITCODE -eq 0
+}
+
 # ── Helper: convert a PNG file to ICO format ──
 # Writes a valid ICO container that embeds the PNG data directly.
 # Works with any PNG size; Explorer picks the best fit.
@@ -278,10 +287,7 @@ if (Test-Path $packagesYaml) {
 # Packages are pre-installed into the template so rebuilds are fast (~30s vs ~5min).
 
 Write-Host "`n[4/7] Checking $DistroName WSL distro..." -ForegroundColor Green
-$installedDistros = (wsl -l -q 2>&1) -replace "`0", "" | Where-Object { $_.Trim() -ne "" }
-$distroExists = $installedDistros | Where-Object { $_.Trim() -eq $DistroName }
-
-if ($distroExists) {
+if (Test-WslDistro $DistroName) {
     Write-Host @"
 
 $DistroName is already installed. To reinstall, run teardown first:
@@ -298,9 +304,7 @@ $DistroName is already installed. To reinstall, run teardown first:
     $templateDistro = "Ubuntu-24.04-Template"
     $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
 
-    $templateExists = (wsl -l -q 2>&1) -replace "`0", "" |
-        Where-Object { $_.Trim() -eq $templateDistro }
-    if (-not $templateExists) {
+    if (-not (Test-WslDistro $templateDistro)) {
         # Install Ubuntu 24.04 directly as the template (--name avoids
         # conflicting with any existing Ubuntu-24.04 distro).
         Write-Host "Installing '$templateDistro' from Microsoft Store (first time only)..."
