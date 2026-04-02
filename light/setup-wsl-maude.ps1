@@ -484,19 +484,20 @@ $DistroName is already installed. To reinstall, run teardown first:
 
         # Method 2: Direct download from Canonical (Windows Server without Store)
         if (-not $nameSupported -and -not $plainDistro) {
-            Write-Host "Microsoft Store not available. Downloading Ubuntu rootfs from Canonical..." -ForegroundColor Yellow
-            $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz"
-            $rootfsGz  = Join-Path $env:TEMP "ubuntu-noble-rootfs.tar.gz"
-            curl.exe -sL -o $rootfsGz "$rootfsUrl"
-            if (-not (Test-Path $rootfsGz) -or (Get-Item $rootfsGz).Length -lt 1MB) {
-                Write-Host "ERROR: Failed to download Ubuntu rootfs." -ForegroundColor Red
+            Write-Host "Microsoft Store not available. Downloading Ubuntu 24.04 WSL image from Canonical..." -ForegroundColor Yellow
+            $rootfsUrl = "https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-amd64.wsl"
+            $rootfsFile = Join-Path $env:TEMP "ubuntu-noble-wsl-amd64.wsl"
+            Write-Host "Downloading ~375 MB from Canonical (this may take a few minutes)..."
+            curl.exe -L -o $rootfsFile "$rootfsUrl"
+            if (-not (Test-Path $rootfsFile) -or (Get-Item $rootfsFile).Length -lt 100MB) {
+                Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
             Write-Host "Importing as '$templateDistro'..."
-            wsl --import $templateDistro $tplDir $rootfsGz --version 2
-            Remove-Item -Path $rootfsGz -ErrorAction SilentlyContinue
+            wsl --import $templateDistro $tplDir $rootfsFile --version 2
+            Remove-Item -Path $rootfsFile -ErrorAction SilentlyContinue
             if (-not (Test-WslDistro $templateDistro)) {
                 Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
                 exit 1
