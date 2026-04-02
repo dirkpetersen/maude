@@ -452,12 +452,12 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
     # Enable copy-on-select: marking text copies it to clipboard automatically
     $wtJson | Add-Member -NotePropertyName 'copyOnSelect' -NotePropertyValue $true -Force
 
-    # WT auto-generates profiles for WSL distros (source=Windows.Terminal.Wsl)
-    # with deterministic GUIDs.  Rather than fighting the auto-generation with
-    # hidden stubs (which get duplicated because our GUIDs don't match WT's),
-    # we customize the auto-generated Maude profile (set our icon, keep visible)
-    # and hide the template profile.  Stale manual profiles (no source) from
-    # previous installs are removed.
+    # WT auto-generates profiles for WSL distros using two different source
+    # strings: "Windows.Terminal.Wsl" (older WT) and "Microsoft.WSL" (newer WT).
+    # This can produce duplicate entries.  We keep exactly one Maude profile
+    # (customized with our icon), hide all template profiles, and remove
+    # everything else with a matching name (stale manual profiles, duplicates).
+    $wtIconPath = if (Test-Path $iconDst) { $iconDst -replace '\\', '/' } else { $null }
     $hasAutoProfile     = $false
     $hasTemplateProfile = $false
     $keepProfiles = @()
@@ -466,42 +466,39 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
         $nm  = if ($p.PSObject.Properties['name'])   { $p.name }   else { '' }
         $src = if ($p.PSObject.Properties['source']) { $p.source } else { '' }
 
-        # Customize the auto-generated Maude profile: set our icon, ensure visible
-        if ($nm -eq $DistroName -and $src -ne '') {
-            if (Test-Path $iconDst) {
-                $wtIconPath = $iconDst -replace '\\', '/'
-                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
+        if ($nm -eq $DistroName) {
+            if ($src -ne '' -and -not $hasAutoProfile) {
+                # Keep the first auto-generated Maude profile, customize it
+                if ($wtIconPath) {
+                    $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
+                }
+                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
+                $hasAutoProfile = $true
+            } else {
+                # Remove duplicates and stale manual profiles
+                continue
             }
-            $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
-            $hasAutoProfile = $true
         }
 
-        # Hide template profiles (never need a WT entry)
+        # Hide all template profiles
         if ($nm -eq 'Ubuntu-24.04-Template') {
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
             $hasTemplateProfile = $true
         }
 
-        # Remove stale manual profiles from previous installs (no source)
-        if ($nm -eq $DistroName -and $src -eq '') { continue }
-
         $keepProfiles += $wtJson.profiles.list[$i]
     }
     $wtJson.profiles.list = $keepProfiles
 
-    # If WT hasn't created the auto-generated profile yet, insert one with
-    # source so WT recognizes it as its own and won't create a duplicate.
-    # If WT hasn't created the auto-generated profile yet, insert a fragment
-    # WITHOUT a guid — WT will merge our icon into its auto-generated profile
-    # by matching name + source, avoiding GUID conflicts.
+    # If WT hasn't created any auto-generated profile yet, insert a fragment
+    # without a guid — WT merges by name + source, avoiding GUID conflicts.
     if (-not $hasAutoProfile) {
         $autoProfile = [PSCustomObject]@{
             name   = $DistroName
             source = "Windows.Terminal.Wsl"
             hidden = $false
         }
-        if (Test-Path $iconDst) {
-            $wtIconPath = $iconDst -replace '\\', '/'
+        if ($wtIconPath) {
             $autoProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
         }
         $wtJson.profiles.list += $autoProfile
