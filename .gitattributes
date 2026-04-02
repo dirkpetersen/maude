@@ -1,4 +1,2 @@
-# Force LF line endings for shell scripts (even on Windows checkouts)
-*.sh text eol=lf
-# Keep PowerShell scripts as CRLF (native Windows)
-*.ps1 text eol=crlf
+# Force LF line endings for all text files
+* text eol=lf
