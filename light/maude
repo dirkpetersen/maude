@@ -128,7 +128,7 @@ delete_project() {
 
 # ── Launch kanna web UI ───────────────────────────────────────────────
 launch_web() {
-    # Install Chromium via mom if not present
+    # Install Chromium via mom if not present (Ubuntu 24.04 installs it as a snap)
     if ! command -v chromium-browser >/dev/null 2>&1; then
         echo -e "${CYAN}Installing Chromium browser...${NC}"
         mom install chromium-browser
@@ -137,6 +137,12 @@ launch_web() {
             exit 1
         fi
         echo -e "${GREEN}Chromium installed.${NC}"
+    fi
+
+    # Connect snap interfaces so Chromium can render via WSLg
+    if command -v snap >/dev/null 2>&1 && snap list chromium >/dev/null 2>&1; then
+        sudo snap connect chromium:wayland 2>/dev/null || true
+        sudo snap connect chromium:x11 2>/dev/null || true
     fi
 
     # Install kanna-code via Bun if not present
