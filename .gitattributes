@@ -1,2 +1,9 @@
 # Force LF line endings for all text files
 * text eol=lf
+
+# Binary files — never touch line endings
+*.png binary
+*.ico binary
+*.tar binary
+*.gz binary
+*.zip binary

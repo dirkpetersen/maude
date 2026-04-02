@@ -103,13 +103,16 @@ Please right-click PowerShell → "Run as Administrator", then run:
     exit
 }
 
-# ── Helper: reliably test if a WSL distro exists ─────────────────────
-# wsl -l -q is unreliable: UTF-16 encoding, ghost entries after partial
-# Store installs, and case sensitivity issues.  Probing the distro directly
-# is the only authoritative check.
+# ── Helper: reliably test if a WSL distro is registered ───────────────
+# wsl -l -q has UTF-16/null-byte encoding issues.
+# wsl --list --verbose is more robust: parse the NAME column directly.
 function Test-WslDistro([string]$name) {
-    wsl -d $name -- exit 2>$null
-    return $LASTEXITCODE -eq 0
+    $lines = (wsl --list --verbose 2>&1) -replace "`0", ""
+    foreach ($line in $lines) {
+        $fields = ($line -replace '^\*?\s+', '').Trim() -split '\s+'
+        if ($fields[0] -ieq $name) { return $true }
+    }
+    return $false
 }
 
 # ── Helper: convert a PNG file to ICO format ──
@@ -310,8 +313,15 @@ $DistroName is already installed. To reinstall, run teardown first:
         Write-Host "Installing '$templateDistro' from Microsoft Store (first time only)..."
         wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: wsl --install failed." -ForegroundColor Red
-            exit 1
+            # Ghost entry in Store registry not visible to --list --verbose.
+            # Unregister it and retry once.
+            Write-Host "Install failed — clearing ghost entry and retrying..." -ForegroundColor Yellow
+            wsl --unregister $templateDistro 2>$null
+            wsl --install -d Ubuntu-24.04 --name $templateDistro --no-launch
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "ERROR: wsl --install failed." -ForegroundColor Red
+                exit 1
+            }
         }
 
         # Install packages into the template.

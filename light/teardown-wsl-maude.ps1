@@ -29,10 +29,14 @@ param(
 
 Write-Host "=== Maude WSL Teardown ===" -ForegroundColor Cyan
 
-# ── Helper: reliably test if a WSL distro exists ─────────────────────
+# ── Helper: reliably test if a WSL distro is registered ───────────────
 function Test-WslDistro([string]$name) {
-    wsl -d $name -- exit 2>$null
-    return $LASTEXITCODE -eq 0
+    $lines = (wsl --list --verbose 2>&1) -replace "`0", ""
+    foreach ($line in $lines) {
+        $fields = ($line -replace '^\*?\s+', '').Trim() -split '\s+'
+        if ($fields[0] -ieq $name) { return $true }
+    }
+    return $false
 }
 
 # ── Step 1: Remove Windows Terminal profile + desktop shortcut ───  # runs as current user
@@ -107,13 +111,9 @@ if (-not $isAdmin) {
 # ── Step 2: Unregister the Maude WSL distro ──                    # REQUIRES ADMIN
 
 Write-Host "`n[2/4] Checking for $DistroName WSL distro..." -ForegroundColor Green
-if (Test-WslDistro $DistroName) {
-    Write-Host "Unregistering $DistroName..."
-    wsl --unregister $DistroName
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: wsl --unregister failed." -ForegroundColor Red
-        exit 1
-    }
+Write-Host "Unregistering $DistroName..."
+wsl --unregister $DistroName 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
     Write-Host "$DistroName unregistered." -ForegroundColor Gray
 } else {
     Write-Host "$DistroName is not installed. Nothing to unregister." -ForegroundColor Gray
@@ -135,8 +135,8 @@ $templateDistro = "Ubuntu-24.04-Template"
 
 if ($IncludeTemplate) {
     Write-Host "`n[4/4] Removing '$templateDistro'..." -ForegroundColor Green
-    if (Test-WslDistro $templateDistro) {
-        wsl --unregister $templateDistro
+    wsl --unregister $templateDistro 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
         Write-Host "'$templateDistro' unregistered." -ForegroundColor Gray
     } else {
         Write-Host "'$templateDistro' not found." -ForegroundColor Gray
