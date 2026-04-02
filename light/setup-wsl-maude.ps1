@@ -543,7 +543,7 @@ if ($wtExe) {
     $ws = New-Object -ComObject WScript.Shell
     $sc = $ws.CreateShortcut($shortcutFile)
     $sc.TargetPath = $wtExe
-    $sc.Arguments = "-p `"$DistroName`""
+    $sc.Arguments = "new-tab -- wsl -d $DistroName"
     $sc.Description = "Open $DistroName in Windows Terminal"
     if (Test-Path $icoFile) { $sc.IconLocation = "$icoFile,0" }
     $sc.Save()
