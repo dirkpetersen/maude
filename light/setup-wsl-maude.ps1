@@ -397,105 +397,60 @@ $DistroName is already installed. To reinstall, run teardown first:
     $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
 
     if (-not (Test-WslDistro $templateDistro)) {
-        # Install Ubuntu as the template distro.
-        # Try Ubuntu-24.04 first; if unavailable online, fall back to "Ubuntu".
-        # Newer WSL supports --name to install under a custom name directly.
-        # Older WSL (e.g. Windows Server) does not -- fall back to plain install
-        # then export+import to rename.
-        Write-Host "Installing '$templateDistro' from Microsoft Store (first time only)..."
+        Write-Host "Installing '$templateDistro' (first time only)..."
 
-        $nameSupported = $false
-        $plainDistro   = $null
-
-        # Check which distros are available online
-        $onlineList = (wsl --list --online 2>&1) -join "`n"
-
-        # Build candidate list: prefer Ubuntu-24.04, fall back to Ubuntu
-        $candidates = @()
-        if ($onlineList -match 'Ubuntu-24.04') { $candidates += "Ubuntu-24.04" }
-        if ($onlineList -match 'Ubuntu\b')     { $candidates += "Ubuntu" }
-        if ($candidates.Count -eq 0) {
-            # Could not parse online list; try both anyway
-            $candidates = @("Ubuntu-24.04", "Ubuntu")
+        # Detect WSL version to determine --name support.
+        # --name was introduced in WSL 2.4.4 (pre-release), stable in 2.5.7.
+        $hasNameFlag = $false
+        $wslVer = (wsl --version 2>&1) -join "`n"
+        if ($wslVer -match 'WSL.*?:\s*(\d+)\.(\d+)\.(\d+)') {
+            $major = [int]$Matches[1]; $minor = [int]$Matches[2]; $patch = [int]$Matches[3]
+            # 2.4.4+ has --name support
+            if ($major -gt 2 -or ($major -eq 2 -and $minor -gt 4) -or
+                ($major -eq 2 -and $minor -eq 4 -and $patch -ge 4)) {
+                $hasNameFlag = $true
+            }
+            Write-Host "WSL version: $major.$minor.$patch (--name $(if ($hasNameFlag) {'supported'} else {'not supported'}))" -ForegroundColor Gray
+        } else {
+            Write-Host "Could not detect WSL version; assuming --name not supported." -ForegroundColor Gray
         }
 
-        # Helper: run wsl command, capture output as plain text (handles UTF-16)
-        function Invoke-Wsl {
-            param([string[]]$Args)
-            $tmp = Join-Path $env:TEMP "wsl-output-$PID.txt"
-            $proc = Start-Process -FilePath wsl.exe -ArgumentList $Args -NoNewWindow -Wait -PassThru `
-                -RedirectStandardOutput $tmp -RedirectStandardError "$tmp.err"
-            $out = ""
-            if (Test-Path $tmp)       { $out += Get-Content $tmp -Raw -ErrorAction SilentlyContinue }
-            if (Test-Path "$tmp.err") { $out += Get-Content "$tmp.err" -Raw -ErrorAction SilentlyContinue }
-            Remove-Item $tmp, "$tmp.err" -ErrorAction SilentlyContinue
-            return @{ ExitCode = $proc.ExitCode; Output = "$out" }
+        $installed = $false
+
+        if ($hasNameFlag) {
+            # ── Path A: Modern WSL with --name ──
+            # Install from Store directly as the template name.
+            # No risk of overwriting existing distros.
+            $onlineList = (wsl --list --online 2>&1) -join "`n"
+            $candidates = @()
+            if ($onlineList -match 'Ubuntu-24.04') { $candidates += "Ubuntu-24.04" }
+            if ($onlineList -match 'Ubuntu\b')     { $candidates += "Ubuntu" }
+            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-24.04", "Ubuntu") }
+
+            foreach ($distro in $candidates) {
+                Write-Host "Trying Store install: '$distro' as '$templateDistro'..." -ForegroundColor Gray
+                wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+                if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+                # Ghost entry? Clear and retry
+                wsl --unregister $templateDistro 2>$null
+                wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+                if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+                Write-Host "'$distro' not available via Store, trying next..." -ForegroundColor Yellow
+            }
         }
 
-        # Helper: back up an existing WSL distro before unregistering it.
-        # Exports to ~\Documents\<name>-backup-<timestamp>.tar so the user can restore.
-        function Backup-WslDistro([string]$name) {
-            if (-not (Test-WslDistro $name)) { return }
-            $backupDir = [Environment]::GetFolderPath('MyDocuments')
-            $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-            $backupFile = Join-Path $backupDir "$name-backup-$ts.tar"
-            Write-Host "Backing up existing '$name' distro to $backupFile ..." -ForegroundColor Yellow
-            wsl --export $name $backupFile 2>$null
-            if ($LASTEXITCODE -eq 0 -and (Test-Path $backupFile)) {
-                $sizeMB = [math]::Round((Get-Item $backupFile).Length / 1MB, 1)
-                Write-Host "Backup saved ($sizeMB MB). You can restore later with:" -ForegroundColor Yellow
-                Write-Host "  wsl --import $name C:\$name `"$backupFile`" --version 2" -ForegroundColor Gray
+        # ── Path B: Download from Canonical + wsl --import ──
+        # Used when: --name not supported (older WSL), or Store install failed.
+        # Safe: wsl --import always accepts a custom name, never overwrites existing distros.
+        if (-not $installed) {
+            if ($hasNameFlag) {
+                Write-Host "Store install failed. Downloading from Canonical..." -ForegroundColor Yellow
             } else {
-                Write-Host "WARNING: Backup failed — proceeding anyway." -ForegroundColor Red
+                Write-Host "Downloading Ubuntu 24.04 WSL image from Canonical..." -ForegroundColor Yellow
             }
-        }
-
-        foreach ($distro in $candidates) {
-            Write-Host "Trying '$distro'..." -ForegroundColor Gray
-
-            # Try with --name first (modern WSL)
-            $r = Invoke-Wsl --install -d $distro --name $templateDistro --no-launch
-            if ($r.ExitCode -eq 0) { $nameSupported = $true; break }
-
-            # Bail immediately on system-level errors
-            if ($r.Output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-                Write-Host "`nWSL components are not fully installed. Please reboot and re-run this script." -ForegroundColor Red
-                Read-Host "Press Enter to exit"
-                exit
-            }
-
-            # Ghost entry? Clear and retry with --name
-            wsl --unregister $templateDistro 2>$null
-            $r = Invoke-Wsl --install -d $distro --name $templateDistro --no-launch
-            if ($r.ExitCode -eq 0) { $nameSupported = $true; break }
-
-            # Try plain install (no --name) for older WSL — back up first if distro exists
-            Backup-WslDistro $distro
-            wsl --unregister $distro 2>$null
-            $r = Invoke-Wsl --install -d $distro --no-launch
-            if ($r.ExitCode -eq 0) { $plainDistro = $distro; break }
-
-            # Bail on system-level errors
-            if ($r.Output -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-                Write-Host "`nWSL components are not fully installed. Please reboot and re-run this script." -ForegroundColor Red
-                Read-Host "Press Enter to exit"
-                exit
-            }
-
-            # Ghost cleanup + retry plain install (already backed up above)
-            wsl --unregister $distro 2>$null
-            $r = Invoke-Wsl --install -d $distro --no-launch
-            if ($r.ExitCode -eq 0) { $plainDistro = $distro; break }
-
-            Write-Host "'$distro' not available, trying next..." -ForegroundColor Yellow
-        }
-
-        # Method 2: Direct download from Canonical (Windows Server without Store)
-        if (-not $nameSupported -and -not $plainDistro) {
-            Write-Host "Microsoft Store not available. Downloading Ubuntu 24.04 WSL image from Canonical..." -ForegroundColor Yellow
-            $rootfsUrl = "https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-amd64.wsl"
+            $rootfsUrl  = "https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-amd64.wsl"
             $rootfsFile = Join-Path $env:TEMP "ubuntu-noble-wsl-amd64.wsl"
-            Write-Host "Downloading ~375 MB from Canonical (this may take a few minutes)..."
+            Write-Host "Downloading ~375 MB (this may take a few minutes)..."
             curl.exe -L -o $rootfsFile "$rootfsUrl"
             if (-not (Test-Path $rootfsFile) -or (Get-Item $rootfsFile).Length -lt 100MB) {
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
@@ -510,42 +465,16 @@ $DistroName is already installed. To reinstall, run teardown first:
                 Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
                 exit 1
             }
-            $nameSupported = $true
+            $installed = $true
         }
 
-        # Verify WSL is actually operational before proceeding.
-        # wsl --install can succeed (download the distro) even when WSL itself
-        # was just enabled and needs a reboot to become functional.
-        $checkDistro = if ($nameSupported) { $templateDistro } else { $plainDistro }
-        wsl -d $checkDistro -- echo ok 2>$null | Out-Null
+        # Verify WSL is actually operational (catches post-upgrade reboot needed)
+        wsl -d $templateDistro -- echo ok 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
             Write-Host "After rebooting, re-run this setup script to finish." -ForegroundColor Yellow
             Read-Host "Press Enter to exit"
             exit
-        }
-
-        # If --name was not supported, rename the plain distro to the template name
-        # via export+import.
-        if (-not $nameSupported -and $plainDistro) {
-            $fallbackTar = "$env:TEMP\ubuntu-template-fallback.tar"
-            Write-Host "Renaming '$plainDistro' to '$templateDistro'..." -ForegroundColor Gray
-            wsl --export $plainDistro $fallbackTar
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "ERROR: wsl --export failed. A reboot may be required." -ForegroundColor Red
-                Write-Host "After rebooting, re-run this setup script." -ForegroundColor Yellow
-                Read-Host "Press Enter to exit"
-                exit
-            }
-            wsl --unregister $plainDistro 2>$null
-            $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
-            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
-            wsl --import $templateDistro $tplDir $fallbackTar --version 2
-            Remove-Item -Path $fallbackTar -ErrorAction SilentlyContinue
-            if (-not (Test-WslDistro $templateDistro)) {
-                Write-Host "ERROR: Failed to create template distro." -ForegroundColor Red
-                exit 1
-            }
         }
 
         # Install packages into the template.
