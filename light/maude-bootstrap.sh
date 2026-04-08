@@ -98,19 +98,16 @@ done
 cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
 # Maude Sandbox
 
-## Shared Folder
+## File Access Rules
 
-`~/Maude` is a mounted folder shared with the Windows host (via drvfs).
-It is the **only** path the user can access from both Windows and WSL.
+- **Read** from anywhere under `~/Maude` (shared folder, projects, documents).
+- **Write** only to the current project folder: `~/Maude/Projects/<project>/`.
+- If the user explicitly asks you to write elsewhere under `~/Maude`
+  (e.g. `~/Maude/exports/report.pdf`), do so -- but default to the project folder.
 
-Use `~/Maude` for any files the user needs to open or exchange:
-- Documents: `.docx`, `.xlsx`, `.pptx`, `.pdf`
-- Data files, images, exports, downloads
-- Anything the user drags in from Windows or asks you to produce for them
-
-When the user asks you to create a document, spreadsheet, presentation,
-or any file they will open on the Windows side, **always write it to
-`~/Maude`** (or a subfolder of it).
+`~/Maude` is a drvfs mount shared with the Windows host. It is the
+**only** path accessible from both Windows and WSL. Files the user
+drags into the `Maude` folder on Windows are immediately visible here.
 
 ## Projects
 
