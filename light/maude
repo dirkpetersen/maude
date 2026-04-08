@@ -209,6 +209,37 @@ if ! command -v claude >/dev/null 2>&1; then
     esac
 fi
 
+# ── Always overwrite ~/.claude/CLAUDE.md with latest instructions ─────
+refresh_claude_md() {
+    mkdir -p "$HOME/.claude"
+    cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
+# Maude Sandbox
+
+## File Access Rules
+
+- **Read** from `~/Maude` (top-level files) and the current project folder
+  `~/Maude/Projects/<project>/`. Do NOT read from other project folders.
+- **Write** only to the current project folder: `~/Maude/Projects/<project>/`.
+- If the user explicitly asks you to read or write elsewhere, do so --
+  but these are the defaults.
+
+`~/Maude` is a drvfs mount shared with the Windows host. It is the
+**only** path accessible from both Windows and WSL. Files the user
+drags into the `Maude` folder on Windows are immediately visible here.
+
+## Projects
+
+Projects live in `~/Maude/Projects` which is on the shared host mount.
+Your work is automatically preserved on the Windows side even if the
+WSL distro is removed. `~/.claude` is also a symlink to `~/Maude/.claude`.
+
+## Package Installation
+
+Use `mom install -y <package>` to install system packages -- no sudo needed.
+Always use `-y` for unattended installs.
+CLAUDEEOF
+}
+
 # ── Auto-update Claude Code once a week ──────────────────────────────
 claude_maybe_update() {
     local stamp="$HOME/.claude/.last-update-check"
@@ -231,6 +262,7 @@ if [[ -d "$PROJECT_PATH" ]]; then
     # Existing project
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     claude_maybe_update
+    refresh_claude_md
     cd "$PROJECT_PATH"
     echo ""
     claude opus-1m --continue || exec claude opus-1m
@@ -242,6 +274,7 @@ else
 
     git -C "$PROJECT_PATH" init --quiet
     echo -e "${GREEN}  Initialized git repo${NC}"
+    refresh_claude_md
     echo ""
     cd "$PROJECT_PATH" && exec claude opus-1m
 fi
