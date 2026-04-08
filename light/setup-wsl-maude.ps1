@@ -399,21 +399,11 @@ $DistroName is already installed. To reinstall, run teardown first:
     if (-not (Test-WslDistro $templateDistro)) {
         Write-Host "Installing '$templateDistro' (first time only)..."
 
-        # Detect WSL version to determine --name support.
-        # --name was introduced in WSL 2.4.4 (pre-release), stable in 2.5.7.
-        $hasNameFlag = $false
-        $wslVer = (wsl --version 2>&1) -join "`n"
-        if ($wslVer -match 'WSL.*?:\s*(\d+)\.(\d+)\.(\d+)') {
-            $major = [int]$Matches[1]; $minor = [int]$Matches[2]; $patch = [int]$Matches[3]
-            # 2.4.4+ has --name support
-            if ($major -gt 2 -or ($major -eq 2 -and $minor -gt 4) -or
-                ($major -eq 2 -and $minor -eq 4 -and $patch -ge 4)) {
-                $hasNameFlag = $true
-            }
-            Write-Host "WSL version: $major.$minor.$patch (--name $(if ($hasNameFlag) {'supported'} else {'not supported'}))" -ForegroundColor Gray
-        } else {
-            Write-Host "Could not detect WSL version; assuming --name not supported." -ForegroundColor Gray
-        }
+        # Detect --name support by parsing wsl --help output.
+        # wsl.exe outputs UTF-16 with spaces between chars; strip nulls before matching.
+        $wslHelp = (wsl --help 2>&1) -replace "`0", "" -join "`n"
+        $hasNameFlag = $wslHelp -match '--name'
+        Write-Host "WSL --name flag: $(if ($hasNameFlag) {'supported'} else {'not supported'})" -ForegroundColor Gray
 
         $installed = $false
 
