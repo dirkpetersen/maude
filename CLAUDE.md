@@ -62,6 +62,25 @@ make lint           # Bash -n syntax check only (no execution)
 bash tests/test-path-setup.sh   # Run a single test file
 ```
 
+### Writing Tests
+
+Tests live in `tests/test-*.sh`. Source `tests/lib.sh` for shared helpers:
+
+```bash
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+suite_header "My feature"
+assert_eq      "description" "expected" "$actual"
+assert_contains "description" "needle" "$haystack"
+assert_file_exists "description" "/path/to/file"
+assert_executable  "description" "/path/to/bin"
+assert_exit_zero    "description" some_command --args
+assert_exit_nonzero "description" some_command --args
+skip "reason"
+suite_summary  # prints results; exits non-zero if any FAIL
+```
+
+**Gotcha**: use `PASS=$((PASS+1))` not `((PASS++))` — the latter exits non-zero when the value is 0 under `set -e`.
+
 ### Building
 
 ```bash
@@ -120,7 +139,7 @@ The `light/` directory contains the WSL2 sandbox implementation:
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen, Claude Code |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config |
-| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code |
+| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`) |
 
 Key implementation details:
 - Files are piped into WSL via `Get-Content -Raw | wsl ... bash -c "cat > /tmp/..."` (automount is disabled, so wslpath/cp don't work)
@@ -128,6 +147,8 @@ Key implementation details:
 - Windows Terminal auto-generates profiles with `source=Microsoft.WSL` -- can't delete them, must hide with pre-hidden stubs
 - WT profile cleanup runs BEFORE self-elevation (elevated process has different `$env:LOCALAPPDATA`)
 - `~/.claude` is symlinked to `~/Maude/.claude` so settings persist on the host mount
+- **Security model**: automount disabled + no generic sudo = AI agent can only access the shared `Maude` folder and installed tools; Claude Code runs in yolo mode (safe inside sandbox)
+- The `maude` CLI auto-updates Claude Code weekly (stamp file: `~/.claude/.last-update-check`)
 
 ## PATH Convention
 

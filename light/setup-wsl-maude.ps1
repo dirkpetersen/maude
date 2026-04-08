@@ -432,6 +432,24 @@ $DistroName is already installed. To reinstall, run teardown first:
             return @{ ExitCode = $proc.ExitCode; Output = "$out" }
         }
 
+        # Helper: back up an existing WSL distro before unregistering it.
+        # Exports to ~\Documents\<name>-backup-<timestamp>.tar so the user can restore.
+        function Backup-WslDistro([string]$name) {
+            if (-not (Test-WslDistro $name)) { return }
+            $backupDir = [Environment]::GetFolderPath('MyDocuments')
+            $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+            $backupFile = Join-Path $backupDir "$name-backup-$ts.tar"
+            Write-Host "Backing up existing '$name' distro to $backupFile ..." -ForegroundColor Yellow
+            wsl --export $name $backupFile 2>$null
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $backupFile)) {
+                $sizeMB = [math]::Round((Get-Item $backupFile).Length / 1MB, 1)
+                Write-Host "Backup saved ($sizeMB MB). You can restore later with:" -ForegroundColor Yellow
+                Write-Host "  wsl --import $name C:\$name `"$backupFile`" --version 2" -ForegroundColor Gray
+            } else {
+                Write-Host "WARNING: Backup failed — proceeding anyway." -ForegroundColor Red
+            }
+        }
+
         foreach ($distro in $candidates) {
             Write-Host "Trying '$distro'..." -ForegroundColor Gray
 
@@ -451,7 +469,8 @@ $DistroName is already installed. To reinstall, run teardown first:
             $r = Invoke-Wsl --install -d $distro --name $templateDistro --no-launch
             if ($r.ExitCode -eq 0) { $nameSupported = $true; break }
 
-            # Try plain install (no --name) for older WSL
+            # Try plain install (no --name) for older WSL — back up first if distro exists
+            Backup-WslDistro $distro
             wsl --unregister $distro 2>$null
             $r = Invoke-Wsl --install -d $distro --no-launch
             if ($r.ExitCode -eq 0) { $plainDistro = $distro; break }
@@ -463,7 +482,7 @@ $DistroName is already installed. To reinstall, run teardown first:
                 exit
             }
 
-            # Ghost cleanup + retry plain install
+            # Ghost cleanup + retry plain install (already backed up above)
             wsl --unregister $distro 2>$null
             $r = Invoke-Wsl --install -d $distro --no-launch
             if ($r.ExitCode -eq 0) { $plainDistro = $distro; break }
