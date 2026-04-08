@@ -452,10 +452,19 @@ $DistroName is already installed. To reinstall, run teardown first:
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
-            # Clean up any ghost entries and release locks from failed Store installs
+            # Clean up ghost entries, release locks, and remove stale directory
+            # from failed Store installs that leave ext4.vhdx locked
             wsl --unregister $templateDistro 2>$null
             wsl --shutdown 2>$null
+            Start-Sleep -Seconds 3
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
+            if (Test-Path $tplDir) {
+                Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                if (Test-Path $tplDir) {
+                    Start-Sleep -Seconds 3
+                    Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
             Write-Host "Importing as '$templateDistro'..."
             wsl --import $templateDistro $tplDir $rootfsFile --version 2
