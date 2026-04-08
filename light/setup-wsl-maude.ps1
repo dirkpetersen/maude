@@ -419,9 +419,15 @@ $DistroName is already installed. To reinstall, run teardown first:
 
             foreach ($distro in $candidates) {
                 Write-Host "Trying Store install: '$distro' as '$templateDistro'..." -ForegroundColor Gray
-                wsl --install -d $distro --name $templateDistro --no-launch 2>$null
+                $out = (wsl --install -d $distro --name $templateDistro --no-launch 2>&1) -replace "`0","" -join "`n"
                 if ($LASTEXITCODE -eq 0) { $installed = $true; break }
-                # Ghost entry? Clear and retry
+                # Bail immediately on system-level errors (don't retry other distros)
+                if ($out -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+                    Write-Host "Hyper-V/VM Platform not available, skipping Store install." -ForegroundColor Yellow
+                    wsl --unregister $templateDistro 2>$null
+                    break
+                }
+                # Ghost entry? Clear and retry once
                 wsl --unregister $templateDistro 2>$null
                 wsl --install -d $distro --name $templateDistro --no-launch 2>$null
                 if ($LASTEXITCODE -eq 0) { $installed = $true; break }
@@ -446,6 +452,9 @@ $DistroName is already installed. To reinstall, run teardown first:
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
+            # Clean up any ghost entries and release locks from failed Store installs
+            wsl --unregister $templateDistro 2>$null
+            wsl --shutdown 2>$null
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
             Write-Host "Importing as '$templateDistro'..."
