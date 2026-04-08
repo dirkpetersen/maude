@@ -209,10 +209,13 @@ if ! command -v claude >/dev/null 2>&1; then
     esac
 fi
 
-# ── Always overwrite ~/.claude/CLAUDE.md with latest instructions ─────
+# ── Refresh Maude instructions ────────────────────────────────────────
+# MAUDE.md is always overwritten with the latest sandbox instructions.
+# CLAUDE.md is created only if missing — users can add their own content
+# but must keep the MAUDE.md include line.
 refresh_claude_md() {
     mkdir -p "$HOME/.claude"
-    cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
+    cat > "$HOME/.claude/MAUDE.md" << 'MAUDEEOF'
 # Maude Sandbox
 
 ## File Access Rules
@@ -237,7 +240,17 @@ WSL distro is removed. `~/.claude` is also a symlink to `~/Maude/.claude`.
 
 Use `mom install -y <package>` to install system packages -- no sudo needed.
 Always use `-y` for unattended installs.
+MAUDEEOF
+    if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
+        cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
+<!-- DO NOT remove the line below — it loads Maude sandbox rules -->
+@MAUDE.md
+
+# User Instructions
+
+Add your own instructions here. This file persists across reinstalls.
 CLAUDEEOF
+    fi
 }
 
 # ── Auto-update Claude Code once a week ──────────────────────────────

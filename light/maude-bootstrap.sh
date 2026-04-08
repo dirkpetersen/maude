@@ -95,7 +95,9 @@ for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator 
 done
 
 # ── Claude Code: project instructions ────────────────────────────────
-cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
+# MAUDE.md is always overwritten with latest sandbox rules.
+# CLAUDE.md is only created if missing (user may have customized it).
+cat > "$HOME/.claude/MAUDE.md" << 'MAUDEEOF'
 # Maude Sandbox
 
 ## File Access Rules
@@ -118,9 +120,21 @@ WSL distro is removed. `~/.claude` is also a symlink to `~/Maude/.claude`.
 
 ## Package Installation
 
-Use `mom install -y <package>` to install system packages — no sudo needed.
+Use `mom install -y <package>` to install system packages -- no sudo needed.
 Always use `-y` for unattended installs.
+MAUDEEOF
+echo "Claude Code: MAUDE.md created."
+
+if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
+    cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
+<!-- DO NOT remove the line below -- it loads Maude sandbox rules -->
+@MAUDE.md
+
+# User Instructions
+
+Add your own instructions here. This file persists across reinstalls.
 CLAUDEEOF
-echo "Claude Code: CLAUDE.md created."
+    echo "Claude Code: CLAUDE.md created."
+fi
 
 echo "=== User bootstrap complete ==="
