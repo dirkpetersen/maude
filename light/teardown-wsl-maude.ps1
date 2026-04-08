@@ -71,8 +71,6 @@ function Remove-WTMaudeProfiles {
         $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
         $removed = $before - $wtJson.profiles.list.Count
         Write-Host "Removed $removed profile(s) from Windows Terminal." -ForegroundColor Gray
-    } else {
-        Write-Host "No Maude profiles found in Windows Terminal." -ForegroundColor Gray
     }
 }
 
@@ -132,12 +130,24 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "$DistroName is not installed. Nothing to unregister." -ForegroundColor Gray
 }
 
+# Shut down WSL to release file locks (ext4.vhdx) before removing the directory
+wsl --shutdown 2>$null
+
 # ── Step 3: Remove the install directory ──
 
 Write-Host "`n[3/4] Removing install directory..." -ForegroundColor Green
 if (Test-Path $InstallDir) {
-    Remove-Item -Path $InstallDir -Recurse -Force
-    Write-Host "Removed $InstallDir" -ForegroundColor Gray
+    Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $InstallDir) {
+        # Retry after a brief pause (WSL may need a moment to release locks)
+        Start-Sleep -Seconds 2
+        Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $InstallDir) {
+        Write-Host "WARNING: Could not fully remove $InstallDir (files may be locked)." -ForegroundColor Yellow
+    } else {
+        Write-Host "Removed $InstallDir" -ForegroundColor Gray
+    }
 } else {
     Write-Host "$InstallDir does not exist. Nothing to remove." -ForegroundColor Gray
 }
