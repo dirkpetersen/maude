@@ -42,31 +42,41 @@ function Test-WslDistro([string]$name) {
 # ── Step 1: Remove Windows Terminal profile + desktop shortcut ───  # runs as current user
 
 Write-Host "`n[1/4] Cleaning up Windows Terminal profile..." -ForegroundColor Green
-# Locate WT settings (supports Store, Preview, and non-Store installs)
-$wtCandidates = @(
-    Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
-    Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
-    Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\settings.json"
-)
-$wtSettingsPath = $wtCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($wtSettingsPath) {
-    $wtJson   = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
-    $before   = $wtJson.profiles.list.Count
+
+# WT cleanup helper — removes Maude + template stubs from settings.json.
+# Called both before and after elevation (elevated process may have a
+# different $env:LOCALAPPDATA, so we need both passes).
+function Remove-WTMaudeProfiles {
+    $wtCandidates = @(
+        Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+        Join-Path $env:LOCALAPPDATA "Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
+        Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\settings.json"
+    )
+    $wtSettingsPath = $wtCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $wtSettingsPath) {
+        Write-Host "Windows Terminal settings not found, skipping." -ForegroundColor Gray
+        return
+    }
+    $wtJson  = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
+    $before  = $wtJson.profiles.list.Count
+    $removeNames = @($DistroName)
+    if ($IncludeTemplate) { $removeNames += "Ubuntu-24.04-Template" }
     $wtJson.profiles.list = @(
         $wtJson.profiles.list | Where-Object {
             $nm = if ($_.PSObject.Properties['name']) { $_.name } else { '' }
-            $nm -ne $DistroName
+            $nm -notin $removeNames
         }
     )
     if ($wtJson.profiles.list.Count -lt $before) {
         $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
-        Write-Host "$DistroName profile removed from Windows Terminal." -ForegroundColor Gray
+        $removed = $before - $wtJson.profiles.list.Count
+        Write-Host "Removed $removed profile(s) from Windows Terminal." -ForegroundColor Gray
     } else {
-        Write-Host "No $DistroName profile found in Windows Terminal." -ForegroundColor Gray
+        Write-Host "No Maude profiles found in Windows Terminal." -ForegroundColor Gray
     }
-} else {
-    Write-Host "Windows Terminal settings not found, skipping." -ForegroundColor Gray
 }
+
+Remove-WTMaudeProfiles
 
 # Check both local and OneDrive desktops for shortcut
 $desktopPaths = @([Environment]::GetFolderPath('Desktop'))
@@ -107,6 +117,9 @@ if (-not $isAdmin) {
 }
 
 # ── Below here runs elevated ──
+# Re-run WT cleanup in the elevated context (catches leftover profiles
+# if a previous teardown was interrupted after elevation).
+Remove-WTMaudeProfiles
 
 # ── Step 2: Unregister the Maude WSL distro ──                    # REQUIRES ADMIN
 
