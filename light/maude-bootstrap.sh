@@ -100,10 +100,11 @@ cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
 
 ## File Access Rules
 
-- **Read** from anywhere under `~/Maude` (shared folder, projects, documents).
+- **Read** from `~/Maude` (top-level files) and the current project folder
+  `~/Maude/Projects/<project>/`. Do NOT read from other project folders.
 - **Write** only to the current project folder: `~/Maude/Projects/<project>/`.
-- If the user explicitly asks you to write elsewhere under `~/Maude`
-  (e.g. `~/Maude/exports/report.pdf`), do so -- but default to the project folder.
+- If the user explicitly asks you to read or write elsewhere, do so --
+  but these are the defaults.
 
 `~/Maude` is a drvfs mount shared with the Windows host. It is the
 **only** path accessible from both Windows and WSL. Files the user
