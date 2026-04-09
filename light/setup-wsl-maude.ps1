@@ -424,7 +424,12 @@ $DistroName is already installed. To reinstall, run teardown first:
                 # Bail immediately on system-level errors (don't retry other distros)
                 if ($out -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
                     Write-Host "Hyper-V/VM Platform not available, skipping Store install." -ForegroundColor Yellow
+                    # Clean up partial install: unregister, shutdown, restart service
                     wsl --unregister $templateDistro 2>$null
+                    wsl --shutdown 2>$null
+                    Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 2
+                    Start-Service LxssManager -ErrorAction SilentlyContinue
                     break
                 }
                 # Ghost entry? Clear and retry once
@@ -452,17 +457,26 @@ $DistroName is already installed. To reinstall, run teardown first:
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
-            # Clean up ghost entries, release locks, and remove stale directory
-            # from failed Store installs that leave ext4.vhdx locked
+            # Clean up ghost entries and force-release all WSL locks.
+            # wsl --shutdown alone may not release locks from failed installs;
+            # stopping the LxssManager service ensures everything is released.
             wsl --unregister $templateDistro 2>$null
             wsl --shutdown 2>$null
-            Start-Sleep -Seconds 3
+            Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            Start-Service LxssManager -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            # Remove stale directory from failed Store installs (ext4.vhdx)
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             if (Test-Path $tplDir) {
                 Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
                 if (Test-Path $tplDir) {
+                    Write-Host "Retrying directory cleanup..." -ForegroundColor Gray
                     Start-Sleep -Seconds 3
                     Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                if (Test-Path $tplDir) {
+                    Write-Host "WARNING: Could not remove $tplDir -- files may be locked." -ForegroundColor Yellow
                 }
             }
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
