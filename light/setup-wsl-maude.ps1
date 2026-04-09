@@ -457,36 +457,43 @@ $DistroName is already installed. To reinstall, run teardown first:
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
-            # Clean up ghost entries and force-release all WSL locks.
-            # wsl --shutdown alone may not release locks from failed installs;
-            # stopping the LxssManager service ensures everything is released.
+            # Force-release all WSL locks from failed Store installs.
             wsl --unregister $templateDistro 2>$null
             wsl --shutdown 2>$null
             Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
-            Start-Service LxssManager -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 3
             # Remove stale directory from failed Store installs (ext4.vhdx)
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             if (Test-Path $tplDir) {
                 Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Start-Service LxssManager -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+
+            # Try WSL2 first; fall back to WSL1 if Hyper-V/VM Platform unavailable.
+            # WSL1 runs without virtualization (works on VMs without nested virt).
+            $wslVersion = 2
+            Write-Host "Importing as '$templateDistro' (WSL $wslVersion)..."
+            wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "WSL2 import failed. Trying WSL1 (no virtualization needed)..." -ForegroundColor Yellow
+                wsl --unregister $templateDistro 2>$null
                 if (Test-Path $tplDir) {
-                    Write-Host "Retrying directory cleanup..." -ForegroundColor Gray
-                    Start-Sleep -Seconds 3
                     Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
                 }
-                if (Test-Path $tplDir) {
-                    Write-Host "WARNING: Could not remove $tplDir -- files may be locked." -ForegroundColor Yellow
-                }
+                New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+                $wslVersion = 1
+                wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
             }
-            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
-            Write-Host "Importing as '$templateDistro'..."
-            wsl --import $templateDistro $tplDir $rootfsFile --version 2
             Remove-Item -Path $rootfsFile -ErrorAction SilentlyContinue
             if (-not (Test-WslDistro $templateDistro)) {
                 Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
+                Write-Host "If on a VM, ensure nested virtualization is enabled for WSL2," -ForegroundColor Yellow
+                Write-Host "or check that WSL1 is supported on this system." -ForegroundColor Yellow
                 exit 1
             }
+            Write-Host "'$templateDistro' imported as WSL$wslVersion." -ForegroundColor Gray
             $installed = $true
         }
 
