@@ -251,7 +251,7 @@ if [[ -f "/home/$USERNAME/.bashrc" ]]; then
 # Override built-in help: bare "help" shows maude help for beginners
 help() {
     if [[ $# -eq 0 ]]; then
-        maude help
+        echo "Please type 'maude help <ENTER>' for help"
     else
         builtin help "$@"
     fi
