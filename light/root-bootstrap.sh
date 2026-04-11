@@ -202,6 +202,8 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     printf "\n"
     printf "  ${B}Agentic coding sandbox${N}  -  Ubuntu 24.04 LTS\n"
     printf "\n"
+    printf "  Always type the command '${B}maude${N}' followed by more words as the instruction:\n"
+    printf "\n"
     printf "  ${C}maude project-name${N}   Create or open a coding project\n"
     printf "  ${C}maude list${N}           Show your projects\n"
     printf "  ${C}maude delete name${N}    Delete a project (moves to .deleted/)\n"
@@ -210,7 +212,9 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     printf "\n"
     printf "  ${Y}mom install <pkg>${N}   Install system packages (no sudo needed)\n"
     printf "\n"
-    printf "  ${B}Screen split tip:${N} Alt & Shift & ${B}+${N} (vertical) | Alt & Shift & ${B}-${N} (horizontal)\n"
+    printf "  ${B}Tips:${N}\n"
+    printf "    Screen split: Alt+Shift+Plus (vertical) | Alt+Shift+Minus (horizontal)\n"
+    printf "    Paste image:  ${B}Alt+V${N}  (inside Claude Code)\n"
     printf "\n"
     if [[ ! -f "$HOME/.aws/credentials" ]] && [[ ! -f "$HOME/.azure/clauderc" ]]; then
         printf "  ${Y}LLM service credentials not yet set up.${N}\n"
@@ -237,6 +241,22 @@ if [[ -f "/home/$USERNAME/.bashrc" ]]; then
 MAUDE_PS1=1
 PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 PS1EOF
+fi
+
+# ── help() → maude help when called with no arguments ─────────────────
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
+    grep -q 'maude help' "/home/$USERNAME/.bashrc" 2>/dev/null || \
+        cat >> "/home/$USERNAME/.bashrc" << 'HELPEOF'
+
+# Override built-in help: bare "help" shows maude help for beginners
+help() {
+    if [[ $# -eq 0 ]]; then
+        maude help
+    else
+        builtin help "$@"
+    fi
+}
+HELPEOF
 fi
 
 # ── Tab completion for maude command ─────────────────────────────────

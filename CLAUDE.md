@@ -39,10 +39,12 @@ Windows host
     +-- C:\Users\<user>\OneDrive\Documents\Maude\   <- shared folder (host side)
     |       +-- Projects/       <- coding projects (directly used by WSL)
     |       +-- .claude/        <- Claude Code config (symlinked from WSL)
+    |       +-- .kanna/         <- kanna web UI data (symlinked from WSL)
     |
     +-- WSL2: Maude (Ubuntu 24.04)
           +-- ~/Maude/          <- drvfs mount of shared folder
           +-- ~/.claude         -> symlink to ~/Maude/.claude
+          +-- ~/.kanna          -> symlink to ~/Maude/.kanna
           +-- ~/bin/            <- user scripts (front of PATH)
           +-- ~/.local/bin/     <- tool binaries (end of PATH)
 
@@ -149,6 +151,9 @@ Key implementation details:
 - `~/.claude` is symlinked to `~/Maude/.claude` so settings persist on the host mount
 - **Security model**: automount disabled + no generic sudo = AI agent can only access the shared `Maude` folder and installed tools; Claude Code runs in yolo mode (safe inside sandbox)
 - The `maude` CLI auto-updates Claude Code weekly (stamp file: `~/.claude/.last-update-check`)
+- **Sandbox instructions split**: `~/.claude/MAUDE.md` is always overwritten on each `maude` launch (sandbox rules, not user-editable); `~/.claude/CLAUDE.md` is created once if missing and user-owned. `CLAUDE.md` includes sandbox rules via `@MAUDE.md`
+- `maude delete <name>` is a soft-delete — moves to `Projects/.deleted/`, not permanent
+- The `maude` CLI launches Claude Code with `claude opus-1m` (uses the latest Opus model with extended context)
 
 ## PATH Convention
 
@@ -157,6 +162,7 @@ All users must have `~/bin` at the **front** of PATH and `~/.local/bin` also pre
 ## Image Build Strategy (Full Appliance)
 
 - **Base**: Ubuntu 26.04 (full appliance) / Ubuntu 24.04 (Maude Light)
+- **Package list**: `packages/ubuntu-packages.yaml` defines all packages baked into the image (also `packages/rhel-packages.yaml` for RPM targets)
 - **Package installation during build**: `apt` directly (running as root), not mom
 - **mom**: installed in the image for post-boot user package management
 - **appmotel + web-term**: pulled from their GitHub releases/repos during image build; no submodules
