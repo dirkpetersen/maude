@@ -6,7 +6,11 @@ Maude creates a single `Maude` subfolder inside OneDrive and shares **only** tha
 
 Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder on OneDrive, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
 
-<img width="582" height="386" alt="image" src="https://github.com/user-attachments/assets/03c212a9-d248-4196-ace7-118a44acba09" />
+Use a TUI
+<img width="981" height="604" alt="image" src="https://github.com/user-attachments/assets/f223d378-2471-4c70-8145-798e2bcd3439" />
+
+or a simple CLI
+<img width="810" height="463" alt="image" src="https://github.com/user-attachments/assets/4c8fe03d-56c8-4ce5-b373-9ff13e74c2c4" />
 
 ## What you get
 
