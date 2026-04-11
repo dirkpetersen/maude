@@ -272,6 +272,18 @@ help() {
 HELPEOF
 fi
 
+# ── menu() → launches maude tui ──────────────────────────────────────
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
+    grep -q 'maude tui' "/home/$USERNAME/.bashrc" 2>/dev/null || \
+        cat >> "/home/$USERNAME/.bashrc" << 'MENUEOF'
+
+# Shortcut: typing "menu" launches the Maude TUI
+menu() {
+    maude tui
+}
+MENUEOF
+fi
+
 # ── Tab completion for maude command ─────────────────────────────────
 if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -q '_maude_complete' "/home/$USERNAME/.bashrc" 2>/dev/null || \

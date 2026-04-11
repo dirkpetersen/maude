@@ -28,6 +28,7 @@ show_help() {
     echo -e "  ${CYAN}maude list${NC}                Show all available projects"
     echo -e "  ${CYAN}maude delete <name>${NC}       Delete a project (moves to .deleted/)"
     echo -e "  ${CYAN}maude web${NC}                 Launch web UI (kanna, experimental)"
+    echo -e "  ${CYAN}maude tui${NC}                 Interactive project launcher (experimental)"
     echo -e "  ${CYAN}maude help${NC}                Show this help message"
     echo ""
     echo "Examples:"
