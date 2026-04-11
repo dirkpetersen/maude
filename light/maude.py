@@ -198,13 +198,16 @@ class MaudeApp(App):
     }
 
     /* Modal: confirm delete */
+    ConfirmDeleteScreen {
+        align: center middle;
+    }
+
     #confirm-box {
         padding: 2 4;
         width: 60;
         height: auto;
         border: solid $error;
         background: $surface;
-        margin: 4 auto;
     }
 
     #confirm-title {
@@ -228,13 +231,16 @@ class MaudeApp(App):
     }
 
     /* Modal: new project */
+    NewProjectScreen {
+        align: center middle;
+    }
+
     #new-box {
         padding: 2 4;
         width: 60;
         height: auto;
         border: solid $success;
         background: $surface;
-        margin: 4 auto;
     }
 
     #new-title {
