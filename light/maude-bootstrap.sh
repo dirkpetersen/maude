@@ -21,7 +21,7 @@ set -e
 
 # ── Install textual (Maude TUI dependency) ───────────────────────────
 echo "Installing textual..."
-pip install --quiet textual
+pip install --quiet --break-system-packages textual
 
 # ── Install Bun + kanna-code ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then

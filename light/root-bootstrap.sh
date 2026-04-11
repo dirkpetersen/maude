@@ -239,6 +239,12 @@ if [[ -f "/home/$USERNAME/.bashrc" ]]; then
         printf '\n# Maude welcome\n. /etc/profile.d/maude-welcome.sh\n' >> "/home/$USERNAME/.bashrc"
 fi
 
+# ── Allow pip install without venv (safe inside sandbox) ──────────────
+if [[ -f "/home/$USERNAME/.bashrc" ]]; then
+    grep -q 'PIP_BREAK_SYSTEM_PACKAGES' "/home/$USERNAME/.bashrc" 2>/dev/null || \
+        printf '\n# Maude sandbox: allow pip install without venv\nexport PIP_BREAK_SYSTEM_PACKAGES=1\n' >> "/home/$USERNAME/.bashrc"
+fi
+
 # ── PS1: replace hostname with underscore ─────────────────────────────
 if [[ -f "/home/$USERNAME/.bashrc" ]]; then
     grep -q 'MAUDE_PS1' "/home/$USERNAME/.bashrc" 2>/dev/null || \
