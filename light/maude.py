@@ -143,18 +143,20 @@ class MaudeApp(App):
     """Maude TUI — project launcher for Claude Code."""
 
     CSS = """
+    /* ── Claude Code inspired: dusty rose on dark aubergine ── */
+
     Screen {
-        background: #2d2137;
+        background: #300a24;
     }
 
     Header {
-        background: #362a48;
-        color: #c4aff0;
+        background: #3a1228;
+        color: #d4a0a0;
     }
 
     Footer {
-        background: #362a48;
-        color: #9080b8;
+        background: #3a1228;
+        color: #a08080;
     }
 
     #layout {
@@ -164,8 +166,8 @@ class MaudeApp(App):
     #sidebar {
         width: 40;
         padding: 1 1;
-        background: #322740;
-        border-right: solid #5a4e78;
+        background: #381028;
+        border-right: solid #b87878;
     }
 
     #logo {
@@ -176,13 +178,13 @@ class MaudeApp(App):
     }
 
     #divider {
-        color: #5a4e78;
+        color: #7a5060;
         height: 1;
         margin-bottom: 1;
     }
 
     #autostart-label {
-        color: #9080b8;
+        color: #c09898;
         margin-top: 1;
         margin-bottom: 0;
     }
@@ -196,25 +198,25 @@ class MaudeApp(App):
     }
 
     #section-title {
-        color: #c4aff0;
+        color: #d4a0a0;
         text-style: bold;
         margin-bottom: 1;
     }
 
     #projects-table {
         height: 1fr;
-        border: solid #5a4e78;
-        background: #2d2137;
+        border: solid #b87878;
+        background: #300a24;
     }
 
     DataTable > .datatable--header {
-        background: #3d3050;
-        color: #c4aff0;
+        background: #481830;
+        color: #d4a0a0;
     }
 
     DataTable > .datatable--cursor {
-        background: #483868;
-        color: #e8d8ff;
+        background: #582040;
+        color: #f0d8d8;
     }
 
     #bottom-bar {
@@ -222,8 +224,8 @@ class MaudeApp(App):
         min-height: 3;
         padding: 1 2;
         align: left middle;
-        border-top: solid #5a4e78;
-        background: #322740;
+        border-top: solid #b87878;
+        background: #381028;
         margin-bottom: 1;
     }
 
@@ -232,10 +234,10 @@ class MaudeApp(App):
         min-width: 14;
     }
 
-    #btn-open { background: #3d6b52; color: #c8f0d8; }
-    #btn-new  { background: #4a4078; color: #c8d4f8; }
-    #btn-web  { background: #484060; color: #c0b8e0; }
-    #btn-cli  { background: #3e3652; color: #a098c0; }
+    #btn-open { background: #4a3040; color: #f0c8c8; }
+    #btn-new  { background: #4a3040; color: #d0b8b8; }
+    #btn-web  { background: #402838; color: #c0a8a8; }
+    #btn-cli  { background: #382030; color: #b09898; }
 
     /* Modal: confirm delete */
     ConfirmDeleteScreen {
@@ -246,18 +248,18 @@ class MaudeApp(App):
         padding: 2 4;
         width: 60;
         height: auto;
-        border: solid #8a4a5a;
-        background: #352030;
+        border: solid #c07070;
+        background: #3a1020;
     }
 
     #confirm-title {
         text-style: bold;
-        color: #e08090;
+        color: #e09090;
         margin-bottom: 1;
     }
 
     #confirm-sub {
-        color: #9080b8;
+        color: #c09898;
         margin-bottom: 2;
     }
 
@@ -279,8 +281,8 @@ class MaudeApp(App):
         padding: 2 4;
         width: 60;
         height: auto;
-        border: solid #4a7a5a;
-        background: #2a2535;
+        border: solid #b87878;
+        background: #3a1020;
     }
 
     #new-title {
@@ -290,7 +292,7 @@ class MaudeApp(App):
     }
 
     #new-sub {
-        color: #9080b8;
+        color: #c09898;
         margin-bottom: 1;
     }
 
