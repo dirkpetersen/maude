@@ -44,6 +44,25 @@ LOGO = (
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+def check_credentials() -> bool:
+    """Return True if Claude Code credentials are configured."""
+    # Azure AI Foundry
+    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
+        return True
+    # Anthropic direct
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    # AWS Bedrock
+    aws_creds = Path.home() / ".aws" / "credentials"
+    if aws_creds.exists() and aws_creds.stat().st_size > 0:
+        return True
+    # Azure clauderc
+    azure_rc = Path.home() / ".azure" / "clauderc"
+    if azure_rc.exists() and azure_rc.stat().st_size > 0:
+        return True
+    return False
+
+
 def list_projects() -> list[dict]:
     """Return sorted list of project dicts with name and mtime."""
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -370,7 +389,18 @@ class MaudeApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        if not check_credentials():
+            self.notify(
+                "No LLM credentials found.\n"
+                "Set ANTHROPIC_API_KEY, ANTHROPIC_FOUNDRY_API_KEY,\n"
+                "~/.aws/credentials, or ~/.azure/clauderc first.",
+                severity="error",
+                timeout=8,
+            )
+            self.set_timer(3, lambda: self.exit(1))
+            return
         self._refresh_table()
+        self.query_one("#projects-table", DataTable).focus()
 
     def _refresh_table(self) -> None:
         table = self.query_one("#projects-table", DataTable)
