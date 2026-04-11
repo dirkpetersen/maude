@@ -143,27 +143,18 @@ class MaudeApp(App):
     """Maude TUI — project launcher for Claude Code."""
 
     CSS = """
-    /* ── Palette (dark purple terminal friendly) ── */
-    $bg:         #1a1625;
-    $sidebar-bg: #211b30;
-    $border:     #5a4e78;
-    $logo-green: #72c09a;
-    $label-dim:  #9080b8;
-    $title:      #c4aff0;
-    $row-sel:    #2e2544;
-
     Screen {
-        background: $bg;
+        background: #2d2137;
     }
 
     Header {
-        background: #251e38;
-        color: $title;
+        background: #362a48;
+        color: #c4aff0;
     }
 
     Footer {
-        background: #251e38;
-        color: $label-dim;
+        background: #362a48;
+        color: #9080b8;
     }
 
     #layout {
@@ -171,27 +162,27 @@ class MaudeApp(App):
     }
 
     #sidebar {
-        width: 36;
-        padding: 1 2;
-        background: $sidebar-bg;
-        border-right: solid $border;
+        width: 40;
+        padding: 1 1;
+        background: #322740;
+        border-right: solid #5a4e78;
     }
 
     #logo {
         height: 5;
-        color: $logo-green;
+        color: #72c09a;
         text-style: bold;
         margin-bottom: 1;
     }
 
     #divider {
-        color: $border;
+        color: #5a4e78;
         height: 1;
         margin-bottom: 1;
     }
 
     #autostart-label {
-        color: $label-dim;
+        color: #9080b8;
         margin-top: 1;
         margin-bottom: 0;
     }
@@ -202,51 +193,53 @@ class MaudeApp(App):
 
     #main {
         padding: 1 2;
-        background: $bg;
     }
 
     #section-title {
-        color: $title;
+        color: #c4aff0;
         text-style: bold;
         margin-bottom: 1;
     }
 
     #projects-table {
         height: 1fr;
-        border: solid $border;
+        border: solid #5a4e78;
+        background: #2d2137;
     }
 
     DataTable > .datatable--header {
-        background: #2a2040;
-        color: $title;
+        background: #3d3050;
+        color: #c4aff0;
     }
 
     DataTable > .datatable--cursor {
-        background: $row-sel;
+        background: #483868;
         color: #e8d8ff;
     }
 
     #bottom-bar {
-        height: 5;
+        height: auto;
+        min-height: 3;
         padding: 1 2;
         align: left middle;
-        border-top: solid $border;
-        background: $sidebar-bg;
+        border-top: solid #5a4e78;
+        background: #322740;
+        margin-bottom: 1;
     }
 
     #bottom-bar Button {
         margin-right: 1;
+        min-width: 14;
     }
 
-    #btn-open { background: #3d6b52; color: #c8f0d8; border: tall #4e8a69; }
-    #btn-new  { background: #3d4e7a; color: #c8d4f8; border: tall #5060a0; }
-    #btn-web  { background: #3a3550; color: #c0b8e0; border: tall #504870; }
-    #btn-cli  { background: #2e2a40; color: #a098c0; border: tall #443e60; }
+    #btn-open { background: #3d6b52; color: #c8f0d8; }
+    #btn-new  { background: #4a4078; color: #c8d4f8; }
+    #btn-web  { background: #484060; color: #c0b8e0; }
+    #btn-cli  { background: #3e3652; color: #a098c0; }
 
     /* Modal: confirm delete */
     ConfirmDeleteScreen {
         align: center middle;
-        background: rgba(0,0,0,0.6);
     }
 
     #confirm-box {
@@ -254,7 +247,7 @@ class MaudeApp(App):
         width: 60;
         height: auto;
         border: solid #8a4a5a;
-        background: #251830;
+        background: #352030;
     }
 
     #confirm-title {
@@ -264,7 +257,7 @@ class MaudeApp(App):
     }
 
     #confirm-sub {
-        color: $label-dim;
+        color: #9080b8;
         margin-bottom: 2;
     }
 
@@ -280,7 +273,6 @@ class MaudeApp(App):
     /* Modal: new project */
     NewProjectScreen {
         align: center middle;
-        background: rgba(0,0,0,0.6);
     }
 
     #new-box {
@@ -288,17 +280,17 @@ class MaudeApp(App):
         width: 60;
         height: auto;
         border: solid #4a7a5a;
-        background: #1a2530;
+        background: #2a2535;
     }
 
     #new-title {
         text-style: bold;
-        color: $logo-green;
+        color: #72c09a;
         margin-bottom: 1;
     }
 
     #new-sub {
-        color: $label-dim;
+        color: #9080b8;
         margin-bottom: 1;
     }
 
