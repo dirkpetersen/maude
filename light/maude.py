@@ -88,6 +88,11 @@ def soft_delete(project_path: Path) -> None:
 class ConfirmDeleteScreen(ModalScreen[bool]):
     """Ask the user to confirm deletion."""
 
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
     def __init__(self, project_name: str) -> None:
         super().__init__()
         self.project_name = project_name
@@ -112,6 +117,11 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
 
 class NewProjectScreen(ModalScreen[str | None]):
     """Prompt for a new project name."""
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
     def compose(self) -> ComposeResult:
         with Container(id="new-box"):
