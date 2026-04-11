@@ -539,7 +539,7 @@ cat | tr -d '\r' | xargs apt-get install -y -q --no-install-recommends
 rm -f /usr/sbin/policy-rc.d
 apt-get clean
 '@
-            $installScript | wsl -d $templateDistro -u root -- bash -c "cat > /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
+            $installScript | wsl -d $templateDistro -u root -- bash -c "cat > /tmp/install-pkgs.sh && sed -i 's/\r$//' /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
             $packageList | wsl -d $templateDistro -u root -- bash /tmp/install-pkgs.sh
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "WARNING: Some packages may have failed to install." -ForegroundColor Yellow
