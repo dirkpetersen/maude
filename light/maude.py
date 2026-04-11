@@ -104,6 +104,35 @@ def soft_delete(project_path: Path) -> None:
 
 # ── Modal screens ──────────────────────────────────────────────────────────
 
+class NoCredsScreen(ModalScreen[None]):
+    """Full-screen error when no LLM credentials are configured."""
+
+    BINDINGS = [
+        Binding("escape", "quit_app", show=False),
+        Binding("q", "quit_app", show=False),
+    ]
+
+    def action_quit_app(self) -> None:
+        self.app.exit(1)
+
+    def compose(self) -> ComposeResult:
+        with Container(id="nocreds-box"):
+            yield Label("No LLM Credentials Found", id="nocreds-title")
+            yield Label(
+                "Configure one of the following before launching Maude:\n\n"
+                "  ANTHROPIC_API_KEY            environment variable\n"
+                "  ANTHROPIC_FOUNDRY_API_KEY     environment variable\n"
+                "  ~/.aws/credentials            AWS Bedrock\n"
+                "  ~/.azure/clauderc             Azure config",
+                id="nocreds-detail",
+            )
+            yield Label("Press  q  or  Esc  to exit.", id="nocreds-hint")
+
+    @on(Button.Pressed, "#btn-nocreds-exit")
+    def exit_pressed(self) -> None:
+        self.app.exit(1)
+
+
 class ConfirmDeleteScreen(ModalScreen[bool]):
     """Ask the user to confirm deletion."""
 
@@ -352,6 +381,41 @@ class MaudeApp(App):
     #new-buttons Button {
         margin: 0 1;
     }
+
+    /* Modal: no credentials */
+    NoCredsScreen {
+        align: center middle;
+        background: #1e1e1e 90%;
+    }
+
+    #nocreds-box {
+        padding: 3 6;
+        width: 70;
+        height: auto;
+        border: heavy #e05050;
+        background: #2a1010;
+        align: center middle;
+    }
+
+    #nocreds-title {
+        text-style: bold;
+        color: #ff4444;
+        text-align: center;
+        width: 100%;
+        margin-bottom: 2;
+    }
+
+    #nocreds-detail {
+        color: #e0b0b0;
+        margin-bottom: 2;
+    }
+
+    #nocreds-hint {
+        color: #808080;
+        text-align: center;
+        width: 100%;
+        margin-top: 1;
+    }
     """
 
     BINDINGS = [
@@ -390,14 +454,7 @@ class MaudeApp(App):
 
     def on_mount(self) -> None:
         if not check_credentials():
-            self.notify(
-                "No LLM credentials found.\n"
-                "Set ANTHROPIC_API_KEY, ANTHROPIC_FOUNDRY_API_KEY,\n"
-                "~/.aws/credentials, or ~/.azure/clauderc first.",
-                severity="error",
-                timeout=8,
-            )
-            self.set_timer(3, lambda: self.exit(1))
+            self.push_screen(NoCredsScreen())
             return
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
