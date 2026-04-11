@@ -143,21 +143,7 @@ class MaudeApp(App):
     """Maude TUI — project launcher for Claude Code."""
 
     CSS = """
-    /* ── Claude Code inspired: dusty rose on dark aubergine ── */
-
-    Screen {
-        background: #300a24;
-    }
-
-    Header {
-        background: #3a1228;
-        color: #d4a0a0;
-    }
-
-    Footer {
-        background: #3a1228;
-        color: #a08080;
-    }
+    /* ── Claude Code style: neutral dark bg, dusty rose accents ── */
 
     #layout {
         height: 1fr;
@@ -166,7 +152,6 @@ class MaudeApp(App):
     #sidebar {
         width: 40;
         padding: 1 1;
-        background: #381028;
         border-right: solid #b87878;
     }
 
@@ -178,7 +163,7 @@ class MaudeApp(App):
     }
 
     #divider {
-        color: #7a5060;
+        color: #6a5058;
         height: 1;
         margin-bottom: 1;
     }
@@ -206,16 +191,14 @@ class MaudeApp(App):
     #projects-table {
         height: 1fr;
         border: solid #b87878;
-        background: #300a24;
     }
 
     DataTable > .datatable--header {
-        background: #481830;
         color: #d4a0a0;
     }
 
     DataTable > .datatable--cursor {
-        background: #582040;
+        background: #3a2030;
         color: #f0d8d8;
     }
 
@@ -225,7 +208,6 @@ class MaudeApp(App):
         padding: 1 2;
         align: left middle;
         border-top: solid #b87878;
-        background: #381028;
         margin-bottom: 1;
     }
 
@@ -234,10 +216,10 @@ class MaudeApp(App):
         min-width: 14;
     }
 
-    #btn-open { background: #4a3040; color: #f0c8c8; }
-    #btn-new  { background: #4a3040; color: #d0b8b8; }
-    #btn-web  { background: #402838; color: #c0a8a8; }
-    #btn-cli  { background: #382030; color: #b09898; }
+    #btn-open { color: #f0c8c8; }
+    #btn-new  { color: #d0b8b8; }
+    #btn-web  { color: #c0a8a8; }
+    #btn-cli  { color: #b09898; }
 
     /* Modal: confirm delete */
     ConfirmDeleteScreen {
@@ -249,7 +231,7 @@ class MaudeApp(App):
         width: 60;
         height: auto;
         border: solid #c07070;
-        background: #3a1020;
+        background: $surface;
     }
 
     #confirm-title {
@@ -282,7 +264,7 @@ class MaudeApp(App):
         width: 60;
         height: auto;
         border: solid #b87878;
-        background: #3a1020;
+        background: $surface;
     }
 
     #new-title {
