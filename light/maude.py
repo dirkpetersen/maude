@@ -143,7 +143,21 @@ class MaudeApp(App):
     """Maude TUI — project launcher for Claude Code."""
 
     CSS = """
-    /* ── Claude Code style: neutral dark bg, dusty rose accents ── */
+    /* ── Claude Code style: light gray base, dusty rose accents ── */
+
+    Screen {
+        background: #1e1e1e;
+    }
+
+    Header {
+        background: #2a2a2a;
+        color: #d4a0a0;
+    }
+
+    Footer {
+        background: #2a2a2a;
+        color: #a09090;
+    }
 
     #layout {
         height: 1fr;
@@ -152,6 +166,7 @@ class MaudeApp(App):
     #sidebar {
         width: 40;
         padding: 1 1;
+        background: #242424;
         border-right: solid #b87878;
     }
 
@@ -198,7 +213,7 @@ class MaudeApp(App):
     }
 
     DataTable > .datatable--cursor {
-        background: #3a2030;
+        background: #383030;
         color: #f0d8d8;
     }
 
@@ -207,6 +222,7 @@ class MaudeApp(App):
         min-height: 3;
         padding: 1 2;
         align: left middle;
+        background: #242424;
         border-top: solid #b87878;
         margin-bottom: 1;
     }
