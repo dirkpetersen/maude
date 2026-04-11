@@ -524,22 +524,26 @@ $DistroName is already installed. To reinstall, run teardown first:
         # Install packages into the template.
         Write-Host "Installing packages into template (this takes a few minutes)..."
         if ($packageList) {
-            # Write the install script to /tmp, then pipe the package list to it.
-            # Avoids passing multi-line strings as bash -c arguments (unreliable via wsl.exe).
-            $installScript = @'
-export DEBIAN_FRONTEND=noninteractive
-export TERM=dumb
-printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
-chmod +x /usr/sbin/policy-rc.d
-apt-get update -q
-apt-get install -y -q software-properties-common
-add-apt-repository -y universe
-apt-get update -q
-cat | tr -d '\r' | xargs apt-get install -y -q --no-install-recommends
-rm -f /usr/sbin/policy-rc.d
-apt-get clean
-'@
-            $installScript | wsl -d $templateDistro -u root -- bash -c "cat > /tmp/install-pkgs.sh && sed -i 's/\r$//' /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
+            # Build the install script with LF line endings and write via base64 to avoid
+            # PowerShell's pipe re-adding CRLF when writing to WSL stdin.
+            $installLines = @(
+                'export DEBIAN_FRONTEND=noninteractive',
+                'export TERM=dumb',
+                "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d",
+                'chmod +x /usr/sbin/policy-rc.d',
+                'apt-get update -q',
+                'apt-get install -y unzip software-properties-common',
+                'add-apt-repository -y universe',
+                'apt-get update -q',
+                "cat | tr -d '\r' | xargs apt-get install -y --no-install-recommends",
+                'rm -f /usr/sbin/policy-rc.d',
+                'apt-get clean'
+            )
+            $installScriptLF = $installLines -join "`n"
+            $installScriptB64 = [Convert]::ToBase64String(
+                [System.Text.Encoding]::UTF8.GetBytes($installScriptLF)
+            )
+            wsl -d $templateDistro -u root -- bash -c "echo $installScriptB64 | base64 -d > /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
             $packageList | wsl -d $templateDistro -u root -- bash /tmp/install-pkgs.sh
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "WARNING: Some packages may have failed to install." -ForegroundColor Yellow
