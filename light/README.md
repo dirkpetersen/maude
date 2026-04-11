@@ -10,7 +10,8 @@ Use a TUI
 <img width="981" height="604" alt="image" src="https://github.com/user-attachments/assets/f223d378-2471-4c70-8145-798e2bcd3439" />
 
 or a simple CLI
-<img width="810" height="463" alt="image" src="https://github.com/user-attachments/assets/4c8fe03d-56c8-4ce5-b373-9ff13e74c2c4" />
+<img width="988" height="466" alt="image" src="https://github.com/user-attachments/assets/4a222cef-227f-49dd-8f4a-9cdfeb14e029" />
+
 
 ## What you get
 
