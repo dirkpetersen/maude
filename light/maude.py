@@ -193,6 +193,23 @@ class MaudeApp(App):
         margin-top: 0;
     }
 
+    #divider2 {
+        color: #6a5058;
+        height: 1;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+
+    #tips-title {
+        color: #d4a0a0;
+        text-style: bold;
+        margin-bottom: 0;
+    }
+
+    #tips {
+        color: #a09090;
+    }
+
     #main {
         padding: 1 2;
     }
@@ -323,6 +340,14 @@ class MaudeApp(App):
                 yield Static("─" * 28, id="divider")
                 yield Label("Start TUI with Maude", id="autostart-label")
                 yield Checkbox("", value=AUTOSTART_FLAG.exists(), id="autostart")
+                yield Static("─" * 28, id="divider2")
+                yield Label("Tips", id="tips-title")
+                yield Static(
+                    "Screen split:  Alt+Shift+Plus | Minus\n"
+                    "Paste image:   Alt+V (in Claude Code)\n"
+                    "Voice dictate: Win+H (Windows mic)",
+                    id="tips",
+                )
             with Vertical(id="main"):
                 yield Label("Projects", id="section-title")
                 yield DataTable(id="projects-table", cursor_type="row",
