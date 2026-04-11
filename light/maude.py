@@ -33,12 +33,13 @@ DELETED_DIR  = PROJECTS_DIR / ".deleted"
 AUTOSTART_FLAG = Path.home() / ".maude-tui-autostart"
 KANNA_CMD    = "kanna"
 
-LOGO = """\
-[bold green]  __  __                 _      [/bold green]
-[bold green] |  \\/  | __ _ _   _  __| | ___ [/bold green]
-[bold green] | |\\/| |/ _` | | | |/ _` |/ _ \\[/bold green]
-[bold green] | |  | | (_| | |_| | (_| |  __/[/bold green]
-[bold green] |_|  |_|\\__,_|\\__,_|\\__,_|\\___|[/bold green]"""
+LOGO = (
+    "  __  __                 _      \n"
+    " |  \\/  | __ _ _   _  __| | ___ \n"
+    " | |\\/| |/ _` | | | |/ _` |/ _ \\\n"
+    " | |  | | (_| | |_| | (_| |  __/\n"
+    " |_|  |_|\\__,_|\\__,_|\\__,_|\\___|"
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -142,8 +143,27 @@ class MaudeApp(App):
     """Maude TUI — project launcher for Claude Code."""
 
     CSS = """
+    /* ── Palette (dark purple terminal friendly) ── */
+    $bg:         #1a1625;
+    $sidebar-bg: #211b30;
+    $border:     #5a4e78;
+    $logo-green: #72c09a;
+    $label-dim:  #9080b8;
+    $title:      #c4aff0;
+    $row-sel:    #2e2544;
+
     Screen {
-        background: $surface;
+        background: $bg;
+    }
+
+    Header {
+        background: #251e38;
+        color: $title;
+    }
+
+    Footer {
+        background: #251e38;
+        color: $label-dim;
     }
 
     #layout {
@@ -153,16 +173,25 @@ class MaudeApp(App):
     #sidebar {
         width: 36;
         padding: 1 2;
-        border-right: solid $primary-darken-2;
+        background: $sidebar-bg;
+        border-right: solid $border;
     }
 
     #logo {
-        height: 7;
+        height: 5;
+        color: $logo-green;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #divider {
+        color: $border;
+        height: 1;
         margin-bottom: 1;
     }
 
     #autostart-label {
-        color: $text-muted;
+        color: $label-dim;
         margin-top: 1;
         margin-bottom: 0;
     }
@@ -173,51 +202,69 @@ class MaudeApp(App):
 
     #main {
         padding: 1 2;
+        background: $bg;
     }
 
     #section-title {
-        color: $primary;
+        color: $title;
         text-style: bold;
         margin-bottom: 1;
     }
 
     #projects-table {
         height: 1fr;
-        border: solid $primary-darken-2;
+        border: solid $border;
+    }
+
+    DataTable > .datatable--header {
+        background: #2a2040;
+        color: $title;
+    }
+
+    DataTable > .datatable--cursor {
+        background: $row-sel;
+        color: #e8d8ff;
     }
 
     #bottom-bar {
-        height: 3;
-        padding: 0 1;
+        height: 5;
+        padding: 1 2;
         align: left middle;
-        border-top: solid $primary-darken-2;
+        border-top: solid $border;
+        background: $sidebar-bg;
     }
 
     #bottom-bar Button {
         margin-right: 1;
     }
 
+    #btn-open { background: #3d6b52; color: #c8f0d8; border: tall #4e8a69; }
+    #btn-new  { background: #3d4e7a; color: #c8d4f8; border: tall #5060a0; }
+    #btn-web  { background: #3a3550; color: #c0b8e0; border: tall #504870; }
+    #btn-cli  { background: #2e2a40; color: #a098c0; border: tall #443e60; }
+
     /* Modal: confirm delete */
     ConfirmDeleteScreen {
         align: center middle;
+        background: rgba(0,0,0,0.6);
     }
 
     #confirm-box {
         padding: 2 4;
         width: 60;
         height: auto;
-        border: solid $error;
-        background: $surface;
+        border: solid #8a4a5a;
+        background: #251830;
     }
 
     #confirm-title {
         text-style: bold;
-        color: $error;
+        color: #e08090;
         margin-bottom: 1;
     }
 
     #confirm-sub {
-        color: $text-muted;
+        color: $label-dim;
         margin-bottom: 2;
     }
 
@@ -233,24 +280,25 @@ class MaudeApp(App):
     /* Modal: new project */
     NewProjectScreen {
         align: center middle;
+        background: rgba(0,0,0,0.6);
     }
 
     #new-box {
         padding: 2 4;
         width: 60;
         height: auto;
-        border: solid $success;
-        background: $surface;
+        border: solid #4a7a5a;
+        background: #1a2530;
     }
 
     #new-title {
         text-style: bold;
-        color: $success;
+        color: $logo-green;
         margin-bottom: 1;
     }
 
     #new-sub {
-        color: $text-muted;
+        color: $label-dim;
         margin-bottom: 1;
     }
 
@@ -279,8 +327,8 @@ class MaudeApp(App):
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
             with Vertical(id="sidebar"):
-                yield Static(LOGO, id="logo", markup=True)
-                yield Label("─" * 28)
+                yield Static(LOGO, id="logo", markup=False)
+                yield Static("─" * 28, id="divider")
                 yield Label("Start TUI with Maude", id="autostart-label")
                 yield Checkbox("", value=AUTOSTART_FLAG.exists(), id="autostart")
             with Vertical(id="main"):
@@ -288,10 +336,10 @@ class MaudeApp(App):
                 yield DataTable(id="projects-table", cursor_type="row",
                                 zebra_stripes=True)
         with Horizontal(id="bottom-bar"):
-            yield Button("Open Project", variant="success", id="btn-open")
-            yield Button("+ New",        variant="primary", id="btn-new")
-            yield Button("Web UI",       variant="default", id="btn-web")
-            yield Button("Command Line", variant="default", id="btn-cli")
+            yield Button("Open Project", id="btn-open")
+            yield Button("+ New",        id="btn-new")
+            yield Button("Web UI",       id="btn-web")
+            yield Button("Command Line", id="btn-cli")
         yield Footer()
 
     def on_mount(self) -> None:
