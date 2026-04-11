@@ -130,8 +130,9 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "$DistroName is not installed. Nothing to unregister." -ForegroundColor Gray
 }
 
-# Shut down WSL to release file locks (ext4.vhdx) before removing the directory
-wsl --shutdown 2>$null
+# Terminate only the Maude distro to release its file locks (ext4.vhdx).
+# Avoids wsl --shutdown which would kill all running WSL distros.
+wsl --terminate $DistroName 2>$null
 
 # ── Step 3: Remove the install directory ──
 
@@ -140,6 +141,13 @@ if (Test-Path $InstallDir) {
     Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path $InstallDir) {
         # Retry after a brief pause (WSL may need a moment to release locks)
+        Start-Sleep -Seconds 2
+        Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $InstallDir) {
+        # Last resort: shut down all of WSL to release stubborn locks
+        Write-Host "Files locked. Stopping WSL to release locks..." -ForegroundColor Yellow
+        wsl --shutdown 2>$null
         Start-Sleep -Seconds 2
         Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     }

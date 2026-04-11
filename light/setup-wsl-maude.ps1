@@ -424,12 +424,10 @@ $DistroName is already installed. To reinstall, run teardown first:
                 # Bail immediately on system-level errors (don't retry other distros)
                 if ($out -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
                     Write-Host "Hyper-V/VM Platform not available, skipping Store install." -ForegroundColor Yellow
-                    # Clean up partial install: unregister, shutdown, restart service
+                    # Clean up partial install — only terminate the specific distro,
+                    # not all of WSL (other user distros may be running).
+                    wsl --terminate $templateDistro 2>$null
                     wsl --unregister $templateDistro 2>$null
-                    wsl --shutdown 2>$null
-                    Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
-                    Start-Sleep -Seconds 2
-                    Start-Service LxssManager -ErrorAction SilentlyContinue
                     break
                 }
                 # Ghost entry? Clear and retry once
@@ -457,18 +455,31 @@ $DistroName is already installed. To reinstall, run teardown first:
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
-            # Force-release all WSL locks from failed Store installs.
+            # Temporarily exclude the downloaded file and import directory from
+            # Windows Defender real-time scanning to prevent file locking during import.
+            $defenderExclusions = @($rootfsFile, (Join-Path $env:LOCALAPPDATA "Maude-Template"))
+            foreach ($excl in $defenderExclusions) {
+                Add-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
+            }
+            # Clean up any ghost registration from failed Store installs.
+            # Only terminate the specific distro — don't kill other running WSL instances.
+            wsl --terminate $templateDistro 2>$null
             wsl --unregister $templateDistro 2>$null
-            wsl --shutdown 2>$null
-            Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 3
             # Remove stale directory from failed Store installs (ext4.vhdx)
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             if (Test-Path $tplDir) {
+                Start-Sleep -Seconds 2
                 Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
             }
-            Start-Service LxssManager -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 3
+            # If directory is still locked, escalate: stop LxssManager to release all handles
+            if (Test-Path $tplDir) {
+                Write-Host "Files locked. Restarting WSL service to release locks..." -ForegroundColor Yellow
+                Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 3
+                Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                Start-Service LxssManager -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 3
+            }
             New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
 
             # Try WSL2 first; fall back to WSL1 if Hyper-V/VM Platform unavailable.
@@ -487,6 +498,10 @@ $DistroName is already installed. To reinstall, run teardown first:
                 wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
             }
             Remove-Item -Path $rootfsFile -ErrorAction SilentlyContinue
+            # Remove the temporary Defender exclusions
+            foreach ($excl in $defenderExclusions) {
+                Remove-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
+            }
             if (-not (Test-WslDistro $templateDistro)) {
                 Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
                 Write-Host "If on a VM, ensure nested virtualization is enabled for WSL2," -ForegroundColor Yellow
