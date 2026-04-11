@@ -141,7 +141,8 @@ The `light/` directory contains the WSL2 sandbox implementation:
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen, Claude Code |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config |
-| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`) |
+| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`) |
+| `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`) |
 
 Key implementation details:
 - Files are piped into WSL via `Get-Content -Raw | wsl ... bash -c "cat > /tmp/..."` (automount is disabled, so wslpath/cp don't work)
@@ -154,6 +155,36 @@ Key implementation details:
 - **Sandbox instructions split**: `~/.claude/MAUDE.md` is always overwritten on each `maude` launch (sandbox rules, not user-editable); `~/.claude/CLAUDE.md` is created once if missing and user-owned. `CLAUDE.md` includes sandbox rules via `@MAUDE.md`
 - `maude delete <name>` is a soft-delete — moves to `Projects/.deleted/`, not permanent
 - The `maude` CLI launches Claude Code with `claude opus-1m` (uses the latest Opus model with extended context)
+
+## Maude TUI (`maude tui`)
+
+A Textual-based full-screen TUI alternative to the CLI welcome screen. Always launched via `maude tui` (never run `maude.py` directly).
+
+### Layout
+
+```
+┌─ Maude ─────────────────────────────────────────────┐
+│  ASCII logo (green, top-left)    [x] Start TUI      │
+│                                      with Maude     │
+│  Projects                            [+ New]        │
+│ ┌──────────────────────────────────────────────┐    │
+│ │ banana          Modified: Apr 10, 2026  [del]│    │
+│ │ my-app          Modified: Apr 9, 2026   [del]│    │
+│ └──────────────────────────────────────────────┘    │
+│  [Open Project]  [Web UI]  [Command Line]           │
+└─────────────────────────────────────────────────────┘
+```
+
+### Key behaviors
+- **Open project**: `app.suspend()` → `claude --continue` (fallback: `claude`) → resume TUI
+- **Delete**: confirm modal → soft-delete to `Projects/.deleted/`
+- **New project**: modal dialog, spaces auto-replaced with hyphens, git init
+- **Web UI**: launches kanna in background
+- **Command Line**: exits TUI, returns to shell prompt
+- **"Start TUI with Maude" checkbox**: toggles `~/.maude-tui-autostart` flag file; `maude-welcome.sh` checks this flag and `exec maude tui` instead of showing the text banner
+- **Daily update**: `maude tui` checks `~/.maude-tui-last-update` stamp; downloads fresh `maude.py` from GitHub if older than 24 h
+- **Colors**: green logo, cyan highlights, yellow accents (matches welcome screen palette)
+- **Dependencies**: `textual` Python package — installed via `pip install textual` in `maude-bootstrap.sh`
 
 ## PATH Convention
 

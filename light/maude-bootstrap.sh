@@ -19,6 +19,10 @@ set +e
 curl -fsSL 'https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/dev-station-install.sh' | bash
 set -e
 
+# ── Install textual (Maude TUI dependency) ───────────────────────────
+echo "Installing textual..."
+pip install --quiet textual
+
 # ── Install Bun + kanna-code ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then
     echo "Installing Bun..."

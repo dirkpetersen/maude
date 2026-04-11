@@ -185,6 +185,11 @@ chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 # ── Welcome screen ────────────────────────────────────────────────────
 # Displayed once per interactive login session.
 cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'
+# If TUI auto-start is enabled, launch it instead of the text welcome
+if [[ -t 1 ]] && [[ -f "$HOME/.maude-tui-autostart" ]] && command -v maude >/dev/null 2>&1; then
+    exec maude tui
+fi
+
 # Show welcome only in interactive terminals and only once per session
 if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     export MAUDE_WELCOMED=1
@@ -208,13 +213,15 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     printf "  ${C}maude list${N}           Show your projects\n"
     printf "  ${C}maude delete name${N}    Delete a project (moves to .deleted/)\n"
     printf "  ${C}maude web${N}            Launch web UI (kanna, experimental)\n"
+    printf "  ${C}maude tui${N}            Interactive project launcher (experimental)\n"
     printf "  ${C}maude help${N}           Full usage info\n"
     printf "\n"
     printf "  ${Y}mom install <pkg>${N}   Install system packages (no sudo needed)\n"
     printf "\n"
     printf "  ${B}Tips:${N}\n"
-    printf "    Screen split: Alt+Shift+Plus (vertical) | Alt+Shift+Minus (horizontal)\n"
-    printf "    Paste image:  ${B}Alt+V${N}  (inside Claude Code)\n"
+    printf "    Screen split:    Alt+Shift+Plus (vertical) | Alt+Shift+Minus (horizontal)\n"
+    printf "    Paste image:     ${B}Alt+V${N}  (inside Claude Code)\n"
+    printf "    Activate mic:    ${B}Win+H${N}  (Windows voice dictation)\n"
     printf "\n"
     if [[ ! -f "$HOME/.aws/credentials" ]] && [[ ! -f "$HOME/.azure/clauderc" ]]; then
         printf "  ${Y}LLM service credentials not yet set up.${N}\n"
@@ -269,7 +276,7 @@ _maude_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
     if [[ "$COMP_CWORD" -eq 1 ]]; then
-        local cmds="web list ls delete rm help"
+        local cmds="web tui list ls delete rm help"
         local projects=""
         if [[ -d "$HOME/Maude/Projects" ]]; then
             projects=$(ls -d "$HOME/Maude/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
