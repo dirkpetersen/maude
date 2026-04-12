@@ -185,6 +185,12 @@ chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 # ── Welcome screen ────────────────────────────────────────────────────
 # Displayed once per interactive login session.
 cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'
+# ── Ensure DANGER-ZONE.txt is present on the shared mount ────────────
+if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then
+    curl -fsSL "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/DANGER-ZONE.txt" \
+        -o "$HOME/Maude/DANGER-ZONE.txt" 2>/dev/null || true
+fi
+
 # If TUI auto-start is enabled, launch it instead of the text welcome
 if [[ -t 1 ]] && [[ -f "$HOME/.maude-tui-autostart" ]] && command -v maude >/dev/null 2>&1; then
     maude tui

@@ -1,0 +1,168 @@
+================================================================
+                         ⚠️  DANGER ZONE  ⚠️
+              PLEASE READ THIS ENTIRE FILE BEFORE
+              PLACING ANY DOCUMENTS IN THIS FOLDER
+================================================================
+
+
+WHAT IS THIS FOLDER?
+--------------------
+This is your "Maude" folder. It lives inside your OneDrive and
+is the ONLY folder on your computer that the AI assistant
+(Claude) can see and touch. Everything else on your PC —
+your email, your other OneDrive files, your Desktop, your
+Downloads — is completely hidden from the AI. That is the
+good news.
+
+The bad news: anything you put IN this folder is fully
+exposed to the AI, and the AI runs in "unrestricted mode."
+That means it can read, change, rename, overwrite, or delete
+any file in here WITHOUT ASKING YOU FIRST.
+
+
+WHAT DOES "UNRESTRICTED MODE" MEAN IN PLAIN ENGLISH?
+-----------------------------------------------------
+Think of it like handing someone the keys to one room in
+your house and saying "do whatever you want in there."
+They might rearrange the furniture, repaint the walls, or
+throw things away — and they will NOT knock on the door
+to check with you before doing it.
+
+The AI does this because it is designed to work fast and
+autonomously on coding and document tasks. That power is
+useful, but it means:
+
+  • Files can be MODIFIED without warning.
+  • Files can be DELETED without warning.
+  • New files can be CREATED that you did not ask for.
+  • File contents can be REWRITTEN partially or completely.
+
+This applies to EVERYTHING inside this folder and all of
+its subfolders, including:
+
+  Maude/
+  ├── Projects/       ← Your coding projects live here.
+  │                      The AI works directly in these folders.
+  │
+  ├── .claude/        ← AI configuration files. Do not edit
+  │                      these unless you know what you are doing.
+  │
+  └── (any other files or folders you place here)
+       ← The AI can read and change ALL of these too.
+
+
+=== RULE #1 ==========================================
+   NEVER PUT YOUR ONLY COPY OF A FILE IN THIS FOLDER.
+   ALWAYS KEEP A SEPARATE BACKUP SOMEWHERE ELSE.
+======================================================
+
+Before you copy a document into Maude, make sure the
+original stays in a safe location — another OneDrive
+folder, a shared drive, a USB stick, your email, anywhere
+that is NOT inside this Maude folder.
+
+If the AI accidentally overwrites or deletes your file
+and this was your only copy, it is GONE.
+
+
+HOW YOU SHOULD WORK WITH THIS FOLDER
+--------------------------------------
+1. KEEP your original files in their normal location
+   (OneDrive, shared drives, email, etc.).
+
+2. COPY the files you want the AI to analyze or work on
+   INTO this Maude folder. Think of these copies as
+   "working copies" that may be changed or destroyed.
+
+3. LET the AI do its work. It will read your documents,
+   create outputs (summaries, reports, spreadsheets),
+   and write them into this folder.
+
+4. MOVE the finished output files OUT of this folder to
+   a safe location when you are done.
+
+5. DELETE the working copies from the Maude folder when
+   you no longer need them here.
+
+Think of this folder as a WORKBENCH, not a filing cabinet.
+You bring materials to the workbench, do the work, take
+the finished product away, and clean up. You would never
+store your only copy of an important document on a
+workbench.
+
+
+COULD MY DATA END UP ON THE INTERNET?
+---------------------------------------
+Short answer: No, not through normal operation. But here
+is the longer explanation so you understand why.
+
+When you ask the AI to analyze a document, the contents of
+that document are sent to the cloud servers of our AI
+providers (Microsoft Azure and Amazon Web Services) for
+processing. This is similar to how your files travel to
+Microsoft's servers when you save them to OneDrive — the
+data has to go somewhere to be processed.
+
+However, our organization has SERVICE LEVEL AGREEMENTS
+(SLAs) and DATA PROCESSING AGREEMENTS (DPAs) with our
+cloud AI providers. These agreements legally guarantee:
+
+  ✓  Your data is NOT used to train AI models.
+  ✓  Your data is NOT stored permanently on their servers.
+  ✓  Your data is NOT shared with other customers.
+  ✓  Your data is processed and then discarded.
+
+This means your documents are sent, processed, and
+forgotten — they do not become part of the AI's knowledge,
+and they do not appear in responses to other people.
+
+If any provider were to violate these agreements and your
+data somehow appeared on the internet or was used without
+authorization, that would be:
+
+  • A breach of our legal contract with the provider.
+  • A violation of data protection laws (such as GDPR,
+    CCPA, or other applicable regulations).
+  • Subject to legal action and law enforcement
+    involvement.
+
+So while no system is 100% risk-free, there are strong
+legal and contractual protections in place. The risk of
+your data leaking through these AI services is comparable
+to the risk of it leaking through any other enterprise
+cloud service you already use (OneDrive, SharePoint,
+email, etc.).
+
+THAT SAID — use common sense:
+
+  ✗  Do NOT put highly classified or restricted documents
+     in this folder unless your security team has approved
+     the use of AI tools for that classification level.
+
+  ✗  Do NOT put passwords, private keys, social security
+     numbers, or other secrets in files in this folder.
+
+  ✓  DO check with your manager or IT department if you
+     are unsure whether a particular document is approved
+     for AI processing.
+
+
+QUICK SUMMARY
+--------------
+  ┌─────────────────────────────────────────────────┐
+  │  • This folder is the AI's workspace.           │
+  │  • The AI can change or delete anything in it.   │
+  │  • ALWAYS keep backups of your files elsewhere.  │
+  │  • Your data is legally protected from misuse.   │
+  │  • Do not store secrets or restricted documents. │
+  │  • When in doubt, ask your IT department.        │
+  └─────────────────────────────────────────────────┘
+
+
+If you have questions or concerns, contact your IT
+help desk or the person who set up Maude for you.
+
+================================================================
+              This file was placed here for your safety.
+                    Please do not delete it.
+================================================================
