@@ -187,7 +187,9 @@ chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'
 # If TUI auto-start is enabled, launch it instead of the text welcome
 if [[ -t 1 ]] && [[ -f "$HOME/.maude-tui-autostart" ]] && command -v maude >/dev/null 2>&1; then
-    exec maude tui
+    maude tui
+    printf '\n  Please type: \033[1mmenu\033[0m <Enter> to get back to the TUI\n\n'
+    return 0 2>/dev/null || true
 fi
 
 # Show welcome only in interactive terminals and only once per session

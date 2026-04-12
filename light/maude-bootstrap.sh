@@ -78,6 +78,12 @@ SETTINGSEOF
     echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
 fi
 
+# ── Claude Code: enable YOLO mode marker file ────────────────────────
+if [[ ! -f "$HOME/.claude/yolo-mode" ]]; then
+    echo "Remove this file to disable YOLO mode for Maude" > "$HOME/.claude/yolo-mode"
+    echo "Claude Code: yolo-mode marker created."
+fi
+
 # ── Clone Anthropic skills repo and symlink into ~/.claude/skills ─────
 # Must run AFTER the ~/.claude symlink is created above.
 SKILLS_REPO="$HOME/gh/anthropic-skills"

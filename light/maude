@@ -156,7 +156,10 @@ launch_tui() {
         exit 1
     fi
 
-    exec python3 "$MAUDE_PY"
+    python3 "$MAUDE_PY"
+    echo ""
+    echo -e "  Please type: ${BOLD}menu${NC} <Enter> to get back to the TUI"
+    echo ""
 }
 
 # ── Launch kanna web UI ───────────────────────────────────────────────
