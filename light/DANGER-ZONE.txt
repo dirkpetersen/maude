@@ -84,6 +84,16 @@ HOW YOU SHOULD WORK WITH THIS FOLDER
 5. DELETE the working copies from the Maude folder when
    you no longer need them here.
 
+6. DO NOT share this folder (or any subfolder) using
+   OneDrive's sharing features. If you share this folder
+   with colleagues, they will see documents that may have
+   been silently modified, overwritten, or created by the
+   AI — without any review or approval from you. They
+   could mistake AI-generated or AI-altered content for
+   your final, authoritative work. Always take outputs
+   OUT of this folder and share them from a normal
+   OneDrive location once you have reviewed them.
+
 Think of this folder as a WORKBENCH, not a filing cabinet.
 You bring materials to the workbench, do the work, take
 the finished product away, and clean up. You would never
