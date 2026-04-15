@@ -10,7 +10,6 @@ export DEBIAN_FRONTEND=noninteractive
 export TERM=dumb
 
 USERNAME="${1:?Usage: root-bootstrap.sh <username>}"
-MOM_GROUP="users"
 
 # Read package list from stdin immediately (before any command can consume it)
 # Strip \r — PowerShell pipes CRLF even after -replace on the PS side.
@@ -52,33 +51,20 @@ printf '%s ALL=(ALL) NOPASSWD: /sbin/reboot, /sbin/shutdown, /sbin/poweroff\n' \
 chmod 440 /etc/sudoers.d/maude-reboot
 
 # ── Install mom (setuid package manager) ──────────────────────────────
-groupadd --system --gid 100 "$MOM_GROUP" 2>/dev/null || true
-usermod -aG "$MOM_GROUP" "$USERNAME" 2>/dev/null || true
-
-if [[ ! -x /usr/local/bin/mom ]]; then
-    _arch=$(uname -m)
-    case "$_arch" in
-        x86_64)  _arch="amd64" ;;
-        aarch64) _arch="arm64" ;;
-        armv7l)  _arch="armv7" ;;
-    esac
-    echo "Downloading mom binary (${_arch})..."
+# The mom-inst .deb package handles all setup: creates group, sets setuid,
+# creates config dir, conf file, deny list, and log file.
+if ! command -v mom >/dev/null 2>&1; then
+    _arch=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+    echo "Installing mom-inst package (${_arch})..."
+    _ver=$(curl -sI https://github.com/dirkpetersen/mom/releases/latest | grep -i location | grep -oP 'v\K[0-9.]+')
     curl -fsSL \
-        "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-${_arch}" \
-        -o /usr/local/bin/mom
-    chmod 4755 /usr/local/bin/mom
-    echo "mom installed."
+        "https://github.com/dirkpetersen/mom/releases/download/v${_ver}/mom-inst_${_ver}_ubuntu-2404_${_arch}.deb" \
+        -o /tmp/mom-inst.deb
+    dpkg -i /tmp/mom-inst.deb
+    rm -f /tmp/mom-inst.deb
+    echo "mom installed via mom-inst package."
 fi
-
-mkdir -p /etc/mom
-if [[ ! -f /etc/mom/mom.conf ]]; then
-    printf 'group = %s\ndeny_list = /etc/mom/deny.list\nlog_file = /var/log/mom.log\n' \
-        "$MOM_GROUP" > /etc/mom/mom.conf
-fi
-if [[ ! -f /etc/mom/deny.list ]]; then
-    printf '# mom deny list\nnmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n' \
-        > /etc/mom/deny.list
-fi
+usermod -aG mom "$USERNAME" 2>/dev/null || true
 
 # ── Read host folder path (written by setup-wsl-maude.ps1) ──────────
 HOST_FOLDER=""
