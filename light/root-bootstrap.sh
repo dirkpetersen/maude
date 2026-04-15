@@ -53,7 +53,12 @@ chmod 440 /etc/sudoers.d/maude-reboot
 # ── Install mom (setuid package manager) ──────────────────────────────
 # The mom-inst .deb package handles all setup: creates group, sets setuid,
 # creates config dir, conf file, deny list, and log file.
-if ! command -v mom >/dev/null 2>&1; then
+# Remove old "mom" package if present (conflicts with mom-inst).
+if dpkg -s mom >/dev/null 2>&1 && ! dpkg -s mom-inst >/dev/null 2>&1; then
+    echo "Removing old 'mom' package before installing mom-inst..."
+    dpkg --purge mom
+fi
+if ! dpkg -s mom-inst >/dev/null 2>&1; then
     _arch=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
     echo "Installing mom-inst package (${_arch})..."
     _ver=$(curl -sI https://github.com/dirkpetersen/mom/releases/latest | grep -i location | grep -oP 'v\K[0-9.]+')
