@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+from rich.text import Text
 from datetime import datetime
 from pathlib import Path
 
@@ -540,9 +541,10 @@ class MaudeApp(App):
         env = {**os.environ, **get_claude_env()}
         subprocess.Popen([KANNA_CMD, "--no-open"], env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.query_one("#kanna-url", Static).update(
-            "Web UI: [link=http://localhost:3210]http://localhost:3210[/link]"
-        )
+        url = "http://localhost:3210"
+        label = Text("Web UI: ")
+        label.append(url, style=f"link {url} #72c09a")
+        self.query_one("#kanna-url", Static).update(label)
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
