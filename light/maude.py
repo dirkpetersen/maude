@@ -462,12 +462,11 @@ class MaudeApp(App):
     def _refresh_table(self) -> None:
         table = self.query_one("#projects-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("  Project", "Last modified", "")
+        table.add_columns("  Project", "Last modified")
         for proj in list_projects():
             table.add_row(
                 f"  {proj['name']}",
                 proj["modified"],
-                "[red]del[/red]",
                 key=proj["name"],
             )
 
@@ -525,17 +524,6 @@ class MaudeApp(App):
         path = PROJECTS_DIR / name
         if path.exists():
             self._launch_project(path)
-
-    @on(DataTable.CellSelected)
-    def cell_selected(self, event: DataTable.CellSelected) -> None:
-        """Click on the 'del' cell triggers delete."""
-        table = self.query_one("#projects-table", DataTable)
-        # column index 2 is the del column
-        if event.coordinate.column == 2:
-            name = str(table.get_row_at(event.coordinate.row)[0]).strip()
-            path = PROJECTS_DIR / name
-            if path.exists():
-                self.push_screen(ConfirmDeleteScreen(name), self._on_confirm_delete)
 
     @on(Checkbox.Changed, "#autostart")
     def autostart_toggled(self, event: Checkbox.Changed) -> None:

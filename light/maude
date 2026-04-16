@@ -168,6 +168,10 @@ launch_web() {
     if ! command -v kanna >/dev/null 2>&1; then
         echo -e "${CYAN}Installing kanna-code...${NC}"
         bun install -g kanna-code
+        # Ensure kanna is on PATH (Bun's ~/.bun/bin may not be)
+        if [[ -x "$HOME/.bun/bin/kanna" ]]; then
+            ln -sfn "$HOME/.bun/bin/kanna" "$HOME/.local/bin/kanna"
+        fi
     fi
 
     echo -e "${GREEN}Launching kanna web UI...${NC}"

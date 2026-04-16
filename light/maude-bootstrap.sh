@@ -32,6 +32,12 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "Installing kanna-code..."
 bun install -g kanna-code
+# Symlink kanna into ~/.local/bin so it's on PATH
+# (Bun's ~/.bun/bin may be stripped by maude-path.sh)
+if [[ -x "$HOME/.bun/bin/kanna" ]] && [[ ! -e "$HOME/.local/bin/kanna" ]]; then
+    ln -sfn "$HOME/.bun/bin/kanna" "$HOME/.local/bin/kanna"
+    echo "kanna symlinked to ~/.local/bin/"
+fi
 
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
 # The drvfs mount is now active (WSL was restarted between step 5 and 6).
@@ -84,25 +90,26 @@ if [[ ! -f "$HOME/.claude/yolo-mode" ]]; then
     echo "Claude Code: yolo-mode marker created."
 fi
 
-# ── Clone Anthropic skills repo and symlink into ~/.claude/skills ─────
+# ── Copy Anthropic skills into ~/.claude/skills ──────────────────────
 # Must run AFTER the ~/.claude symlink is created above.
-SKILLS_REPO="$HOME/gh/anthropic-skills"
-mkdir -p "$HOME/gh"
-if [[ ! -d "$SKILLS_REPO" ]]; then
-    echo "Cloning Anthropic skills repo..."
-    git clone https://github.com/anthropics/skills.git "$SKILLS_REPO"
-fi
-
+# Clone repo to a temp dir, copy skill folders, then remove the clone.
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
-for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
-    if [[ -d "$SKILLS_REPO/skills/$skill" ]]; then
-        ln -sfn "$SKILLS_REPO/skills/$skill" "$SKILLS_DIR/$skill"
-        echo "  Linked skill: $skill"
-    else
-        echo "  WARNING: skill '$skill' not found in repo"
-    fi
-done
+SKILLS_TMP=$(mktemp -d)
+echo "Cloning Anthropic skills repo..."
+if git clone --depth 1 https://github.com/anthropics/skills.git "$SKILLS_TMP" 2>/dev/null; then
+    for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
+        if [[ -d "$SKILLS_TMP/skills/$skill" ]]; then
+            cp -af "$SKILLS_TMP/skills/$skill" "$SKILLS_DIR/"
+            echo "  Copied skill: $skill"
+        else
+            echo "  WARNING: skill '$skill' not found in repo"
+        fi
+    done
+else
+    echo "WARNING: could not clone skills repo — skipping"
+fi
+rm -rf "$SKILLS_TMP"
 
 # ── Claude Code: project instructions ────────────────────────────────
 # MAUDE.md is always overwritten with latest sandbox rules.
