@@ -531,7 +531,10 @@ class MaudeApp(App):
     def btn_web(self) -> None:
         with self.suspend():
             env = {**os.environ, **get_claude_env()}
-            subprocess.run([KANNA_CMD, "--no-open"], env=env, check=False)
+            try:
+                subprocess.run([KANNA_CMD, "--no-open"], env=env, check=False)
+            except KeyboardInterrupt:
+                pass
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
