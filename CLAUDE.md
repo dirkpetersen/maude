@@ -129,6 +129,7 @@ make tag VERSION=v0.2.0    # Creates + pushes git tag -> triggers CI release wor
 - **No Azure AD yet**: Authentication is deferred; web-term uses SSH password auth
 - **No containers**: appmotel deploys Python, Node.js, and Go apps only (Rust support deferred)
 - **PowerShell install uses `curl.exe`** (not `curl`, which aliases to `Invoke-WebRequest`); `iex` may be blocked by antivirus on corporate machines
+- **Line endings**: `.gitattributes` enforces LF for all text, CRLF for `.ps1` files only. PowerShell still re-adds CRLF when piping to external processes — use base64 encode/decode to work around this
 - MIT licensed
 
 ## Maude Light -- Script Pipeline
@@ -139,18 +140,19 @@ The `light/` directory contains the WSL2 sandbox implementation:
 |--------|---------|---------|
 | `setup-wsl-maude.ps1` | Admin (PowerShell) | 7-step orchestrator: WSL, WT, host folder, template, import, bootstrap |
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
-| `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen, Claude Code |
-| `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config |
+| `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom-inst (.deb), PATH, welcome screen, Claude Code |
+| `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config, yolo-mode marker |
 | `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`) |
 | `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`) |
 
 Key implementation details:
-- Files are piped into WSL via `Get-Content -Raw | wsl ... bash -c "cat > /tmp/..."` (automount is disabled, so wslpath/cp don't work)
+- Files are piped into WSL via `Get-Content -Raw | wsl ... bash -c "cat > /tmp/..."` (automount is disabled, so wslpath/cp don't work). Package install scripts use base64 encode/decode to avoid PowerShell CRLF corruption when piping
 - `/tmp` is cleared on `wsl --terminate` -- files must be re-piped after restart (step 6 re-pipes maude-bootstrap.sh)
 - Windows Terminal auto-generates profiles with `source=Microsoft.WSL` -- can't delete them, must hide with pre-hidden stubs
 - WT profile cleanup runs BEFORE self-elevation (elevated process has different `$env:LOCALAPPDATA`)
 - `~/.claude` is symlinked to `~/Maude/.claude` so settings persist on the host mount
-- **Security model**: automount disabled + no generic sudo = AI agent can only access the shared `Maude` folder and installed tools; Claude Code runs in yolo mode (safe inside sandbox)
+- **Security model**: automount disabled + no generic sudo = AI agent can only access the shared `Maude` folder and installed tools; Claude Code runs in bypassPermissions mode (safe inside sandbox). A `~/.claude/yolo-mode` marker file is created during bootstrap (delete it to disable)
+- **DANGER-ZONE.txt**: copied to `~/Maude/DANGER-ZONE.txt` on the shared host mount; warns users not to share the Maude folder via OneDrive sharing features. Auto-restored on each startup if missing
 - The `maude` CLI auto-updates Claude Code weekly (stamp file: `~/.claude/.last-update-check`)
 - **Sandbox instructions split**: `~/.claude/MAUDE.md` is always overwritten on each `maude` launch (sandbox rules, not user-editable); `~/.claude/CLAUDE.md` is created once if missing and user-owned. `CLAUDE.md` includes sandbox rules via `@MAUDE.md`
 - `maude delete <name>` is a soft-delete — moves to `Projects/.deleted/`, not permanent
@@ -181,7 +183,9 @@ A Textual-based full-screen TUI alternative to the CLI welcome screen. Always la
 - **New project**: modal dialog, spaces auto-replaced with hyphens, git init
 - **Web UI**: launches kanna in background
 - **Command Line**: exits TUI, returns to shell prompt
-- **"Start TUI with Maude" checkbox**: toggles `~/.maude-tui-autostart` flag file; `maude-welcome.sh` checks this flag and `exec maude tui` instead of showing the text banner
+- **"Start TUI with Maude" checkbox**: toggles `~/.maude-tui-autostart` flag file; `maude-welcome.sh` checks this flag and runs `maude tui` (not `exec`) instead of showing the text banner, so the shell survives after TUI exit
+- **Credential gate**: `NoCredsScreen` modal blocks TUI startup if no LLM credentials are configured (checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials`, `~/.azure/clauderc`)
+- **Exit hint**: after quitting the TUI, prints "Please type: menu \<Enter\> to get back to the TUI"
 - **Daily update**: `maude tui` checks `~/.maude-tui-last-update` stamp; downloads fresh `maude.py` from GitHub if older than 24 h
 - **Colors**: green logo, cyan highlights, yellow accents (matches welcome screen palette)
 - **Dependencies**: `textual` Python package — installed via `pip install textual` in `maude-bootstrap.sh`
@@ -195,7 +199,7 @@ All users must have `~/bin` at the **front** of PATH and `~/.local/bin` also pre
 - **Base**: Ubuntu 26.04 (full appliance) / Ubuntu 24.04 (Maude Light)
 - **Package list**: `packages/ubuntu-packages.yaml` defines all packages baked into the image (also `packages/rhel-packages.yaml` for RPM targets)
 - **Package installation during build**: `apt` directly (running as root), not mom
-- **mom**: installed in the image for post-boot user package management
+- **mom**: installed via `mom-inst` .deb package for post-boot user package management (old raw binary installs are purged first if present)
 - **appmotel + web-term**: pulled from their GitHub releases/repos during image build; no submodules
 
 ## First Boot & User Experience (Full Appliance)
