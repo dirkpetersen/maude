@@ -44,6 +44,26 @@ LOGO = (
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+def get_claude_env() -> dict[str, str]:
+    """Parse ANTHROPIC_* env vars from claude --wdebug output."""
+    env = {}
+    try:
+        result = subprocess.run(
+            ["claude", "--wdebug"], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            # Lines look like: "  ANTHROPIC_MODEL=claude-haiku-4-5"
+            if "=" in line and line.split("=", 1)[0].strip().isidentifier():
+                key, val = line.split("=", 1)
+                key = key.strip()
+                if key.startswith(("ANTHROPIC_", "CLAUDE_")):
+                    env[key] = val.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return env
+
+
 def check_credentials() -> bool:
     """Return True if Claude Code credentials are configured."""
     # Azure AI Foundry
@@ -509,9 +529,9 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-web")
     def btn_web(self) -> None:
-        subprocess.Popen([KANNA_CMD, "--no-open"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.notify("kanna launched — Ctrl+click the URL in your terminal")
+        with self.suspend():
+            env = {**os.environ, **get_claude_env()}
+            subprocess.run([KANNA_CMD, "--no-open"], env=env, check=False)
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
