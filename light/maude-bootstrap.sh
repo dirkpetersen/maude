@@ -100,6 +100,8 @@ echo "Cloning Anthropic skills repo..."
 if git clone --depth 1 https://github.com/anthropics/skills.git "$SKILLS_TMP" 2>/dev/null; then
     for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
         if [[ -d "$SKILLS_TMP/skills/$skill" ]]; then
+            # Remove old symlink if present so cp can create a real directory
+            [[ -L "$SKILLS_DIR/$skill" ]] && rm -f "$SKILLS_DIR/$skill"
             cp -af "$SKILLS_TMP/skills/$skill" "$SKILLS_DIR/"
             echo "  Copied skill: $skill"
         else
