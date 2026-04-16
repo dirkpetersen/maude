@@ -97,6 +97,21 @@ foreach ($dp in $desktopPaths) {
     }
 }
 
+# Unpin Maude folder from Quick Access if pinned
+try {
+    $Shell = New-Object -ComObject Shell.Application
+    $QuickAccess = $Shell.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}")
+    foreach ($item in $QuickAccess.Items()) {
+        if ($item.Name -eq 'Maude') {
+            $item.InvokeVerb("unpinfromhome")
+            Write-Host "Unpinned Maude from Quick Access." -ForegroundColor Gray
+            break
+        }
+    }
+} catch {
+    # Not critical — ignore
+}
+
 # ── Self-elevate to Administrator for WSL operations ──
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(

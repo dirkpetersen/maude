@@ -7,7 +7,7 @@
     Idempotent script that:
     1. Installs WSL2 (if not present)
     2. Installs Windows Terminal (if not present)
-    3. Creates a shared host folder (OneDrive or Documents) with custom icon
+    3. Creates a shared host folder (OneDrive or AppData\LocalLow) with custom icon
     4. Imports Ubuntu 24.04 as a WSL distro named "Maude"
     5. Runs root-bootstrap.sh  (user, mom, PATH, packages, sandbox mount)
     6. Runs maude-bootstrap.sh (dev-station, maude launcher, PS1)
@@ -21,12 +21,14 @@
     Run from an elevated PowerShell prompt:
         Set-ExecutionPolicy Bypass -Scope Process -Force
         .\setup-wsl-maude.ps1
+        .\setup-wsl-maude.ps1 -NoOneDrive   # skip OneDrive, use AppData\LocalLow
 #>
 
 param(
     [string]$DistroName  = "Maude",
     [string]$DefaultUser = "maude",
-    [string]$InstallDir  = "$env:LOCALAPPDATA\Maude"
+    [string]$InstallDir  = "$env:LOCALAPPDATA\Maude",
+    [switch]$NoOneDrive
 )
 
 # ── Locate Windows Terminal settings.json ─────────────────────────────
@@ -82,11 +84,13 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Not running as Administrator. Attempting to elevate..." -ForegroundColor Yellow
     try {
+        $extraArgs = if ($NoOneDrive) { " -NoOneDrive" } else { "" }
         if ($PSCommandPath) {
-            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
+            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$extraArgs"
         } else {
             # Running via iex — re-download and run the script elevated
-            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust'))"
+            $noOdFlag = if ($NoOneDrive) { " -NoOneDrive" } else { "" }
+            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; & { `$f = `$env:TEMP + '\setup-wsl-maude.ps1'; (New-Object Net.WebClient).DownloadFile('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust', `$f); & `$f$noOdFlag }"
             Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command `"$cmd`""
         }
     } catch {
@@ -177,11 +181,15 @@ function Convert-PngToIco($pngPath, $icoPath) {
     $ms.Dispose()
 }
 
-# ── Detect host folder (OneDrive for Business > OneDrive > Documents) ──
-# Priority: env vars first (set by OneDrive client), then folder scan, then Documents.
+# ── Detect host folder (OneDrive for Business > OneDrive > LocalLow) ──
+# Priority: env vars first (set by OneDrive client), then folder scan, then LocalLow.
 # OneDrive for Business folders are named "OneDrive - <Organization>" (varies by org).
+# Pass -NoOneDrive to skip OneDrive entirely and use AppData\LocalLow.
 
-if ($env:OneDriveCommercial) {
+if ($NoOneDrive) {
+    $HostFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
+    $HostFolderSource = "LocalLow (-NoOneDrive)"
+} elseif ($env:OneDriveCommercial) {
     $HostFolder = Join-Path $env:OneDriveCommercial "Maude"
     $HostFolderSource = "OneDrive for Business"
 } elseif ($env:OneDriveConsumer) {
@@ -202,8 +210,10 @@ if ($env:OneDriveCommercial) {
             $HostFolder = Join-Path $odPersonal "Maude"
             $HostFolderSource = "OneDrive Personal"
         } else {
-            $HostFolder = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "Maude"
-            $HostFolderSource = "Documents"
+            # No OneDrive found — use AppData\LocalLow to avoid the Documents folder
+            # which may later become part of OneDrive sync (unwanted for large WSL data).
+            $HostFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
+            $HostFolderSource = "LocalLow"
         }
     }
 }
@@ -357,6 +367,27 @@ if (Test-Path $iconSrc) {
     } catch {
         Write-Host "Could not set folder icon: $_" -ForegroundColor Yellow
     }
+}
+
+# Pin Maude folder to Quick Access in File Explorer
+try {
+    $Shell = New-Object -ComObject Shell.Application
+    $QuickAccess = $Shell.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}")
+    $isPinned = $false
+    foreach ($item in $QuickAccess.Items()) {
+        if ($item.Path -eq $HostFolder) { $isPinned = $true; break }
+    }
+    if (-not $isPinned) {
+        $FolderToPin = $Shell.Namespace($HostFolder)
+        if ($FolderToPin) {
+            $FolderToPin.Self.InvokeVerb("pintohome")
+            Write-Host "Pinned Maude folder to Quick Access." -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "Maude folder already pinned to Quick Access." -ForegroundColor Gray
+    }
+} catch {
+    Write-Host "Could not pin to Quick Access: $_" -ForegroundColor Yellow
 }
 
 # ── Parse package list (needed for template creation) ────────────────

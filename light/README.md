@@ -2,7 +2,7 @@
 
 A secure WSL2 sandbox for agentic AI coding. By default, WSL instances mount the entire Windows file system, giving both the user and any AI agent unrestricted access to OneDrive, Documents, and everything else on disk. Maude changes that.
 
-Maude creates a single `Maude` subfolder inside OneDrive and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
+Maude creates a single `Maude` subfolder inside OneDrive (or `AppData\LocalLow` if OneDrive is not available) and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
 
 Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder on OneDrive, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
 
@@ -34,12 +34,20 @@ curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/di
 
 That's it — one line. It downloads the setup script to a temp file and runs it. All companion files (bootstrap scripts, packages list, icon) are downloaded automatically from GitHub during setup.
 
+### Install without OneDrive
+
+If you don't use OneDrive or prefer to keep the Maude folder off cloud sync, pass `-NoOneDrive`. The shared folder is created in `AppData\LocalLow\Maude` instead and pinned to Quick Access in File Explorer:
+
+```powershell
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -NoOneDrive
+```
+
 > **Note:** Piping directly via `iex` (`Invoke-Expression`) may be blocked by antivirus on corporate machines. The `curl.exe` approach above works reliably everywhere. Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`.
 
 The setup script will:
 
 1. Install WSL and Windows Terminal (if not already present)
-2. Detect your OneDrive (or Documents) folder and create a `Maude` subfolder as the shared mount point
+2. Detect your OneDrive folder (or use `AppData\LocalLow` with `-NoOneDrive`) and create a `Maude` subfolder as the shared mount point
 3. Download Ubuntu 24.04 from the Microsoft Store and bake in all packages as a reusable template
 4. Import the template as a new `Maude` WSL distro
 5. Run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen)
@@ -110,14 +118,15 @@ This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the l
 
 ### Shared folder
 
-`~/Maude` is mounted from your Windows host (OneDrive or Documents). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce.
+`~/Maude` is mounted from your Windows host (OneDrive, or `AppData\LocalLow` with `-NoOneDrive`). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
 
 ## How it works
 
 ```
 Windows host
   │
-  ├── C:\Users\you\OneDrive\Documents\Maude\   ← shared folder (host side)
+  ├── C:\Users\you\OneDrive\...\Maude\          ← shared folder (OneDrive)
+  │   OR  AppData\LocalLow\Maude\              ← with -NoOneDrive
   │       ├── Projects/                          ← coding projects (directly used by WSL)
   │       ├── .claude/                           ← Claude Code config (symlinked from WSL)
   │       └── .kanna/                            ← kanna web UI data (symlinked from WSL)

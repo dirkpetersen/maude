@@ -36,7 +36,8 @@ mom       -> setuid binary, lets non-root users install packages
 ```
 Windows host
     |
-    +-- C:\Users\<user>\OneDrive\Documents\Maude\   <- shared folder (host side)
+    +-- C:\Users\<user>\OneDrive\...\Maude\          <- shared folder (OneDrive)
+    |   OR AppData\LocalLow\Maude\                  <- fallback (no OneDrive)
     |       +-- Projects/       <- coding projects (directly used by WSL)
     |       +-- .claude/        <- Claude Code config (symlinked from WSL)
     |       +-- .kanna/         <- kanna web UI data (symlinked from WSL)
