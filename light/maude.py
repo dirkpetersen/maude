@@ -482,6 +482,7 @@ class MaudeApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._kanna_proc: subprocess.Popen | None = None
         if not check_credentials():
             self.push_screen(NoCredsScreen())
             return
@@ -538,9 +539,22 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-web")
     def btn_web(self) -> None:
-        env = {**os.environ, **get_claude_env()}
-        subprocess.Popen([KANNA_CMD, "--no-open"], env=env,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        btn = self.query_one("#btn-web", Button)
+        # If kanna is running, kill it
+        if self._kanna_proc is not None and self._kanna_proc.poll() is None:
+            self._kanna_proc.terminate()
+            self._kanna_proc = None
+            btn.label = "Web UI"
+            self.query_one("#kanna-url", Static).update("")
+            return
+        # Start kanna with Claude env vars prepended
+        extra_env = get_claude_env()
+        env = {**os.environ, **extra_env}
+        self._kanna_proc = subprocess.Popen(
+            [KANNA_CMD, "--no-open"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        btn.label = "Stop Web UI"
         url = "http://localhost:3210"
         label = Text("Web UI: ")
         label.append(url, style=f"link {url} #72c09a")
