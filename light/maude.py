@@ -332,6 +332,13 @@ class MaudeApp(App):
     #btn-web  { color: #c0a8a8; }
     #btn-cli  { color: #b09898; }
 
+    #kanna-url {
+        color: #72c09a;
+        margin-left: 2;
+        content-align: left middle;
+        height: 100%;
+    }
+
     /* Modal: confirm delete */
     ConfirmDeleteScreen {
         align: center middle;
@@ -470,6 +477,7 @@ class MaudeApp(App):
             yield Button("+ New",        id="btn-new")
             yield Button("Web UI",       id="btn-web")
             yield Button("Command Line", id="btn-cli")
+            yield Static("", id="kanna-url")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -529,12 +537,12 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-web")
     def btn_web(self) -> None:
-        with self.suspend():
-            env = {**os.environ, **get_claude_env()}
-            try:
-                subprocess.run([KANNA_CMD, "--no-open"], env=env, check=False)
-            except KeyboardInterrupt:
-                pass
+        env = {**os.environ, **get_claude_env()}
+        subprocess.Popen([KANNA_CMD, "--no-open"], env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.query_one("#kanna-url", Static).update(
+            "Web UI: [link=http://localhost:3210]http://localhost:3210[/link]"
+        )
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
