@@ -490,8 +490,13 @@ $DistroName is already installed. To reinstall, run teardown first:
             $onlineList = (wsl --list --online 2>&1) -join "`n"
             $candidates = @()
             if ($onlineList -match "Ubuntu-$ubuntuVersion") { $candidates += "Ubuntu-$ubuntuVersion" }
-            if ($onlineList -match 'Ubuntu\b')              { $candidates += "Ubuntu" }
-            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion", "Ubuntu") }
+            # Only fall back to plain "Ubuntu" for the default version (24.04).
+            # With -Raccoon (26.04), plain "Ubuntu" would install the wrong version.
+            if (-not $Raccoon) {
+                if ($onlineList -match 'Ubuntu\b') { $candidates += "Ubuntu" }
+                if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion", "Ubuntu") }
+            }
+            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion") }
 
             foreach ($distro in $candidates) {
                 Write-Host "Trying Store install: '$distro' as '$templateDistro'..." -ForegroundColor Gray
