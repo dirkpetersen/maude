@@ -154,17 +154,20 @@ def check_credentials() -> bool:
 
 
 def list_projects() -> list[dict]:
-    """Return sorted list of project dicts with name and mtime."""
+    """Return projects sorted by last-modified time, newest first."""
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     projects = []
-    for p in sorted(PROJECTS_DIR.iterdir()):
+    for p in PROJECTS_DIR.iterdir():
         if p.is_dir() and not p.name.startswith("."):
             try:
                 mtime = p.stat().st_mtime
-                modified = datetime.fromtimestamp(mtime).strftime("%b %d, %Y")
             except OSError:
-                modified = "unknown"
-            projects.append({"name": p.name, "modified": modified, "path": p})
+                mtime = 0.0
+            modified = (datetime.fromtimestamp(mtime).strftime("%b %d, %Y")
+                        if mtime else "unknown")
+            projects.append({"name": p.name, "modified": modified,
+                             "path": p, "mtime": mtime})
+    projects.sort(key=lambda d: d["mtime"], reverse=True)
     return projects
 
 
@@ -391,14 +394,36 @@ class MaudeApp(App):
     }
 
     #model-select {
-        background: transparent;
+        background: #242424;
         border: none;
         padding: 0;
         height: auto;
     }
 
-    #model-select RadioButton {
-        background: transparent;
+    #model-select:focus-within {
+        background: #2a2424;
+    }
+
+    /* Tame Textual's default blue toggle/focus accents → warm greys */
+    Checkbox, RadioButton {
+        background: #242424;
+        color: #c09898;
+    }
+
+    Checkbox:focus, RadioButton:focus {
+        background: #2a2424;
+        color: #f0d0d0;
+    }
+
+    Checkbox > .toggle--button,
+    RadioButton > .toggle--button {
+        background: #3a3030;
+        color: #d4a0a0;
+    }
+
+    Checkbox.-on > .toggle--button,
+    RadioButton.-on > .toggle--button {
+        color: #72c09a;
     }
 
     #main {
