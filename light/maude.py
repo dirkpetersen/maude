@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.request
 from rich.text import Text
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +36,10 @@ DELETED_DIR  = PROJECTS_DIR / ".deleted"
 AUTOSTART_FLAG = Path.home() / ".maude-tui-autostart"
 KANNA_CMD    = "kanna"
 
+UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
+UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
+UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
+
 LOGO = (
     "  __  __                 _      \n"
     " |  \\/  | __ _ _   _  __| | ___ \n"
@@ -44,6 +50,32 @@ LOGO = (
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+def maybe_self_update() -> None:
+    """Refresh maude.py from GitHub once per day, at or after noon local time.
+    The new version takes effect on the next launch."""
+    now = datetime.now()
+    if now.hour < UPDATE_HOUR:
+        return
+    today = now.date().isoformat()
+    try:
+        if UPDATE_STAMP.read_text().strip() == today:
+            return
+    except OSError:
+        pass
+
+    target = Path(__file__).resolve()
+    try:
+        with urllib.request.urlopen(UPDATE_URL, timeout=10) as resp:
+            new_bytes = resp.read()
+        tmp = target.with_name(target.name + ".new")
+        tmp.write_bytes(new_bytes)
+        tmp.replace(target)
+        UPDATE_STAMP.write_text(today)
+    except Exception as err:
+        print(f"maude: update check failed ({err}); using cached version",
+              file=sys.stderr)
+
 
 def get_claude_env() -> dict[str, str]:
     """Parse ANTHROPIC_* env vars from claude --wdebug output."""
@@ -610,5 +642,6 @@ class MaudeApp(App):
 # ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    maybe_self_update()
     app = MaudeApp()
     app.run()

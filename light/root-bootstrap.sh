@@ -182,8 +182,11 @@ if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then
         -o "$HOME/Maude/DANGER-ZONE.txt" 2>/dev/null || true
 fi
 
-# If TUI auto-start is enabled, launch it instead of the text welcome
-if [[ -t 1 ]] && [[ -f "$HOME/.maude-tui-autostart" ]] && command -v maude >/dev/null 2>&1; then
+# If TUI auto-start is enabled, launch it instead of the text welcome.
+# Guard with MAUDE_WELCOMED so we don't re-launch when .bashrc re-sources
+# this script (it is already sourced via /etc/profile.d on login shells).
+if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && [[ -f "$HOME/.maude-tui-autostart" ]] && command -v maude >/dev/null 2>&1; then
+    export MAUDE_WELCOMED=1
     maude tui
     return 0 2>/dev/null || true
 fi
@@ -210,8 +213,8 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     printf "  ${C}maude project-name${N}   Create or open a coding project\n"
     printf "  ${C}maude list${N}           Show your projects\n"
     printf "  ${C}maude delete name${N}    Delete a project (moves to .deleted/)\n"
-    printf "  ${C}maude web${N}            Launch web UI (kanna, experimental)\n"
     printf "  ${C}maude tui${N}            Interactive project launcher (experimental)\n"
+    printf "  ${C}maude web${N}            Launch web UI (kanna, experimental)\n"
     printf "  ${C}maude help${N}           Full usage info\n"
     printf "\n"
     printf "  ${Y}mom install <pkg>${N}   Install system packages (no sudo needed)\n"
