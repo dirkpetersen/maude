@@ -206,7 +206,7 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     printf "${G} | |  | | (_| | |_| | (_| |  __/${N}\n"
     printf "${G} |_|  |_|\__,_|\__,_|\__,_|\___|${N}\n"
     printf "\n"
-    printf "  ${B}Agentic coding sandbox${N}  -  Ubuntu 24.04 LTS\n"
+    printf "  ${B}Agentic coding sandbox${N}  -  Ubuntu LTS\n"
     printf "\n"
     printf "  Always type the command '${B}maude${N}' followed by more words as the instruction:\n"
     printf "\n"
