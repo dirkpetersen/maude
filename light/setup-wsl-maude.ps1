@@ -620,7 +620,7 @@ $DistroName is already installed. To reinstall, run teardown first:
                 'apt-get install -y unzip software-properties-common',
                 'add-apt-repository -y universe',
                 'apt-get update -q',
-                "cat | tr -d '\r' | xargs apt-get install -y --no-install-recommends",
+                "PKGS=`$(cat | tr -d '\r'); apt-get install -y --no-install-recommends `$PKGS || for p in `$PKGS; do apt-get install -y --no-install-recommends `$p 2>/dev/null; done",
                 'rm -f /usr/sbin/policy-rc.d',
                 'apt-get clean'
             )
