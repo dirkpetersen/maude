@@ -201,30 +201,36 @@ function Convert-PngToIco($pngPath, $icoPath) {
 # ── Detect host folder ──
 # -NoOneDrive → always AppData\LocalLow\Maude
 # -OneDrive   → always OneDrive (Business > Personal > generic)
-# Neither     → reuse previous install location; if new install, default to LocalLow
-#
-# Previous install is detected by reading fstab from an existing Maude distro.
-# LocalLow is preferred over Documents because Documents may later sync to OneDrive.
+# Neither     → scan for existing Maude folders on disk:
+#   - Found in both OneDrive and LocalLow → pick LocalLow
+#   - Found only in OneDrive → pick OneDrive
+#   - Found only in LocalLow → pick LocalLow
+#   - Found nowhere → pick LocalLow (new install default)
+# A "Projects" subfolder confirms a real previous install.
 
-function Find-OneDriveFolder {
+function Find-OneDriveMaudeFolder {
+    $candidates = @()
     if ($env:OneDriveCommercial) {
-        return @((Join-Path $env:OneDriveCommercial "Maude"), "OneDrive for Business")
+        $candidates += [PSCustomObject]@{ Path = Join-Path $env:OneDriveCommercial "Maude"; Source = "OneDrive for Business" }
     }
     if ($env:OneDriveConsumer) {
-        return @((Join-Path $env:OneDriveConsumer "Maude"), "OneDrive Personal")
+        $candidates += [PSCustomObject]@{ Path = Join-Path $env:OneDriveConsumer "Maude"; Source = "OneDrive Personal" }
     }
-    if ($env:OneDrive) {
-        return @((Join-Path $env:OneDrive "Maude"), "OneDrive")
+    if ($env:OneDrive -and -not $env:OneDriveCommercial -and -not $env:OneDriveConsumer) {
+        $candidates += [PSCustomObject]@{ Path = Join-Path $env:OneDrive "Maude"; Source = "OneDrive" }
     }
     $odBusiness = Get-ChildItem -Path $env:USERPROFILE -Directory -Filter "OneDrive - *" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($odBusiness) {
-        return @((Join-Path $odBusiness.FullName "Maude"), "OneDrive for Business ($($odBusiness.Name))")
+        $p = Join-Path $odBusiness.FullName "Maude"
+        if (-not ($candidates | Where-Object { $_.Path -eq $p })) {
+            $candidates += [PSCustomObject]@{ Path = $p; Source = "OneDrive for Business ($($odBusiness.Name))" }
+        }
     }
     $odPersonal = Join-Path $env:USERPROFILE "OneDrive"
-    if (Test-Path $odPersonal) {
-        return @((Join-Path $odPersonal "Maude"), "OneDrive Personal")
+    if ((Test-Path $odPersonal) -and -not ($candidates | Where-Object { $_.Path -eq (Join-Path $odPersonal "Maude") })) {
+        $candidates += [PSCustomObject]@{ Path = Join-Path $odPersonal "Maude"; Source = "OneDrive Personal" }
     }
-    return $null
+    return $candidates
 }
 
 $localLowFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
@@ -233,32 +239,31 @@ if ($NoOneDrive) {
     $HostFolder = $localLowFolder
     $HostFolderSource = "LocalLow (-NoOneDrive)"
 } elseif ($OneDrive) {
-    $odResult = Find-OneDriveFolder
-    if ($odResult) {
-        $HostFolder = $odResult[0]
-        $HostFolderSource = "$($odResult[1]) (-OneDrive)"
+    $odCandidates = Find-OneDriveMaudeFolder
+    if ($odCandidates.Count -gt 0) {
+        $HostFolder = $odCandidates[0].Path
+        $HostFolderSource = "$($odCandidates[0].Source) (-OneDrive)"
     } else {
         Write-Host "WARNING: -OneDrive specified but no OneDrive folder found. Using LocalLow." -ForegroundColor Yellow
         $HostFolder = $localLowFolder
         $HostFolderSource = "LocalLow (OneDrive not found)"
     }
 } else {
-    # No flag — check for previous install, otherwise default to LocalLow
-    $previousFolder = $null
-    if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-        # fstab escapes spaces as \040; extract the source path and decode
-        $fstabLine = (wsl -d $DistroName -u root -- grep -m1 '/home/maude/Maude' /etc/fstab 2>&1) -replace "`0","" | Select-Object -First 1
-        if ($LASTEXITCODE -eq 0 -and $fstabLine -match '^(\S+)\s+/home/') {
-            $prevPath = $Matches[1] -replace '\\040',' '
-            if (Test-Path $prevPath) {
-                $previousFolder = $prevPath
-            }
-        }
-    }
-    if ($previousFolder) {
-        $HostFolder = $previousFolder
-        $HostFolderSource = "previous install"
+    # No flag — scan for existing Maude/Projects folders on disk
+    $localLowExists = Test-Path (Join-Path $localLowFolder "Projects")
+    $odCandidates = Find-OneDriveMaudeFolder
+    $odExisting = $odCandidates | Where-Object { Test-Path (Join-Path $_.Path "Projects") } | Select-Object -First 1
+
+    if ($localLowExists) {
+        # LocalLow wins when it exists (even if OneDrive also has one)
+        $HostFolder = $localLowFolder
+        $HostFolderSource = "LocalLow (existing)"
+    } elseif ($odExisting) {
+        # Only in OneDrive — use it
+        $HostFolder = $odExisting.Path
+        $HostFolderSource = "$($odExisting.Source) (existing)"
     } else {
+        # New install — default to LocalLow
         $HostFolder = $localLowFolder
         $HostFolderSource = "LocalLow"
     }
