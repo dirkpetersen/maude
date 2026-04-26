@@ -528,11 +528,10 @@ $DistroName is already installed. To reinstall, run teardown first:
             } else {
                 Write-Host "Downloading $ubuntuLabel WSL image from Canonical..." -ForegroundColor Yellow
             }
-            # Released versions use releases.ubuntu.com; pre-release use cdimages daily builds
             if ($Raccoon) {
-                $rootfsUrl = "https://releases.ubuntu.com/$ubuntuVersion/ubuntu-$ubuntuVersion-wsl-amd64.wsl"
+                $rootfsUrl = "https://releases.ubuntu.com/resolute/ubuntu-26.04-wsl-amd64.wsl"
             } else {
-                $rootfsUrl = "https://cdimages.ubuntu.com/ubuntu-wsl/$ubuntuCodename/daily-live/current/$ubuntuCodename-wsl-amd64.wsl"
+                $rootfsUrl = "https://releases.ubuntu.com/noble/ubuntu-24.04.4-wsl-amd64.wsl"
             }
             $rootfsFile = Join-Path $env:TEMP "ubuntu-$ubuntuVersion-wsl-amd64.wsl"
             Write-Host "Downloading ~375 MB (this may take a few minutes)..."
