@@ -8,9 +8,9 @@
     1. Removes the Windows Terminal profile and desktop shortcut (no admin needed)
     2. Unregisters the Maude WSL distro (requires admin — self-elevates)
     3. Removes the install directory
-    4. Optionally removes the Ubuntu-24.04-Template distro
+    4. Optionally removes the Ubuntu template distro
 
-    By default the Ubuntu-24.04 template distro is kept so the next
+    By default the Ubuntu template distro is kept so the next
     setup-wsl-maude.ps1 run is fast (no Microsoft Store download).
     Pass -IncludeTemplate to remove it too.
 
@@ -60,7 +60,7 @@ function Remove-WTMaudeProfiles {
     $wtJson  = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
     $before  = $wtJson.profiles.list.Count
     $removeNames = @($DistroName)
-    if ($IncludeTemplate) { $removeNames += "Ubuntu-24.04-Template" }
+    if ($IncludeTemplate) { $removeNames += @("Ubuntu-24.04-Template", "Ubuntu-26.04-Template") }
     $wtJson.profiles.list = @(
         $wtJson.profiles.list | Where-Object {
             $nm = if ($_.PSObject.Properties['name']) { $_.name } else { '' }
@@ -175,22 +175,25 @@ if (Test-Path $InstallDir) {
     Write-Host "$InstallDir does not exist. Nothing to remove." -ForegroundColor Gray
 }
 
-# ── Step 4: Optionally remove the Ubuntu-24.04-Template ──        # REQUIRES ADMIN
+# ── Step 4: Optionally remove Ubuntu template distros ──          # REQUIRES ADMIN
 
-$templateDistro = "Ubuntu-24.04-Template"
+$templateDistros = @("Ubuntu-24.04-Template", "Ubuntu-26.04-Template")
 
 if ($IncludeTemplate) {
-    Write-Host "`n[4/4] Removing '$templateDistro'..." -ForegroundColor Green
-    wsl --unregister $templateDistro 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "'$templateDistro' unregistered." -ForegroundColor Gray
-    } else {
-        Write-Host "'$templateDistro' not found." -ForegroundColor Gray
+    Write-Host "`n[4/4] Removing Ubuntu templates..." -ForegroundColor Green
+    foreach ($tpl in $templateDistros) {
+        wsl --unregister $tpl 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "'$tpl' unregistered." -ForegroundColor Gray
+        }
     }
 } else {
-    Write-Host "`n[4/4] Keeping '$templateDistro' for fast rebuilds." -ForegroundColor Green
-    if (Test-WslDistro $templateDistro) {
-        Write-Host "  (pass -IncludeTemplate to remove it too)" -ForegroundColor Gray
+    $kept = $templateDistros | Where-Object { Test-WslDistro $_ }
+    if ($kept) {
+        Write-Host "`n[4/4] Keeping template(s) for fast rebuilds: $($kept -join ', ')" -ForegroundColor Green
+        Write-Host "  (pass -IncludeTemplate to remove them too)" -ForegroundColor Gray
+    } else {
+        Write-Host "`n[4/4] No templates found." -ForegroundColor Green
     }
 }
 

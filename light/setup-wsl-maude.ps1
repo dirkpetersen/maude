@@ -1,14 +1,14 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Sets up a WSL2 Ubuntu 24.04 dev environment named "Maude".
+    Sets up a WSL2 Ubuntu dev environment named "Maude".
 
 .DESCRIPTION
     Idempotent script that:
     1. Installs WSL2 (if not present)
     2. Installs Windows Terminal (if not present)
     3. Creates a shared host folder (OneDrive or AppData\LocalLow) with custom icon
-    4. Imports Ubuntu 24.04 as a WSL distro named "Maude"
+    4. Imports Ubuntu (24.04 or 26.04) as a WSL distro named "Maude"
     5. Runs root-bootstrap.sh  (user, mom, PATH, packages, sandbox mount)
     6. Runs maude-bootstrap.sh (dev-station, maude launcher, PS1)
     7. Opens Maude in Windows Terminal
@@ -20,16 +20,31 @@
 .NOTES
     Run from an elevated PowerShell prompt:
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        .\setup-wsl-maude.ps1
-        .\setup-wsl-maude.ps1 -NoOneDrive   # skip OneDrive, use AppData\LocalLow
+        .\setup-wsl-maude.ps1                # default: AppData\LocalLow (new) or previous location
+        .\setup-wsl-maude.ps1 -OneDrive      # force OneDrive location
+        .\setup-wsl-maude.ps1 -NoOneDrive    # force AppData\LocalLow
+        .\setup-wsl-maude.ps1 -Raccoon       # use Ubuntu 26.04 instead of 24.04
 #>
 
 param(
     [string]$DistroName  = "Maude",
     [string]$DefaultUser = "maude",
     [string]$InstallDir  = "$env:LOCALAPPDATA\Maude",
-    [switch]$NoOneDrive
+    [switch]$OneDrive,
+    [switch]$NoOneDrive,
+    [switch]$Raccoon
 )
+
+# Ubuntu version: 26.04 (Raccoon) or 24.04 (Noble) — affects template name, Store candidates, and download URL
+if ($Raccoon) {
+    $ubuntuVersion  = "26.04"
+    $ubuntuCodename = "resolute"
+    $ubuntuLabel    = "Ubuntu 26.04 (Resolute Raccoon)"
+} else {
+    $ubuntuVersion  = "24.04"
+    $ubuntuCodename = "noble"
+    $ubuntuLabel    = "Ubuntu 24.04 (Noble Numbat)"
+}
 
 # ── Locate Windows Terminal settings.json ─────────────────────────────
 # Supports Store, Preview, and non-Store (winget/scoop) installs.
@@ -84,13 +99,15 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Not running as Administrator. Attempting to elevate..." -ForegroundColor Yellow
     try {
-        $extraArgs = if ($NoOneDrive) { " -NoOneDrive" } else { "" }
+        $extraArgs = ""
+        if ($OneDrive)   { $extraArgs += " -OneDrive" }
+        if ($NoOneDrive) { $extraArgs += " -NoOneDrive" }
+        if ($Raccoon)    { $extraArgs += " -Raccoon" }
         if ($PSCommandPath) {
             Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$extraArgs"
         } else {
             # Running via iex — re-download and run the script elevated
-            $noOdFlag = if ($NoOneDrive) { " -NoOneDrive" } else { "" }
-            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; & { `$f = `$env:TEMP + '\setup-wsl-maude.ps1'; (New-Object Net.WebClient).DownloadFile('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust', `$f); & `$f$noOdFlag }"
+            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; & { `$f = `$env:TEMP + '\setup-wsl-maude.ps1'; (New-Object Net.WebClient).DownloadFile('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust', `$f); & `$f$extraArgs }"
             Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command `"$cmd`""
         }
     } catch {
@@ -181,40 +198,69 @@ function Convert-PngToIco($pngPath, $icoPath) {
     $ms.Dispose()
 }
 
-# ── Detect host folder (OneDrive for Business > OneDrive > LocalLow) ──
-# Priority: env vars first (set by OneDrive client), then folder scan, then LocalLow.
-# OneDrive for Business folders are named "OneDrive - <Organization>" (varies by org).
-# Pass -NoOneDrive to skip OneDrive entirely and use AppData\LocalLow.
+# ── Detect host folder ──
+# -NoOneDrive → always AppData\LocalLow\Maude
+# -OneDrive   → always OneDrive (Business > Personal > generic)
+# Neither     → reuse previous install location; if new install, default to LocalLow
+#
+# Previous install is detected by reading fstab from an existing Maude distro.
+# LocalLow is preferred over Documents because Documents may later sync to OneDrive.
 
-if ($NoOneDrive) {
-    $HostFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
-    $HostFolderSource = "LocalLow (-NoOneDrive)"
-} elseif ($env:OneDriveCommercial) {
-    $HostFolder = Join-Path $env:OneDriveCommercial "Maude"
-    $HostFolderSource = "OneDrive for Business"
-} elseif ($env:OneDriveConsumer) {
-    $HostFolder = Join-Path $env:OneDriveConsumer "Maude"
-    $HostFolderSource = "OneDrive Personal"
-} elseif ($env:OneDrive) {
-    $HostFolder = Join-Path $env:OneDrive "Maude"
-    $HostFolderSource = "OneDrive"
-} else {
-    # Env vars not set — scan user profile for OneDrive folders
+function Find-OneDriveFolder {
+    if ($env:OneDriveCommercial) {
+        return @((Join-Path $env:OneDriveCommercial "Maude"), "OneDrive for Business")
+    }
+    if ($env:OneDriveConsumer) {
+        return @((Join-Path $env:OneDriveConsumer "Maude"), "OneDrive Personal")
+    }
+    if ($env:OneDrive) {
+        return @((Join-Path $env:OneDrive "Maude"), "OneDrive")
+    }
     $odBusiness = Get-ChildItem -Path $env:USERPROFILE -Directory -Filter "OneDrive - *" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($odBusiness) {
-        $HostFolder = Join-Path $odBusiness.FullName "Maude"
-        $HostFolderSource = "OneDrive for Business ($($odBusiness.Name))"
+        return @((Join-Path $odBusiness.FullName "Maude"), "OneDrive for Business ($($odBusiness.Name))")
+    }
+    $odPersonal = Join-Path $env:USERPROFILE "OneDrive"
+    if (Test-Path $odPersonal) {
+        return @((Join-Path $odPersonal "Maude"), "OneDrive Personal")
+    }
+    return $null
+}
+
+$localLowFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
+
+if ($NoOneDrive) {
+    $HostFolder = $localLowFolder
+    $HostFolderSource = "LocalLow (-NoOneDrive)"
+} elseif ($OneDrive) {
+    $odResult = Find-OneDriveFolder
+    if ($odResult) {
+        $HostFolder = $odResult[0]
+        $HostFolderSource = "$($odResult[1]) (-OneDrive)"
     } else {
-        $odPersonal = Join-Path $env:USERPROFILE "OneDrive"
-        if (Test-Path $odPersonal) {
-            $HostFolder = Join-Path $odPersonal "Maude"
-            $HostFolderSource = "OneDrive Personal"
-        } else {
-            # No OneDrive found — use AppData\LocalLow to avoid the Documents folder
-            # which may later become part of OneDrive sync (unwanted for large WSL data).
-            $HostFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
-            $HostFolderSource = "LocalLow"
+        Write-Host "WARNING: -OneDrive specified but no OneDrive folder found. Using LocalLow." -ForegroundColor Yellow
+        $HostFolder = $localLowFolder
+        $HostFolderSource = "LocalLow (OneDrive not found)"
+    }
+} else {
+    # No flag — check for previous install, otherwise default to LocalLow
+    $previousFolder = $null
+    if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+        # fstab escapes spaces as \040; extract the source path and decode
+        $fstabLine = (wsl -d $DistroName -u root -- grep -m1 '/home/maude/Maude' /etc/fstab 2>&1) -replace "`0","" | Select-Object -First 1
+        if ($LASTEXITCODE -eq 0 -and $fstabLine -match '^(\S+)\s+/home/') {
+            $prevPath = $Matches[1] -replace '\\040',' '
+            if (Test-Path $prevPath) {
+                $previousFolder = $prevPath
+            }
         }
+    }
+    if ($previousFolder) {
+        $HostFolder = $previousFolder
+        $HostFolderSource = "previous install"
+    } else {
+        $HostFolder = $localLowFolder
+        $HostFolderSource = "LocalLow"
     }
 }
 
@@ -405,7 +451,7 @@ if (Test-Path $packagesYaml) {
     Write-Host "  $($packages.Count) packages from ubuntu-packages.yaml"
 }
 
-# ── Step 4: Import Ubuntu 24.04 as "Maude" ──                     # REQUIRES ADMIN (wsl --install, --import, --unregister)
+# ── Step 4: Import $ubuntuLabel as "Maude" ──                     # REQUIRES ADMIN (wsl --install, --import, --unregister)
 # WSL -l -q outputs UTF-16 LE with embedded null bytes; strip them before matching.
 # Packages are pre-installed into the template so rebuilds are fast (~30s vs ~5min).
 
@@ -420,12 +466,11 @@ $DistroName is already installed. To reinstall, run teardown first:
 "@ -ForegroundColor Yellow
     exit 0
 } else {
-    # Use a persistent template distro named "Ubuntu-24.04-Template" with all
-    # packages pre-installed.  Avoids re-downloading from the Microsoft Store
-    # and re-installing packages on every rebuild.
-    # teardown-wsl-maude.ps1 -IncludeTemplate removes it.
-    $templateDistro = "Ubuntu-24.04-Template"
-    $rootfsTar      = "$env:TEMP\ubuntu-2404-rootfs.tar"
+    # Use a persistent template distro with all packages pre-installed.
+    # Avoids re-downloading from the Microsoft Store and re-installing
+    # packages on every rebuild. teardown-wsl-maude.ps1 -IncludeTemplate removes it.
+    $templateDistro = "Ubuntu-${ubuntuVersion}-Template"
+    $rootfsTar      = "$env:TEMP\ubuntu-$($ubuntuVersion -replace '\.','')_rootfs.tar"
 
     if (-not (Test-WslDistro $templateDistro)) {
         Write-Host "Installing '$templateDistro' (first time only)..."
@@ -444,9 +489,9 @@ $DistroName is already installed. To reinstall, run teardown first:
             # No risk of overwriting existing distros.
             $onlineList = (wsl --list --online 2>&1) -join "`n"
             $candidates = @()
-            if ($onlineList -match 'Ubuntu-24.04') { $candidates += "Ubuntu-24.04" }
-            if ($onlineList -match 'Ubuntu\b')     { $candidates += "Ubuntu" }
-            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-24.04", "Ubuntu") }
+            if ($onlineList -match "Ubuntu-$ubuntuVersion") { $candidates += "Ubuntu-$ubuntuVersion" }
+            if ($onlineList -match 'Ubuntu\b')              { $candidates += "Ubuntu" }
+            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion", "Ubuntu") }
 
             foreach ($distro in $candidates) {
                 Write-Host "Trying Store install: '$distro' as '$templateDistro'..." -ForegroundColor Gray
@@ -476,10 +521,10 @@ $DistroName is already installed. To reinstall, run teardown first:
             if ($hasNameFlag) {
                 Write-Host "Store install failed. Downloading from Canonical..." -ForegroundColor Yellow
             } else {
-                Write-Host "Downloading Ubuntu 24.04 WSL image from Canonical..." -ForegroundColor Yellow
+                Write-Host "Downloading $ubuntuLabel WSL image from Canonical..." -ForegroundColor Yellow
             }
-            $rootfsUrl  = "https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-amd64.wsl"
-            $rootfsFile = Join-Path $env:TEMP "ubuntu-noble-wsl-amd64.wsl"
+            $rootfsUrl  = "https://cdimages.ubuntu.com/ubuntu-wsl/$ubuntuCodename/daily-live/current/$ubuntuCodename-wsl-amd64.wsl"
+            $rootfsFile = Join-Path $env:TEMP "ubuntu-$ubuntuCodename-wsl-amd64.wsl"
             Write-Host "Downloading ~375 MB (this may take a few minutes)..."
             curl.exe -L -o $rootfsFile "$rootfsUrl"
             if (-not (Test-Path $rootfsFile) -or (Get-Item $rootfsFile).Length -lt 100MB) {
@@ -707,7 +752,7 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
         }
 
         # Hide all template profiles
-        if ($nm -eq 'Ubuntu-24.04-Template') {
+        if ($nm -eq $templateDistro) {
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
             $hasTemplateProfile = $true
         }
@@ -731,7 +776,7 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
     }
     if (-not $hasTemplateProfile) {
         $templateStub = [PSCustomObject]@{
-            name   = "Ubuntu-24.04-Template"
+            name   = $templateDistro
             source = "Windows.Terminal.Wsl"
             hidden = $true
         }

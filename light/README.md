@@ -15,7 +15,7 @@ or a simple CLI
 
 ## What you get
 
-- **Sandboxed Ubuntu 24.04** — Windows drive automount is disabled; only one folder (`~/Maude`) is shared with the host via drvfs
+- **Sandboxed Ubuntu** (24.04 default, 26.04 with `-Raccoon`) — Windows drive automount is disabled; only one folder (`~/Maude`) is shared with the host via drvfs
 - **Claude Code in yolo mode** — all tool permissions auto-approved (safe inside the sandbox)
 - **Pre-installed dev tools** — Python, Node.js 24, Go, Rust, build-essential, git, GitHub CLI, ripgrep, and [90+ packages](../packages/ubuntu-packages.yaml)
 - **[mom](https://github.com/dirkpetersen/mom)** — install additional system packages without sudo (`mom install <pkg>`)
@@ -32,23 +32,37 @@ Open **PowerShell as Administrator** (right-click → "Run as Administrator") an
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
 
-That's it — one line. It downloads the setup script to a temp file and runs it. All companion files (bootstrap scripts, packages list, icon) are downloaded automatically from GitHub during setup.
-
-### Install without OneDrive
-
-If you don't use OneDrive or prefer to keep the Maude folder off cloud sync, pass `-NoOneDrive`. The shared folder is created in `AppData\LocalLow\Maude` instead and pinned to Quick Access in File Explorer:
-
-```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -NoOneDrive
-```
+That's it — one line. By default the shared folder is created in `AppData\LocalLow\Maude` and pinned to Quick Access in File Explorer. On reinstalls, the script automatically reuses the previous folder location.
 
 > **Note:** Piping directly via `iex` (`Invoke-Expression`) may be blocked by antivirus on corporate machines. The `curl.exe` approach above works reliably everywhere. Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`.
+
+### Install options
+
+| Flag | Shared folder location |
+|------|------------------------|
+| *(default)* | `AppData\LocalLow\Maude` (new install) or previous location (reinstall) |
+| `-OneDrive` | OneDrive `Maude` subfolder (Business > Personal > generic) |
+| `-NoOneDrive` | `AppData\LocalLow\Maude` (even on reinstall, ignores previous location) |
+| `-Raccoon` | Use Ubuntu 26.04 (Resolute Raccoon) instead of 24.04 |
+
+Examples:
+
+```powershell
+# Default install (LocalLow)
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
+
+# Store data in OneDrive for cross-device sync
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -OneDrive
+
+# Use Ubuntu 26.04 (Resolute Raccoon)
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Raccoon
+```
 
 The setup script will:
 
 1. Install WSL and Windows Terminal (if not already present)
-2. Detect your OneDrive folder (or use `AppData\LocalLow` with `-NoOneDrive`) and create a `Maude` subfolder as the shared mount point
-3. Download Ubuntu 24.04 from the Microsoft Store and bake in all packages as a reusable template
+2. Create a `Maude` shared folder (see options above) and pin it to Quick Access
+3. Download Ubuntu from the Microsoft Store and bake in all packages as a reusable template
 4. Import the template as a new `Maude` WSL distro
 5. Run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen)
 6. Run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher)
