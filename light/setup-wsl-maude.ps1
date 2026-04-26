@@ -507,12 +507,12 @@ $DistroName is already installed. To reinstall, run teardown first:
                     Write-Host "Hyper-V/VM Platform not available, skipping Store install." -ForegroundColor Yellow
                     # Clean up partial install — only terminate the specific distro,
                     # not all of WSL (other user distros may be running).
-                    wsl --terminate $templateDistro 2>$null
-                    wsl --unregister $templateDistro 2>$null
+                    wsl --terminate $templateDistro 2>&1 | Out-Null
+                    wsl --unregister $templateDistro 2>&1 | Out-Null
                     break
                 }
                 # Ghost entry? Clear and retry once
-                wsl --unregister $templateDistro 2>$null
+                wsl --unregister $templateDistro 2>&1 | Out-Null
                 wsl --install -d $distro --name $templateDistro --no-launch 2>$null
                 if ($LASTEXITCODE -eq 0) { $installed = $true; break }
                 Write-Host "'$distro' not available via Store, trying next..." -ForegroundColor Yellow
@@ -548,8 +548,8 @@ $DistroName is already installed. To reinstall, run teardown first:
             }
             # Clean up any ghost registration from failed Store installs.
             # Only terminate the specific distro — don't kill other running WSL instances.
-            wsl --terminate $templateDistro 2>$null
-            wsl --unregister $templateDistro 2>$null
+            wsl --terminate $templateDistro 2>&1 | Out-Null
+            wsl --unregister $templateDistro 2>&1 | Out-Null
             # Remove stale directory from failed Store installs (ext4.vhdx)
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
             if (Test-Path $tplDir) {
@@ -574,7 +574,7 @@ $DistroName is already installed. To reinstall, run teardown first:
             wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "WSL2 import failed. Trying WSL1 (no virtualization needed)..." -ForegroundColor Yellow
-                wsl --unregister $templateDistro 2>$null
+                wsl --unregister $templateDistro 2>&1 | Out-Null
                 if (Test-Path $tplDir) {
                     Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
                 }
@@ -849,7 +849,7 @@ if ($wtExe) {
 
 if ($removeTplAfterInstall -and (Test-WslDistro $templateDistro)) {
     Write-Host "`nRemoving Ubuntu template to free disk space (low disk: ${freeGB} GB)..." -ForegroundColor Yellow
-    wsl --unregister $templateDistro 2>$null
+    wsl --unregister $templateDistro 2>&1 | Out-Null
     Write-Host "Template removed. Note: future reinstalls will take longer." -ForegroundColor Yellow
 }
 
