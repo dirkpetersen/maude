@@ -168,14 +168,17 @@ launch_web() {
         fi
     fi
 
-    # Parse ANTHROPIC_*/CLAUDE_* env vars from claude-wrapper debug output
+    # Parse auth env vars from claude-wrapper debug output:
+    #   ANTHROPIC_*  (direct + Foundry / Azure)
+    #   CLAUDE_*     (e.g. CLAUDE_CODE_USE_FOUNDRY, CLAUDE_CODE_USE_BEDROCK)
+    #   AWS_*        (Bedrock region / profile / keys / session token)
     while IFS='=' read -r key val; do
         key=$(echo "$key" | xargs)
         val=$(echo "$val" | xargs)
         case "$key" in
-            ANTHROPIC_*|CLAUDE_*) export "$key=$val" ;;
+            ANTHROPIC_*|CLAUDE_*|AWS_*) export "$key=$val" ;;
         esac
-    done < <(claude --wdebug 2>/dev/null | grep -E '^\s+(ANTHROPIC_|CLAUDE_)')
+    done < <(claude --wdebug 2>/dev/null | grep -E '^\s+(ANTHROPIC_|CLAUDE_|AWS_)')
 
     echo -e "${GREEN}Launching kanna web UI...${NC}"
     echo -e "${YELLOW}Ctrl+click the URL below to open in your Windows browser${NC}"

@@ -115,8 +115,16 @@ def stop_kanna(proc: subprocess.Popen | None) -> None:
 
 
 def get_claude_env() -> dict[str, str]:
-    """Parse ANTHROPIC_* env vars from claude --wdebug output."""
+    """Parse auth-related env vars from `claude --wdebug` output.
+
+    Captures everything kanna might need to authenticate:
+    - ANTHROPIC_*  (direct API + Foundry, e.g. ANTHROPIC_FOUNDRY_BASE_URL,
+                    ANTHROPIC_FOUNDRY_API_KEY)
+    - CLAUDE_*     (e.g. CLAUDE_CODE_USE_FOUNDRY, CLAUDE_CODE_USE_BEDROCK)
+    - AWS_*        (Bedrock: region, profile, access keys, session token)
+    """
     env = {}
+    prefixes = ("ANTHROPIC_", "CLAUDE_", "AWS_")
     try:
         result = subprocess.run(
             ["claude", "--wdebug"], capture_output=True, text=True, timeout=5
@@ -127,7 +135,7 @@ def get_claude_env() -> dict[str, str]:
             if "=" in line and line.split("=", 1)[0].strip().isidentifier():
                 key, val = line.split("=", 1)
                 key = key.strip()
-                if key.startswith(("ANTHROPIC_", "CLAUDE_")):
+                if key.startswith(prefixes):
                     env[key] = val.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
