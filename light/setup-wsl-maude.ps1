@@ -20,10 +20,10 @@
 .NOTES
     Run from an elevated PowerShell prompt:
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        .\setup-wsl-maude.ps1                # default: AppData\LocalLow (new) or previous location
+        .\setup-wsl-maude.ps1                # default: Ubuntu 26.04, AppData\LocalLow
         .\setup-wsl-maude.ps1 -OneDrive      # force OneDrive location
         .\setup-wsl-maude.ps1 -NoOneDrive    # force AppData\LocalLow
-        .\setup-wsl-maude.ps1 -Raccoon       # use Ubuntu 26.04 instead of 24.04
+        .\setup-wsl-maude.ps1 -Noble         # use Ubuntu 24.04 instead of 26.04
 #>
 
 param(
@@ -32,18 +32,18 @@ param(
     [string]$InstallDir  = "$env:LOCALAPPDATA\Maude",
     [switch]$OneDrive,
     [switch]$NoOneDrive,
-    [switch]$Raccoon
+    [switch]$Noble
 )
 
-# Ubuntu version: 26.04 (Raccoon) or 24.04 (Noble) — affects template name, Store candidates, and download URL
-if ($Raccoon) {
-    $ubuntuVersion  = "26.04"
-    $ubuntuCodename = "resolute"
-    $ubuntuLabel    = "Ubuntu 26.04 (Resolute Raccoon)"
-} else {
+# Ubuntu version: default 26.04 (Resolute Raccoon), -Noble for 24.04
+if ($Noble) {
     $ubuntuVersion  = "24.04"
     $ubuntuCodename = "noble"
     $ubuntuLabel    = "Ubuntu 24.04 (Noble Numbat)"
+} else {
+    $ubuntuVersion  = "26.04"
+    $ubuntuCodename = "resolute"
+    $ubuntuLabel    = "Ubuntu 26.04 (Resolute Raccoon)"
 }
 
 # ── Locate Windows Terminal settings.json ─────────────────────────────
@@ -102,7 +102,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
         $extraArgs = ""
         if ($OneDrive)   { $extraArgs += " -OneDrive" }
         if ($NoOneDrive) { $extraArgs += " -NoOneDrive" }
-        if ($Raccoon)    { $extraArgs += " -Raccoon" }
+        if ($Noble)      { $extraArgs += " -Noble" }
         if ($PSCommandPath) {
             Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$extraArgs"
         } else {
@@ -490,9 +490,9 @@ $DistroName is already installed. To reinstall, run teardown first:
             $onlineList = (wsl --list --online 2>&1) -join "`n"
             $candidates = @()
             if ($onlineList -match "Ubuntu-$ubuntuVersion") { $candidates += "Ubuntu-$ubuntuVersion" }
-            # Only fall back to plain "Ubuntu" for the default version (24.04).
-            # With -Raccoon (26.04), plain "Ubuntu" would install the wrong version.
-            if (-not $Raccoon) {
+            # Only fall back to plain "Ubuntu" for 24.04 (-Noble).
+            # For 26.04 (default), plain "Ubuntu" would install the wrong version.
+            if ($Noble) {
                 if ($onlineList -match 'Ubuntu\b') { $candidates += "Ubuntu" }
                 if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion", "Ubuntu") }
             }
@@ -528,10 +528,10 @@ $DistroName is already installed. To reinstall, run teardown first:
             } else {
                 Write-Host "Downloading $ubuntuLabel WSL image from Canonical..." -ForegroundColor Yellow
             }
-            if ($Raccoon) {
-                $rootfsUrl = "https://releases.ubuntu.com/resolute/ubuntu-26.04-wsl-amd64.wsl"
-            } else {
+            if ($Noble) {
                 $rootfsUrl = "https://releases.ubuntu.com/noble/ubuntu-24.04.4-wsl-amd64.wsl"
+            } else {
+                $rootfsUrl = "https://releases.ubuntu.com/resolute/ubuntu-26.04-wsl-amd64.wsl"
             }
             $rootfsFile = Join-Path $env:TEMP "ubuntu-$ubuntuVersion-wsl-amd64.wsl"
             Write-Host "Downloading ~375 MB (this may take a few minutes)..."

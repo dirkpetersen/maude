@@ -15,7 +15,7 @@ or a simple CLI
 
 ## What you get
 
-- **Sandboxed Ubuntu** (24.04 default, 26.04 with `-Raccoon`) — Windows drive automount is disabled; only one folder (`~/Maude`) is shared with the host via drvfs
+- **Sandboxed Ubuntu 26.04** (or 24.04 with `-Noble`) — Windows drive automount is disabled; only one folder (`~/Maude`) is shared with the host via drvfs
 - **Claude Code in yolo mode** — all tool permissions auto-approved (safe inside the sandbox)
 - **Pre-installed dev tools** — Python, Node.js 24, Go, Rust, build-essential, git, GitHub CLI, ripgrep, and [90+ packages](../packages/ubuntu-packages.yaml)
 - **[mom](https://github.com/dirkpetersen/mom)** — install additional system packages without sudo (`mom install <pkg>`)
@@ -32,31 +32,44 @@ Open **PowerShell as Administrator** (right-click → "Run as Administrator") an
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
 
-That's it — one line. By default the shared folder is created in `AppData\LocalLow\Maude` and pinned to Quick Access in File Explorer. On reinstalls, the script automatically reuses the previous folder location.
+That's it — one line. Installs Ubuntu 26.04 (Resolute Raccoon) with the shared folder in `AppData\LocalLow\Maude`, pinned to Quick Access in File Explorer. On reinstalls, the script automatically reuses the previous folder location.
 
-> **Note:** Piping directly via `iex` (`Invoke-Expression`) may be blocked by antivirus on corporate machines. The `curl.exe` approach above works reliably everywhere. Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`.
+> **Note:** Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`. Piping via `iex` may be blocked by antivirus on corporate machines; the file-based approach above works reliably everywhere.
 
-### Install options
+### Install with OneDrive sync
 
-| Flag | Shared folder location |
-|------|------------------------|
-| *(default)* | `AppData\LocalLow\Maude` (new install) or previous location (reinstall) |
-| `-OneDrive` | OneDrive `Maude` subfolder (Business > Personal > generic) |
-| `-NoOneDrive` | `AppData\LocalLow\Maude` (even on reinstall, ignores previous location) |
-| `-Raccoon` | Use Ubuntu 26.04 (Resolute Raccoon) instead of 24.04 |
-
-Examples:
+Store the shared folder inside OneDrive for cross-device sync (Business > Personal > generic):
 
 ```powershell
-# Default install (LocalLow)
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
-
-# Store data in OneDrive for cross-device sync
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -OneDrive
-
-# Use Ubuntu 26.04 (Resolute Raccoon)
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Raccoon
 ```
+
+### Install without OneDrive
+
+Force `AppData\LocalLow\Maude` even on reinstall (ignores previous location):
+
+```powershell
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -NoOneDrive
+```
+
+### Install with Ubuntu 24.04
+
+Use Ubuntu 24.04 LTS (Noble Numbat) instead of the default 26.04:
+
+```powershell
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Noble
+```
+
+### Install options summary
+
+| Flag | Effect |
+|------|--------|
+| *(default)* | Ubuntu 26.04, `AppData\LocalLow\Maude` (new) or previous location (reinstall) |
+| `-OneDrive` | Shared folder in OneDrive |
+| `-NoOneDrive` | Force `AppData\LocalLow\Maude` |
+| `-Noble` | Use Ubuntu 24.04 instead of 26.04 |
+
+Flags can be combined, e.g. `-OneDrive -Noble`.
 
 The setup script will:
 

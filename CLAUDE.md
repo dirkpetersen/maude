@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **maude** -- A ready-to-run sandbox appliance for agentic coding, deployable as a VM (VMware/KVM), WSL image, Proxmox appliance, or Docker container. It integrates three upstream projects to create a multi-user Ubuntu environment where users get browser-based terminal access and can rapidly deploy web apps.
 
-**Maude Light** (`light/`) is the current production implementation -- a lightweight WSL2 sandbox that deploys Ubuntu 24.04 as an isolated distro with a single shared folder to the Windows host. Install with one PowerShell command; no VM or Docker needed.
+**Maude Light** (`light/`) is the current production implementation -- a lightweight WSL2 sandbox that deploys Ubuntu 26.04 (default) or 24.04 (`-Noble` flag) as an isolated distro with a single shared folder to the Windows host. Install with one PowerShell command; no VM or Docker needed.
 
 **Upstream repos** (checked out at `~/gh/`):
 - `~/gh/web-term` -- Node.js browser terminal via SSH+tmux (xterm.js frontend)
@@ -42,7 +42,7 @@ Windows host
     |       +-- .claude/        <- Claude Code config (symlinked from WSL)
     |       +-- .kanna/         <- kanna web UI data (symlinked from WSL)
     |
-    +-- WSL2: Maude (Ubuntu 24.04)
+    +-- WSL2: Maude (Ubuntu 26.04 default, 24.04 with -Noble)
           +-- ~/Maude/          <- drvfs mount of shared folder
           +-- ~/.claude         -> symlink to ~/Maude/.claude
           +-- ~/.kanna          -> symlink to ~/Maude/.kanna
@@ -197,7 +197,7 @@ All users must have `~/bin` at the **front** of PATH and `~/.local/bin` also pre
 
 ## Image Build Strategy (Full Appliance)
 
-- **Base**: Ubuntu 26.04 (full appliance) / Ubuntu 24.04 (Maude Light)
+- **Base**: Ubuntu 26.04 (full appliance + Maude Light default) / Ubuntu 24.04 (Maude Light with `-Noble`)
 - **Package list**: `packages/ubuntu-packages.yaml` defines all packages baked into the image (also `packages/rhel-packages.yaml` for RPM targets)
 - **Package installation during build**: `apt` directly (running as root), not mom
 - **mom**: installed via `mom-inst` .deb package for post-boot user package management (old raw binary installs are purged first if present)
