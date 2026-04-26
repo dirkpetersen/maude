@@ -7,6 +7,7 @@ Always launched via:  maude tui
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -28,6 +29,8 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    RadioButton,
+    RadioSet,
     Static,
 )
 
@@ -35,10 +38,15 @@ PROJECTS_DIR = Path.home() / "Maude" / "Projects"
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
 AUTOSTART_FLAG = Path.home() / ".maude-tui-autostart"
 KANNA_CMD    = "kanna"
+KANNA_PORT   = 3210
 
 UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
 UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
+
+MODELS        = ("opus-1m", "opus", "sonnet-1m", "sonnet", "haiku")
+DEFAULT_MODEL = "opus-1m"
+MODEL_FILE    = Path.home() / ".maude-model"
 
 LOGO = (
     "  __  __                 _      \n"
@@ -75,6 +83,35 @@ def maybe_self_update() -> None:
     except Exception as err:
         print(f"maude: update check failed ({err}); using cached version",
               file=sys.stderr)
+
+
+def kill_port(port: int) -> None:
+    """Forcefully kill anything listening on the given TCP port (best-effort)."""
+    subprocess.run(
+        ["fuser", "-k", "-KILL", f"{port}/tcp"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+
+
+def stop_kanna(proc: subprocess.Popen | None) -> None:
+    """Kill kanna and the rest of its process group, then free the port."""
+    if proc is not None and proc.poll() is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            pgid = None
+        if pgid is not None:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(pgid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    proc.wait(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+    kill_port(KANNA_PORT)
 
 
 def get_claude_env() -> dict[str, str]:
@@ -138,12 +175,31 @@ def slugify(name: str) -> str:
     return name.strip("-")
 
 
-def open_project(project_path: Path) -> None:
+def open_project(project_path: Path, model: str) -> None:
     """Launch Claude Code for a project. Try --continue first, then fresh."""
     os.chdir(project_path)
-    ret = subprocess.run(["claude", "opus-1m", "--continue"], check=False).returncode
+    ret = subprocess.run(["claude", model, "--continue"], check=False).returncode
     if ret != 0:
-        subprocess.run(["claude", "opus-1m"], check=False)
+        subprocess.run(["claude", model], check=False)
+
+
+def read_model() -> str:
+    """Return the user's saved Claude model alias, or the default."""
+    try:
+        m = MODEL_FILE.read_text().strip()
+        if m in MODELS:
+            return m
+    except OSError:
+        pass
+    return DEFAULT_MODEL
+
+
+def save_model(name: str) -> None:
+    if name in MODELS:
+        try:
+            MODEL_FILE.write_text(name)
+        except OSError:
+            pass
 
 
 def soft_delete(project_path: Path) -> None:
@@ -321,6 +377,30 @@ class MaudeApp(App):
         color: #a09090;
     }
 
+    #divider3 {
+        color: #6a5058;
+        height: 1;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+
+    #model-label {
+        color: #d4a0a0;
+        text-style: bold;
+        margin-bottom: 0;
+    }
+
+    #model-select {
+        background: transparent;
+        border: none;
+        padding: 0;
+        height: auto;
+    }
+
+    #model-select RadioButton {
+        background: transparent;
+    }
+
     #main {
         padding: 1 2;
     }
@@ -485,6 +565,10 @@ class MaudeApp(App):
         Binding("q",     "quit_to_shell", "Quit", show=True),
     ]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._model = read_model()
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
@@ -501,6 +585,11 @@ class MaudeApp(App):
                     "Voice dictate: Win+H (Windows mic)",
                     id="tips",
                 )
+                yield Static("─" * 28, id="divider3")
+                yield Label("Claude model", id="model-label")
+                with RadioSet(id="model-select"):
+                    for m in MODELS:
+                        yield RadioButton(m, value=(m == self._model))
             with Vertical(id="main"):
                 yield Label("Projects", id="section-title")
                 yield DataTable(id="projects-table", cursor_type="row",
@@ -572,22 +661,25 @@ class MaudeApp(App):
     @on(Button.Pressed, "#btn-web")
     def btn_web(self) -> None:
         btn = self.query_one("#btn-web", Button)
-        # If kanna is running, kill it
-        if self._kanna_proc is not None and self._kanna_proc.poll() is None:
-            self._kanna_proc.terminate()
+        # If kanna is (or appears to be) running, stop it forcefully.
+        if self._kanna_proc is not None:
+            stop_kanna(self._kanna_proc)
             self._kanna_proc = None
             btn.label = "Web UI"
             self.query_one("#kanna-url", Static).update("")
             return
-        # Start kanna with Claude env vars prepended
+        # Make sure the port isn't held by a stale instance before launching.
+        kill_port(KANNA_PORT)
+        # Start kanna in its own process group so we can kill the whole tree.
         extra_env = get_claude_env()
         env = {**os.environ, **extra_env}
         self._kanna_proc = subprocess.Popen(
             [KANNA_CMD, "--no-open"], env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
         btn.label = "Stop Web UI"
-        url = "http://localhost:3210"
+        url = f"http://localhost:{KANNA_PORT}"
         label = Text("Web UI: ")
         label.append(url, style=f"link {url} #72c09a")
         self.query_one("#kanna-url", Static).update(label)
@@ -613,12 +705,31 @@ class MaudeApp(App):
             AUTOSTART_FLAG.unlink(missing_ok=True)
             self.notify("TUI auto-start disabled")
 
+    @on(RadioSet.Changed, "#model-select")
+    def model_changed(self, event: RadioSet.Changed) -> None:
+        self._model = str(event.pressed.label)
+        save_model(self._model)
+        self.query_one("#projects-table", DataTable).focus()
+
     # ── Callbacks ─────────────────────────────────────────────────────
 
     def _launch_project(self, path: Path) -> None:
+        name = path.name
         with self.suspend():
-            open_project(path)
+            open_project(path, self._model)
         self._refresh_table()
+        self._select_project(name)
+
+    def _select_project(self, name: str) -> None:
+        """Move the table cursor to the row whose key is `name`, if it exists."""
+        table = self.query_one("#projects-table", DataTable)
+        try:
+            index = table.get_row_index(name)
+        except KeyError:
+            index = -1
+        if index >= 0:
+            table.move_cursor(row=index)
+        table.focus()
 
     def _on_new_project(self, name: str | None) -> None:
         if not name:
