@@ -108,6 +108,7 @@ curl.exe -sLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com
 After install, open the **Maude** profile in Windows Terminal (or the desktop shortcut):
 
 ```
+  maude tui            Interactive project launcher (recommended)
   maude project-name   Create or open a coding project
   maude list           Show your projects
   maude delete name    Delete a project (moves to .deleted/)
@@ -115,6 +116,43 @@ After install, open the **Maude** profile in Windows Terminal (or the desktop sh
 
   mom install <pkg>    Install system packages (no sudo needed)
 ```
+
+Type `menu` at any shell prompt to reopen the TUI.
+
+### Interactive TUI (`maude tui`)
+
+The TUI is a full-screen Textual interface that replaces the command-line workflow for most users.
+
+**Sidebar (left panel)**
+
+| Control | Description |
+|---------|-------------|
+| *Start TUI with Maude* checkbox | Toggle TUI autostart — checked means the TUI opens automatically on every new terminal session instead of the text welcome banner. |
+| *Claude model* radio buttons | Choose which Claude model opens for your projects: `opus-1m` (default), `opus`, `sonnet-1m`, `sonnet`, or `haiku`. The selection is saved to `~/.maude-model` and persists across sessions. |
+
+**Project list (right panel)**
+
+Projects are sorted newest-first by last-modified time. Press **Enter** or click **Open Project** to launch Claude Code for the selected project; the cursor returns to that project when you come back.
+
+**Bottom bar**
+
+| Button | Description |
+|--------|-------------|
+| Open Project | Launch Claude Code for the selected project |
+| + New | Create a new project (spaces become hyphens; git is initialized automatically) |
+| Web UI / Stop Web UI | Start or forcefully stop the [kanna](https://github.com/jakemor/kanna) web interface at `http://localhost:3210`. All LLM auth env vars (Anthropic, Foundry/Azure, AWS Bedrock) are forwarded automatically. |
+| Command Line | Exit the TUI and return to the shell prompt |
+
+**Keyboard shortcuts**
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Open selected project |
+| `n` | New project |
+| `d` | Delete selected project (soft-delete to `.deleted/`) |
+| `q` | Quit to shell |
+
+**Self-update**: `maude tui` downloads a fresh copy of `maude.py` from GitHub once per day, at or after noon local time. The new version takes effect on the next launch.
 
 ### Document analysis
 
