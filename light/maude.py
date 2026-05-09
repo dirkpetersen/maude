@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -1371,7 +1372,7 @@ class MaudeApp(App):
             yield Button("Open Project",    id="btn-open")
             yield Button("+ New",           id="btn-new")
             yield Button("Web UI",          id="btn-web")
-            yield Button("Setup Git",       id="btn-setup-git")
+            yield Button("Setup Git(hub)",  id="btn-setup-git")
             yield Button("Set Credentials", id="btn-creds")
             yield Button("Command Line",    id="btn-cli")
             yield Static("", id="kanna-url")
@@ -1453,19 +1454,55 @@ class MaudeApp(App):
     def _start_kanna(self) -> None:
         # Make sure the port isn't held by a stale instance before launching.
         kill_port(KANNA_PORT)
-        # Start kanna in its own process group so we can kill the whole tree.
         env = {**os.environ, **kanna_env()}
-        self._kanna_proc = subprocess.Popen(
-            [KANNA_CMD, "--no-open"], env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        # Send kanna's output to a temp log so we can surface errors if it
+        # dies on startup. Use process_group=0 (new pgroup, same session)
+        # so we can SIGTERM the whole tree on Stop without detaching kanna
+        # from the controlling tty (start_new_session can break some Node
+        # CLIs that expect a tty at startup).
+        fd, log_path = tempfile.mkstemp(prefix="maude-kanna-", suffix=".log")
+        self._kanna_log = Path(log_path)
+        try:
+            self._kanna_proc = subprocess.Popen(
+                [KANNA_CMD, "--no-open"], env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=fd, stderr=subprocess.STDOUT,
+                process_group=0,
+            )
+        except FileNotFoundError as err:
+            os.close(fd)
+            self.notify(f"Could not launch kanna: {err}", severity="error",
+                        timeout=10)
+            return
+        finally:
+            os.close(fd)
         btn = self.query_one("#btn-web", Button)
         btn.label = "Stop Web UI"
         url = f"http://localhost:{KANNA_PORT}"
         label = Text("Web UI: ")
         label.append(url, style=f"link {url} #72c09a")
         self.query_one("#kanna-url", Static).update(label)
+        # Verify kanna is still alive after a moment; if it died, surface
+        # the log instead of leaving the user with a dead "Stop Web UI".
+        self.set_timer(1.5, self._check_kanna_started)
+
+    def _check_kanna_started(self) -> None:
+        if self._kanna_proc is None:
+            return
+        if self._kanna_proc.poll() is None:
+            return  # still running, all good
+        try:
+            tail = self._kanna_log.read_text()[-1500:]
+        except OSError:
+            tail = "(log unavailable)"
+        self._kanna_proc = None
+        btn = self.query_one("#btn-web", Button)
+        btn.label = "Web UI"
+        self.query_one("#kanna-url", Static).update("")
+        self.notify(
+            f"kanna exited unexpectedly. Log tail:\n{tail}",
+            severity="error", timeout=15,
+        )
 
     @on(Button.Pressed, "#btn-creds")
     def btn_creds(self) -> None:
