@@ -7,18 +7,17 @@
 
 WHAT IS THIS FOLDER?
 --------------------
-This is your "Maude" folder. It lives inside your OneDrive and
-is the ONLY folder on your computer that the AI assistant
-(Claude) can see and touch. Everything else on your PC —
-your email, your other OneDrive files, your Desktop, your
-Downloads — is completely hidden from the AI. That is the
+This is your "Maude" folder. It lives inside your local drive
+or OneDrive and is the ONLY folder on your computer that the 
+AI assistant (Claude) can see and touch. Everything else on 
+your PC — your email, your other OneDrive files, your Desktop,
+your Downloads — is completely hidden from the AI. That is the
 good news.
 
 The bad news: anything you put IN this folder is fully
 exposed to the AI, and the AI runs in "unrestricted mode."
 That means it can read, change, rename, overwrite, or delete
 any file in here WITHOUT ASKING YOU FIRST.
-
 
 WHAT DOES "UNRESTRICTED MODE" MEAN IN PLAIN ENGLISH?
 -----------------------------------------------------
