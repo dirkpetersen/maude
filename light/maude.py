@@ -1349,6 +1349,16 @@ class MaudeApp(App):
         margin-top: 0;
     }
 
+    #fresh-label {
+        color: #c09898;
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+
+    #fresh-context {
+        margin-top: 0;
+    }
+
     #divider2 {
         color: #6a5058;
         height: 1;
@@ -1713,8 +1723,8 @@ class MaudeApp(App):
                 with RadioSet(id="model-select"):
                     for m in MODELS:
                         yield RadioButton(m, value=(m == self._model))
-                yield Checkbox("Clear context (no history)",
-                               value=False, id="fresh-context")
+                yield Label("Clear context (no history)", id="fresh-label")
+                yield Checkbox("", value=False, id="fresh-context")
             with Vertical(id="main"):
                 yield Label("Projects", id="section-title")
                 yield DataTable(id="projects-table", cursor_type="row",
