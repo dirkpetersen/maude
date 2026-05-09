@@ -687,8 +687,8 @@ class GitSetupWizard(ModalScreen[bool]):
                 yield Button("Next",   id="wiz-next",   variant="success")
                 yield Button("Cancel", id="wiz-cancel", variant="error")
 
-    def on_mount(self) -> None:
-        self._render_step()
+    async def on_mount(self) -> None:
+        await self._render_step()
 
     def action_cancel(self) -> None:
         if not self._dismissed:
@@ -706,10 +706,14 @@ class GitSetupWizard(ModalScreen[bool]):
     def _log(self, msg: str) -> None:
         self.query_one("#wiz-log", Log).write_line(msg)
 
-    def _render_step(self) -> None:
+    async def _render_step(self) -> None:
+        # IMPORTANT: remove_children() returns an AwaitRemove and only
+        # actually detaches the old widgets when awaited. Without the
+        # await, mounting fresh widgets with the same id would collide
+        # with the still-mounted old ones (DuplicateIds at runtime).
         self.query_one("#wiz-title", Label).update(self.STEP_TITLES[self.step])
         body = self.query_one("#wiz-body", Container)
-        body.remove_children()
+        await body.remove_children()
         if self.step == 0:
             self._render_identity(body)
             self._set_buttons(back=False, skip=False, next_label="Next")
@@ -864,31 +868,31 @@ class GitSetupWizard(ModalScreen[bool]):
         self.action_cancel()
 
     @on(Button.Pressed, "#wiz-back")
-    def on_back(self) -> None:
+    async def on_back(self) -> None:
         if self.step > 0:
             self.step -= 1
-            self._render_step()
+            await self._render_step()
 
     @on(Button.Pressed, "#wiz-skip")
-    def on_skip(self) -> None:
+    async def on_skip(self) -> None:
         self._log(f"[skipped] {self.STEP_TITLES[self.step]}")
-        self._advance()
+        await self._advance()
 
     @on(Button.Pressed, "#wiz-next")
-    def on_next(self) -> None:
+    async def on_next(self) -> None:
         if self.step == 0:
-            self._capture_identity_then_advance()
+            await self._capture_identity_then_advance()
         elif self.step == 1:
-            self._advance_if_ssh_ready()
+            await self._advance_if_ssh_ready()
         elif self.step == 2:
-            self._advance_if_gpg_ready()
+            await self._advance_if_gpg_ready()
         elif self.step == 3:
             self._finish()
 
-    def _advance(self) -> None:
+    async def _advance(self) -> None:
         if self.step < 3:
             self.step += 1
-            self._render_step()
+            await self._render_step()
 
     # ── Step 1 actions ──────────────────────────────────────────────
 
@@ -926,19 +930,19 @@ class GitSetupWizard(ModalScreen[bool]):
         self._log(f"Found: {info['name']} <{info['email']}>"
                   f"  →  {info['html_url']}{suffix}")
 
-    def _capture_identity_then_advance(self) -> None:
+    async def _capture_identity_then_advance(self) -> None:
         self.username  = self.query_one("#wiz-username", Input).value.strip()
         self.full_name = self.query_one("#wiz-name",     Input).value.strip()
         self.email     = self.query_one("#wiz-email",    Input).value.strip()
         if not self.full_name or not self.email:
             self._log("Name and email are required to continue.")
             return
-        self._advance()
+        await self._advance()
 
     # ── Step 2 actions ──────────────────────────────────────────────
 
     @on(Button.Pressed, "#wiz-ssh-gen")
-    def on_ssh_gen(self) -> None:
+    async def on_ssh_gen(self) -> None:
         p1 = self.query_one("#wiz-ssh-pass",  Input).value
         p2 = self.query_one("#wiz-ssh-pass2", Input).value
         if p1 != p2:
@@ -949,7 +953,7 @@ class GitSetupWizard(ModalScreen[bool]):
         self._log(msg)
         if ok:
             self.ssh_key_path = str(SSH_KEY_PATH)
-            self._render_step()  # re-render to show the pubkey
+            await self._render_step()  # re-render to show the pubkey
 
     @on(Button.Pressed, "#wiz-ssh-verify")
     def on_ssh_verify(self) -> None:
@@ -959,16 +963,16 @@ class GitSetupWizard(ModalScreen[bool]):
         if ok:
             self._log("[green]✓ SSH auth to GitHub works.[/]")
 
-    def _advance_if_ssh_ready(self) -> None:
+    async def _advance_if_ssh_ready(self) -> None:
         if not self.ssh_key_path:
             self._log("Generate an SSH key first, or click Skip.")
             return
-        self._advance()
+        await self._advance()
 
     # ── Step 3 actions ──────────────────────────────────────────────
 
     @on(Button.Pressed, "#wiz-gpg-gen")
-    def on_gpg_gen(self) -> None:
+    async def on_gpg_gen(self) -> None:
         if not shutil.which("gpg"):
             self._log("gpg is not installed; install it with `mom install -y gnupg`.")
             return
@@ -983,7 +987,7 @@ class GitSetupWizard(ModalScreen[bool]):
         self._log(msg)
         if key_id:
             self.gpg_key_id = key_id
-            self._render_step()
+            await self._render_step()
 
     @on(Button.Pressed, "#wiz-gpg-verify")
     def on_gpg_verify(self) -> None:
@@ -999,9 +1003,9 @@ class GitSetupWizard(ModalScreen[bool]):
         ok, msg = verify_gpg_signing(self.gpg_key_id, passphrase)
         self._log(msg)
 
-    def _advance_if_gpg_ready(self) -> None:
+    async def _advance_if_gpg_ready(self) -> None:
         # GPG is optional; skipping is allowed via the Skip button.
-        self._advance()
+        await self._advance()
 
     # ── Step 4: finalise ────────────────────────────────────────────
 
