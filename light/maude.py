@@ -1206,35 +1206,75 @@ class GitSetupWizard(ModalScreen[bool]):
     # ── Step 3 actions: gh CLI auth + silent GPG provisioning ──────
 
     @on(Button.Pressed, "#wiz-gh-auth")
-    async def on_gh_auth(self) -> None:
+    def on_gh_auth(self) -> None:
         if not shutil.which("gh"):
             self._log("gh CLI is not installed (try `mom install -y gh`).")
             return
-        self._log("Suspending TUI to run `gh auth login --web`…")
-        self._log("Ctrl+click the URL gh prints, paste the code in your browser,")
-        self._log("then return here.")
-        with self.app.suspend():
-            try:
-                subprocess.run(
-                    ["gh", "auth", "login",
-                     "--hostname", "github.com",
-                     "--git-protocol", "ssh",
-                     "--web", "--skip-ssh-key"],
-                    check=False,
-                )
-            except FileNotFoundError as err:
-                self._log(f"gh failed to launch: {err}")
-                return
-        if not gh_is_authed():
-            self._log("gh auth did not complete. You can try again or Skip.")
-            return
-        self._log("[green]✓ gh CLI authenticated.[/]")
-        # Now provision the GPG signing key silently. Empty passphrase.
-        await self._provision_gpg_silently()
-        # Re-render so the step shows the "already authenticated" branch.
-        await self._render_step()
+        # Run gh in a worker thread and stream its stdout into the Log
+        # widget. Suspending the TUI doesn't work reliably here — gh's
+        # interactive "Press Enter" prompt closes immediately on EOF —
+        # so we keep the TUI up, feed Enter on stdin ourselves, and let
+        # the user Ctrl+click the URL straight from the wizard log.
+        self.query_one("#wiz-gh-auth", Button).disabled = True
+        self._log("Running `gh auth login --web`. Ctrl+click the URL it prints,")
+        self._log("paste the one-time code in your browser, then wait here.")
+        self.run_worker(self._gh_auth_worker, exclusive=True, thread=True)
 
-    async def _provision_gpg_silently(self) -> None:
+    def _gh_auth_worker(self) -> None:
+        """Spawn gh, stream output to the Log, and call back when it exits."""
+        try:
+            proc = subprocess.Popen(
+                ["gh", "auth", "login",
+                 "--hostname", "github.com",
+                 "--git-protocol", "ssh",
+                 "--web", "--skip-ssh-key"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+        except FileNotFoundError as err:
+            self.app.call_from_thread(self._log, f"gh failed to launch: {err}")
+            self.app.call_from_thread(self._gh_auth_done, 1)
+            return
+        # gh prints the one-time code, then "Press Enter to open browser".
+        # Send a newline so it proceeds past that prompt to the polling
+        # phase. xdg-open will fail (no browser inside WSL) but gh keeps
+        # polling until the user completes auth in their Windows browser.
+        if proc.stdin:
+            try:
+                proc.stdin.write("\n")
+                proc.stdin.flush()
+                proc.stdin.close()
+            except OSError:
+                pass
+        if proc.stdout:
+            for line in iter(proc.stdout.readline, ""):
+                line = line.rstrip()
+                if line:
+                    self.app.call_from_thread(self._log, line)
+        rc = proc.wait()
+        self.app.call_from_thread(self._gh_auth_done, rc)
+
+    def _gh_auth_done(self, returncode: int) -> None:
+        try:
+            self.query_one("#wiz-gh-auth", Button).disabled = False
+        except Exception:
+            pass
+        if gh_is_authed():
+            self._log("[green]✓ gh CLI authenticated.[/]")
+            self._provision_gpg_now()
+        else:
+            self._log(f"gh auth did not complete (exit code: {returncode}).")
+        # Refresh the step so the button label flips to "Re-authenticate".
+        self.app.call_after_refresh(self._rerender_current_step)
+
+    def _rerender_current_step(self) -> None:
+        # Schedule the async re-render from sync context.
+        self.run_worker(self._render_step, exclusive=False)
+
+    def _provision_gpg_now(self) -> None:
+        """Silent ed25519 GPG signing key + auto-upload via gh."""
         if not shutil.which("gpg"):
             self._log("gpg is not installed; skipping signing key. "
                       "Install with `mom install -y gnupg` and re-run.")
@@ -1250,7 +1290,6 @@ class GitSetupWizard(ModalScreen[bool]):
             if not key_id:
                 return
             self.gpg_key_id = key_id
-        # Upload via gh.
         self._log("Uploading GPG public key via gh…")
         pub = export_gpg_pubkey(self.gpg_key_id)
         if not pub:
@@ -1263,7 +1302,7 @@ class GitSetupWizard(ModalScreen[bool]):
         # gh auth is optional — Skip is always available — but if the user
         # already authed and we never provisioned GPG, do it now.
         if gh_is_authed() and not self.gpg_key_id:
-            await self._provision_gpg_silently()
+            self._provision_gpg_now()
         await self._advance()
 
     # ── Step 4: finalise ────────────────────────────────────────────
