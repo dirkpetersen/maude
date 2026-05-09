@@ -1418,7 +1418,7 @@ class MaudeApp(App):
             yield Button("+ New",           id="btn-new")
             yield Button("Web UI",          id="btn-web")
             yield Button("Setup Git(hub)",  id="btn-github")
-            yield Button("Set Credentials", id="btn-creds")
+            yield Button("Set Creds",       id="btn-creds")
             yield Button("Command Line",    id="btn-cli")
             yield Static("", id="kanna-url")
         yield Footer()
