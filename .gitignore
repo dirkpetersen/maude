@@ -1,0 +1,5 @@
+# Per-developer Claude Code state
+.claude/
+
+# Internal cybersecurity review (not for public repo)
+Maude-review.docx
