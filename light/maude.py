@@ -965,6 +965,23 @@ class GitSetupWizard(ModalScreen[bool]):
         elif self.step == 3:
             self._render_final(body)
             self._set_buttons(back=True, skip=False, next_label="Finish")
+        # Park focus on the most useful widget for the current step,
+        # after mount has flushed.
+        self.call_after_refresh(self._focus_step_default)
+
+    def _focus_step_default(self) -> None:
+        candidates = {
+            0: ["#wiz-username"],
+            1: ["#wiz-ssh-pass", "#wiz-ssh-pass-verify"],
+            2: ["#wiz-gh-auth"],
+            3: ["#wiz-next"],
+        }
+        for sel in candidates.get(self.step, []):
+            try:
+                self.query_one(sel).focus()
+                return
+            except Exception:
+                continue
 
     @staticmethod
     def _link(url: str) -> Text:
@@ -1029,10 +1046,11 @@ class GitSetupWizard(ModalScreen[bool]):
                 id="wiz-ssh-actions",
             ))
         else:
+            body.mount(Label("No SSH key found at ~/.ssh/id_ed25519."))
             body.mount(Label(
-                "No SSH key found at ~/.ssh/id_ed25519. Set a passphrase "
-                "(strongly recommended) and click [bold]Generate[/]."
+                "Set a passphrase (strongly recommended), confirm it,"
             ))
+            body.mount(Label("then click Generate ed25519 key."))
             body.mount(Label("Passphrase (leave blank for none):"))
             body.mount(Input(placeholder="passphrase", id="wiz-ssh-pass",
                              password=True))
