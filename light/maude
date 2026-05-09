@@ -5,6 +5,7 @@
 #   maude tui            Interactive project launcher (Textual UI)
 #   maude web            Launch kanna web UI (installs Chromium if needed)
 #   maude setup-git      Wizard for GitHub identity, SSH/GPG keys, signing
+#   maude update         Update Claude Code, the maude TUI, and kanna
 #   maude list           Show all available projects
 #   maude delete <name>  Move a project to Projects/.deleted (with confirmation)
 #   maude help           Show this help message
@@ -32,6 +33,7 @@ show_help() {
     echo -e "  ${CYAN}maude tui${NC}                 Interactive project launcher (experimental)"
     echo -e "  ${CYAN}maude web${NC}                 Launch web UI (kanna, experimental)"
     echo -e "  ${CYAN}maude setup-git${NC}           Wizard for Git/SSH/GPG (Textual UI)"
+    echo -e "  ${CYAN}maude update${NC}              Update Claude Code, the maude TUI, and kanna"
     echo -e "  ${CYAN}maude help${NC}                Show this help message"
     echo ""
     echo "Examples:"
@@ -158,6 +160,60 @@ launch_tui() {
     echo ""
 }
 
+# ── Update everything: Claude Code, the maude TUI, and kanna ─────────
+update_all() {
+    local ts rc=0
+    ts=$(date +%s)
+
+    echo -e "${BOLD}Updating Claude Code...${NC}"
+    if command -v claude >/dev/null 2>&1; then
+        claude update || { echo -e "${YELLOW}  Claude Code update failed${NC}"; rc=1; }
+    else
+        echo -e "${YELLOW}  claude is not installed; skipping${NC}"
+        rc=1
+    fi
+    echo ""
+
+    echo -e "${BOLD}Updating the Maude TUI (maude.py)...${NC}"
+    mkdir -p "$(dirname "$MAUDE_PY")"
+    if curl -fsSL "${MAUDE_PY_URL}?cache=${ts}" -o "$MAUDE_PY"; then
+        # Mark today's daily-update stamp so maude.py's own self-update doesn't
+        # re-fetch on the next launch.
+        date +%Y-%m-%d > "$HOME/.maude-tui-last-update"
+        echo -e "${GREEN}  ✓ maude.py refreshed${NC}"
+    else
+        echo -e "${YELLOW}  ✗ could not fetch maude.py${NC}"
+        rc=1
+    fi
+    echo ""
+
+    echo -e "${BOLD}Updating kanna-code...${NC}"
+    if command -v bun >/dev/null 2>&1; then
+        # `bun install -g <pkg>` always fetches the latest version.
+        if bun install -g kanna-code; then
+            # Re-link in case the binary moved.
+            if [[ -x "$HOME/.bun/bin/kanna" ]]; then
+                ln -sfn "$HOME/.bun/bin/kanna" "$HOME/.local/bin/kanna"
+            fi
+            echo -e "${GREEN}  ✓ kanna updated${NC}"
+        else
+            echo -e "${YELLOW}  ✗ kanna update failed${NC}"
+            rc=1
+        fi
+    else
+        echo -e "${YELLOW}  bun is not installed; skipping kanna update${NC}"
+        rc=1
+    fi
+    echo ""
+
+    if [[ $rc -eq 0 ]]; then
+        echo -e "${GREEN}All updates complete.${NC}"
+    else
+        echo -e "${YELLOW}Updates finished with one or more skipped/failed steps.${NC}"
+    fi
+    return $rc
+}
+
 # ── Launch the Git Setup Wizard (standalone) ─────────────────────────
 launch_setup_git() {
     # Reuse launch_tui's bootstrap logic just for textual + maude.py.
@@ -251,6 +307,10 @@ case "$1" in
     setup-git)
         launch_setup_git
         exit 0
+        ;;
+    update)
+        update_all
+        exit $?
         ;;
     list|ls)
         list_projects
