@@ -26,9 +26,14 @@ or a simple CLI
 
 ## Install
 
-Maude installs in two phases. The **admin phase** (`-Admin`) installs WSL, imports the Ubuntu distro, and runs the root-level bootstrap inside WSL. The **user phase** (no flag) creates the shared folder, configures Windows Terminal, and runs the user-level bootstrap. The phases are deliberately separated so the user-context configuration (Windows Terminal profile, desktop shortcut, OneDrive folder) is written into the *end user's* profile, not the admin's.
+Maude has two phases:
 
-### Step 1 — Admin phase
+- **Admin phase** (`-Admin`) — first-time machine setup. Installs WSL2 and Windows Terminal (if missing) and builds the Ubuntu template with all packages baked in. **Runs once per machine** (or when refreshing to a new Ubuntu version).
+- **User phase** (no flag, no admin) — runs on every install **and reinstall**. Imports the Ubuntu template as the `Maude` distro, runs both bootstraps, sets up the shared folder, Windows Terminal profile, and desktop shortcut.
+
+Once the admin phase has run on a machine, **all reinstalls are admin-free** — no UAC prompt, no elevation. Just one user-phase command.
+
+### First-time install (admin phase, ~5 minutes)
 
 Open **PowerShell as Administrator** (right-click → "Run as Administrator") and run:
 
@@ -36,9 +41,9 @@ Open **PowerShell as Administrator** (right-click → "Run as Administrator") an
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Admin
 ```
 
-This installs WSL2 (if needed), imports Ubuntu as the `Maude` distro, and runs the root-level bootstrap. When it finishes, **close the elevated window**.
+This installs WSL2, installs Windows Terminal, and builds the Ubuntu template (with all 90+ packages pre-installed). It also adds a Windows Defender exclusion for the Maude install path so future reinstalls aren't blocked by AV scanning. When it finishes, **close the elevated window**.
 
-### Step 2 — User phase
+### Install / Reinstall (user phase, ~30 seconds)
 
 Open a **non-elevated** PowerShell and run:
 
@@ -46,13 +51,11 @@ Open a **non-elevated** PowerShell and run:
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
 
-This creates the `Maude` shared folder in `AppData\LocalLow\Maude`, pins it to Quick Access, configures Windows Terminal, creates the desktop shortcut, and runs the user-level bootstrap.
+This is also the command for every future reinstall — no admin needed.
 
 > **Note:** Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`. Piping via `iex` may be blocked by antivirus on corporate machines; the file-based approach above works reliably everywhere.
 
 ### Install options
-
-Add these flags to the **user-phase** command (and `-Noble` to the admin phase if you want Ubuntu 24.04):
 
 | Flag | Phase | Effect |
 |------|-------|--------|
@@ -60,11 +63,27 @@ Add these flags to the **user-phase** command (and `-Noble` to the admin phase i
 | `-OneDrive` | user | Shared folder in OneDrive (Business > Personal > generic) |
 | `-NoOneDrive` | user | Force `AppData\LocalLow\Maude` |
 | `-Noble` | both | Use Ubuntu 24.04 instead of the default 26.04 |
+| `-NoDefenderExclusion` | admin | Don't add the Windows Defender exclusion (use only if your security policy forbids it; reinstalls may then hit Defender locks and need to be re-run with `-Admin`) |
 | `-Release <tag>` | both | Pin to a tagged release and verify SHA-256 of every downloaded file against `light/checksums.txt` from that tag (see below) |
 
 Flags can be combined, e.g. `-OneDrive -Noble`.
 
 > **OneDrive sharing risk:** if you choose `-OneDrive`, the user-phase script will print a warning about prompt-injection risk via OneDrive sharing. If anyone has edit access to the Maude folder (or any ancestor) through OneDrive sharing, they can drop files that the AI will execute as instructions. Verify the folder and its parents are not shared, or use `-NoOneDrive` instead.
+
+### Refreshing the template (e.g., new Ubuntu version)
+
+To upgrade from Ubuntu 24.04 to 26.04, or to pick up upstream package changes baked into the template:
+
+```powershell
+# 1. Tear down (with -IncludeTemplate to remove the existing template)
+... teardown-wsl-maude.ps1 -IncludeTemplate
+
+# 2. Admin phase rebuilds the template
+... setup-wsl-maude.ps1 -Admin -Noble       # (or omit -Noble for 26.04)
+
+# 3. User phase imports as Maude
+... setup-wsl-maude.ps1
+```
 
 ### Verified install (recommended for production)
 
@@ -80,12 +99,20 @@ Flags can be combined, e.g. `-OneDrive -Noble`.
 
 When `-Release` is anything other than `main`, the script downloads `light/checksums.txt` from that tag and verifies every file's SHA-256 before using it. A mismatch aborts the install.
 
-### What the setup script does
+### What each phase does
 
-1. **Admin phase:** install WSL and Windows Terminal (if not already present); download Ubuntu and bake in all packages as a reusable template; import the template as `Maude`; run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen).
-2. **User phase:** create the `Maude` shared folder and pin it to Quick Access; run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher); create a Windows Terminal profile and desktop shortcut with the Maude icon.
+**Admin phase** (rare):
+1. Install WSL2 and the VM Platform Windows feature (if missing)
+2. Install Windows Terminal (if missing)
+3. Build the Ubuntu template: download Ubuntu, bake in all packages from `packages/ubuntu-packages.yaml`
+4. Add a permanent Windows Defender exclusion for the Maude install path
 
-On subsequent admin-phase runs, the template step is skipped (the template already exists), so rebuilds are fast.
+**User phase** (every install/reinstall):
+1. `wsl --export` the template, `wsl --import` it as `Maude`
+2. Run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen)
+3. Create the `Maude` shared folder and pin it to Quick Access
+4. Run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher)
+5. Configure the Windows Terminal profile and desktop shortcut
 
 ### Disk space
 
