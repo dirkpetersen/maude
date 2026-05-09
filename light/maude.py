@@ -255,11 +255,20 @@ def fetch_github_user(username: str, timeout: int = 8) -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        login = data.get("login", username)
+        # GitHub may hide the email; fall back to the GitHub-recommended
+        # noreply form so the user always gets a usable git author email.
+        if data.get("email"):
+            email = data["email"]
+        elif data.get("id"):
+            email = f"{data['id']}+{login}@users.noreply.github.com"
+        else:
+            email = f"{login}@users.noreply.github.com"
         return {
-            "login": data.get("login", username),
-            "name":  data.get("name") or data.get("login", username),
-            "email": data.get("email") or "",
-            "html_url": data.get("html_url", f"https://github.com/{username}"),
+            "login": login,
+            "name":  data.get("name") or login,
+            "email": email,
+            "html_url": data.get("html_url", f"https://github.com/{login}"),
         }
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
         return None
@@ -719,18 +728,33 @@ class GitSetupWizard(ModalScreen[bool]):
 
     # Step 1: GitHub identity
     def _render_identity(self, body: Container) -> None:
-        msg = Text("Enter your GitHub username — we'll look up your public name and email.\n")
-        msg.append("If you don't have an account yet, create one at ")
+        msg = Text(
+            "Enter your GitHub username and press Enter — we'll fetch your "
+            "public name and email from github.com automatically.\n"
+        )
+        msg.append("No account yet? Sign up at ")
         msg.append_text(self._link("https://github.com/signup"))
         msg.append(" (Ctrl+click).")
         body.mount(Label(msg))
         body.mount(Input(placeholder="github-username", id="wiz-username",
                          value=self.username))
-        body.mount(Label("Full name (will be used for git config user.name):"))
-        body.mount(Input(placeholder="Your Name", id="wiz-name", value=self.full_name))
-        body.mount(Label("Email (will be used for git config user.email):"))
-        body.mount(Input(placeholder="you@example.com", id="wiz-email", value=self.email))
-        body.mount(Button("Look up GitHub user", id="wiz-lookup", variant="primary"))
+        body.mount(Button("Look up", id="wiz-lookup", variant="primary"))
+
+        # Confirmation/override fields — hidden until the API lookup succeeds.
+        # The user sees them only when there's something to confirm.
+        already_have = bool(self.full_name and self.email)
+        name_label = Label("Full name:", id="wiz-name-label")
+        name_input = Input(placeholder="Your Name", id="wiz-name",
+                           value=self.full_name)
+        email_label = Label("Email:", id="wiz-email-label")
+        email_input = Input(placeholder="you@example.com", id="wiz-email",
+                            value=self.email)
+        for w in (name_label, name_input, email_label, email_input):
+            w.display = already_have
+        body.mount(name_label)
+        body.mount(name_input)
+        body.mount(email_label)
+        body.mount(email_input)
 
     # Step 2: SSH key
     def _render_ssh(self, body: Container) -> None:
@@ -866,7 +890,15 @@ class GitSetupWizard(ModalScreen[bool]):
     # ── Step 1 actions ──────────────────────────────────────────────
 
     @on(Button.Pressed, "#wiz-lookup")
-    def on_lookup(self) -> None:
+    def on_lookup_button(self) -> None:
+        self._do_github_lookup()
+
+    @on(Input.Submitted, "#wiz-username")
+    def on_username_submitted(self) -> None:
+        # Pressing Enter in the username input triggers the lookup.
+        self._do_github_lookup()
+
+    def _do_github_lookup(self) -> None:
         username = self.query_one("#wiz-username", Input).value.strip()
         if not username:
             self._log("Enter a GitHub username first.")
@@ -877,15 +909,19 @@ class GitSetupWizard(ModalScreen[bool]):
             self._log(f"User '{username}' not found. Create one at "
                       "https://github.com/signup")
             return
-        self.username = info["login"]
-        if info["name"]:
-            self.full_name = info["name"]
-            self.query_one("#wiz-name", Input).value = info["name"]
-        if info["email"]:
-            self.email = info["email"]
-            self.query_one("#wiz-email", Input).value = info["email"]
-        self._log(f"Found: {info['name']} <{info['email'] or '(email private)'}>"
-                  f"  →  {info['html_url']}")
+        self.username   = info["login"]
+        self.full_name  = info["name"]
+        self.email      = info["email"]
+        # Reveal & populate the confirmation fields.
+        for wid in ("#wiz-name-label", "#wiz-name",
+                    "#wiz-email-label", "#wiz-email"):
+            self.query_one(wid).display = True
+        self.query_one("#wiz-name",  Input).value = info["name"]
+        self.query_one("#wiz-email", Input).value = info["email"]
+        noreply = "users.noreply.github.com" in info["email"]
+        suffix = "  (email private — using GitHub noreply alias)" if noreply else ""
+        self._log(f"Found: {info['name']} <{info['email']}>"
+                  f"  →  {info['html_url']}{suffix}")
 
     def _capture_identity_then_advance(self) -> None:
         self.username  = self.query_one("#wiz-username", Input).value.strip()
