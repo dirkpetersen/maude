@@ -7,6 +7,7 @@ Always launched via:  maude tui
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -321,16 +322,51 @@ def read_ssh_pubkey(key_path: str) -> str:
         return ""
 
 
-def verify_ssh_github(timeout: int = 10) -> tuple[bool, str]:
-    """Run `ssh -T git@github.com` and check for a successful auth line."""
+def verify_ssh_github(passphrase: str = "", timeout: int = 15) -> tuple[bool, str]:
+    """Run `ssh -T git@github.com` and check for a successful auth line.
+
+    If `passphrase` is provided, feeds it via SSH_ASKPASS so a
+    passphrase-protected key can be unlocked without an interactive
+    prompt (ssh would otherwise hang or — with BatchMode=yes — refuse
+    to read the key and fall back to "Permission denied").
+    """
+    env = os.environ.copy()
+    askpass_path: str | None = None
+
+    if passphrase:
+        # Write a tiny shell script that prints the passphrase to stdout.
+        fd, askpass_path = tempfile.mkstemp(prefix="maude-askpass-", suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write("#!/bin/sh\n")
+            f.write(f"printf '%s' {shlex.quote(passphrase)}\n")
+        os.chmod(askpass_path, 0o700)
+        env["SSH_ASKPASS"] = askpass_path
+        env["SSH_ASKPASS_REQUIRE"] = "force"     # OpenSSH 8.4+
+        env.setdefault("DISPLAY", ":0")          # older OpenSSH still needs this
+
+    cmd = ["ssh", "-T",
+           "-o", "StrictHostKeyChecking=accept-new",
+           "-o", "IdentitiesOnly=yes",
+           "-i", str(SSH_KEY_PATH),
+           "git@github.com"]
+    if not passphrase:
+        # Without a passphrase, fail fast instead of prompting.
+        cmd[2:2] = ["-o", "BatchMode=yes"]
+
     try:
         r = subprocess.run(
-            ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new",
-             "-o", "BatchMode=yes", "git@github.com"],
-            capture_output=True, text=True, timeout=timeout,
+            cmd, capture_output=True, text=True, timeout=timeout,
+            env=env, stdin=subprocess.DEVNULL,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as err:
         return False, str(err)
+    finally:
+        if askpass_path:
+            try:
+                os.unlink(askpass_path)
+            except OSError:
+                pass
+
     output = (r.stdout + r.stderr).strip()
     # GitHub returns exit code 1 even on successful auth, with this message.
     if "successfully authenticated" in output.lower():
@@ -670,6 +706,7 @@ class GitSetupWizard(ModalScreen[bool]):
         self.full_name = git_config_get("user.name")
         self.email     = git_config_get("user.email")
         self.ssh_key_path: str | None = None
+        self.ssh_passphrase = ""
         self.gpg_key_id: str | None = None
         self.gpg_passphrase = ""
         self._dismissed = False
@@ -782,6 +819,9 @@ class GitSetupWizard(ModalScreen[bool]):
                 " (Ctrl+click), then press [bold]Verify[/]."
             ))
             body.mount(Label(paste_msg))
+            body.mount(Label("Passphrase (only if your key has one):"))
+            body.mount(Input(placeholder="passphrase", id="wiz-ssh-pass-verify",
+                             password=True, value=self.ssh_passphrase))
             body.mount(Horizontal(
                 Button("Verify GitHub auth", id="wiz-ssh-verify", variant="primary"),
                 id="wiz-ssh-actions",
@@ -952,13 +992,20 @@ class GitSetupWizard(ModalScreen[bool]):
         ok, msg = generate_ssh_key(p1, comment=self.email or self.username or "maude")
         self._log(msg)
         if ok:
-            self.ssh_key_path = str(SSH_KEY_PATH)
+            self.ssh_key_path   = str(SSH_KEY_PATH)
+            self.ssh_passphrase = p1   # carry over so Verify can unlock the key
             await self._render_step()  # re-render to show the pubkey
 
     @on(Button.Pressed, "#wiz-ssh-verify")
     def on_ssh_verify(self) -> None:
+        # Pull the passphrase from the verify-time input so users with an
+        # existing passphrase-protected key can also test.
+        try:
+            self.ssh_passphrase = self.query_one("#wiz-ssh-pass-verify", Input).value
+        except Exception:
+            pass
         self._log("Running: ssh -T git@github.com …")
-        ok, msg = verify_ssh_github()
+        ok, msg = verify_ssh_github(self.ssh_passphrase)
         self._log(msg)
         if ok:
             self._log("[green]✓ SSH auth to GitHub works.[/]")
