@@ -182,10 +182,10 @@ if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then
         -o "$HOME/Maude/DANGER-ZONE.txt" 2>/dev/null || true
 fi
 
-# If TUI auto-start is enabled, launch it instead of the text welcome.
+# Auto-start the TUI by default; users can opt out with ~/.maude-tui-disabled.
 # Guard with MAUDE_WELCOMED so we don't re-launch when .bashrc re-sources
 # this script (it is already sourced via /etc/profile.d on login shells).
-if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && [[ -f "$HOME/.maude-tui-autostart" ]] && command -v maude >/dev/null 2>&1; then
+if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && [[ ! -f "$HOME/.maude-tui-disabled" ]] && command -v maude >/dev/null 2>&1; then
     export MAUDE_WELCOMED=1
     maude tui
     return 0 2>/dev/null || true

@@ -71,18 +71,67 @@ else
     echo "WARNING: ~/Maude/.kanna not found, using local ~/.kanna"
 fi
 
-# ── Claude Code: bypass permissions (safe inside sandbox) ────────────
-if [[ ! -f "$HOME/.claude/settings.json" ]]; then
-    cat > "$HOME/.claude/settings.json" << 'SETTINGSEOF'
-{
-  "permissions": {
-    "defaultMode": "bypassPermissions"
-  },
-  "skipDangerousModePermissionPrompt": true
-}
-SETTINGSEOF
-    echo "Claude Code: bypassPermissions mode enabled (sandbox-safe)."
+# ── Claude Code: status line (cwd + context-window % free) ───────────
+# Always overwritten so updates take effect on reinstall.
+cat > "$HOME/.claude/statusline.sh" << 'STATUSLINEEOF'
+#!/bin/bash
+# Claude Code status line: "~/path/to/cwd  [NN% free]"
+# Shows cwd with $HOME → ~ and appends remaining context-window percentage.
+# Context window is picked per model: 1M for any "[1m]"/"1m" variant, else 200k.
+
+set -u
+
+input=$(cat)
+cwd=$(printf '%s' "$input" | jq -r '.cwd // ""')
+tp=$(printf '%s'  "$input" | jq -r '.transcript_path // empty')
+model=$(printf '%s' "$input" | jq -r '((.model.id // "") + " " + (.model.display_name // "")) | ascii_downcase')
+
+case "$model" in
+    *1m*) ctx_total=1000000 ;;   # Opus 4.7 1M, Sonnet 4.6 1M
+    *)    ctx_total=200000  ;;   # Opus 4.7, Sonnet 4.6, Haiku 4.5 (all 200k)
+esac
+
+display_cwd="${cwd/#$HOME/"~"}"
+
+pct_str=""
+if [[ -n "$tp" && -r "$tp" ]]; then
+    used=$(tac "$tp" 2>/dev/null \
+        | grep -m1 '"usage"' \
+        | jq -r '.message.usage
+                 | ((.input_tokens // 0)
+                  + (.cache_read_input_tokens // 0)
+                  + (.cache_creation_input_tokens // 0))' 2>/dev/null)
+    if [[ "$used" =~ ^[0-9]+$ ]]; then
+        pct=$(( 100 - used * 100 / ctx_total ))
+        (( pct < 0 )) && pct=0
+        pct_str="  [${pct}% free]"
+    fi
 fi
+
+printf '%s%s\n' "$display_cwd" "$pct_str"
+STATUSLINEEOF
+chmod +x "$HOME/.claude/statusline.sh"
+echo "Claude Code: statusline.sh installed."
+
+# ── Claude Code: settings.json (bypassPermissions + statusLine) ──────
+# Merge settings so existing user customisations (from a prior install,
+# host-persistent via the symlink) are preserved while we ensure the
+# statusLine and sandbox-safe defaults are present.
+python3 - "$HOME/.claude/settings.json" "$HOME/.claude/statusline.sh" <<'PYEOF'
+import json, os, sys
+path, statusline = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data = {}
+data.setdefault("permissions", {})["defaultMode"] = "bypassPermissions"
+data["skipDangerousModePermissionPrompt"] = True
+data["statusLine"] = {"type": "command", "command": statusline}
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+echo "Claude Code: settings.json updated (bypassPermissions + statusLine)."
 
 # ── Claude Code: enable YOLO mode marker file ────────────────────────
 if [[ ! -f "$HOME/.claude/yolo-mode" ]]; then

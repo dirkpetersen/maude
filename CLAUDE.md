@@ -143,7 +143,7 @@ The `light/` directory contains the WSL2 sandbox implementation:
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom-inst (.deb), PATH, welcome screen, Claude Code |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config, yolo-mode marker |
-| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`) |
+| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`, `maude setup-git`) |
 | `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`) |
 
 Key implementation details:
@@ -184,8 +184,8 @@ A Textual-based full-screen TUI alternative to the CLI welcome screen. Always la
 - **New project**: modal dialog, spaces auto-replaced with hyphens, git init
 - **Web UI**: launches kanna in background
 - **Command Line**: exits TUI, returns to shell prompt
-- **"Start TUI with Maude" checkbox**: toggles `~/.maude-tui-autostart` flag file; `maude-welcome.sh` checks this flag and runs `maude tui` (not `exec`) instead of showing the text banner, so the shell survives after TUI exit
-- **Credential gate**: `NoCredsScreen` modal blocks TUI startup if no LLM credentials are configured (checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials`, `~/.azure/clauderc`)
+- **"Start TUI with Maude" checkbox**: TUI auto-launches by default for every new terminal session. Unchecking the box creates `~/.maude-tui-disabled` (an *opt-out* flag); `maude-welcome.sh` skips the auto-launch when that file is present and shows the text banner instead. `maude tui` is invoked (not `exec`) so the shell survives after TUI exit
+- **Credential gate**: `CredsEntryScreen` modal blocks TUI startup if no LLM credentials are configured (checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials`, `~/.azure/clauderc`). The user can paste shell-style `export` lines; the modal parses recognised credential vars (ANTHROPIC_*/CLAUDE_*/AWS_*/AZURE_*) and writes them to `~/.azure/clauderc` (mode 0600). Also reachable from the **Set Credentials** bottom-bar button and triggered automatically when the user clicks **Web UI** without credentials.
 - **Exit hint**: after quitting the TUI, prints "Please type: menu \<Enter\> to get back to the TUI"
 - **Daily update**: `maude tui` checks `~/.maude-tui-last-update` stamp; downloads fresh `maude.py` from GitHub if older than 24 h
 - **Colors**: green logo, cyan highlights, yellow accents (matches welcome screen palette)

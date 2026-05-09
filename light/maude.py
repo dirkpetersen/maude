@@ -4,6 +4,7 @@ maude.py — Textual TUI for the Maude sandbox.
 Always launched via:  maude tui
 """
 
+import json
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from rich.text import Text
 from datetime import datetime
@@ -29,14 +31,16 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    Log,
     RadioButton,
     RadioSet,
     Static,
+    TextArea,
 )
 
 PROJECTS_DIR = Path.home() / "Maude" / "Projects"
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
-AUTOSTART_FLAG = Path.home() / ".maude-tui-autostart"
+DISABLE_FLAG   = Path.home() / ".maude-tui-disabled"
 KANNA_CMD    = "kanna"
 KANNA_PORT   = 3210
 
@@ -114,32 +118,19 @@ def stop_kanna(proc: subprocess.Popen | None) -> None:
     kill_port(KANNA_PORT)
 
 
-def get_claude_env() -> dict[str, str]:
-    """Parse auth-related env vars from `claude --wdebug` output.
+def kanna_env() -> dict[str, str]:
+    """Build the environment for kanna: point it at the maude claude wrapper.
 
-    Captures everything kanna might need to authenticate:
-    - ANTHROPIC_*  (direct API + Foundry, e.g. ANTHROPIC_FOUNDRY_BASE_URL,
-                    ANTHROPIC_FOUNDRY_API_KEY)
-    - CLAUDE_*     (e.g. CLAUDE_CODE_USE_FOUNDRY, CLAUDE_CODE_USE_BEDROCK)
-    - AWS_*        (Bedrock: region, profile, access keys, session token)
+    The wrapper at ~/bin/claude sets the right auth env vars
+    (Foundry/Azure/Bedrock/direct) per launch, so we only need to tell
+    kanna where it is. Falls back to plain `claude` on PATH if the
+    wrapper isn't installed yet.
     """
-    env = {}
-    prefixes = ("ANTHROPIC_", "CLAUDE_", "AWS_")
-    try:
-        result = subprocess.run(
-            ["claude", "--wdebug"], capture_output=True, text=True, timeout=5
-        )
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            # Lines look like: "  ANTHROPIC_MODEL=claude-haiku-4-5"
-            if "=" in line and line.split("=", 1)[0].strip().isidentifier():
-                key, val = line.split("=", 1)
-                key = key.strip()
-                if key.startswith(prefixes):
-                    env[key] = val.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return env
+    extra: dict[str, str] = {}
+    wrapper = Path.home() / "bin" / "claude"
+    if wrapper.is_file() and os.access(wrapper, os.X_OK):
+        extra["CLAUDE_EXECUTABLE"] = str(wrapper)
+    return extra
 
 
 def check_credentials() -> bool:
@@ -222,34 +213,370 @@ def soft_delete(project_path: Path) -> None:
     shutil.move(str(project_path), dest)
 
 
+# ── Git Setup Wizard helpers ──────────────────────────────────────────────
+
+SSH_KEY_PATH = Path.home() / ".ssh" / "id_ed25519"
+
+
+def git_config_get(key: str) -> str:
+    """Return `git config --global <key>` or empty string."""
+    try:
+        r = subprocess.run(
+            ["git", "config", "--global", key],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+
+
+def git_config_set(key: str, value: str) -> None:
+    """Set `git config --global <key> <value>`. Silent on failure."""
+    try:
+        subprocess.run(
+            ["git", "config", "--global", key, value],
+            check=False, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
+def fetch_github_user(username: str, timeout: int = 8) -> dict | None:
+    """Fetch a user's public profile from the GitHub API.
+
+    Returns dict with keys: login, name, email, html_url. Returns None
+    on 404 or any other error.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", username):
+        return None
+    url = f"https://api.github.com/users/{username}"
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return {
+            "login": data.get("login", username),
+            "name":  data.get("name") or data.get("login", username),
+            "email": data.get("email") or "",
+            "html_url": data.get("html_url", f"https://github.com/{username}"),
+        }
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
+        return None
+
+
+def existing_ssh_key() -> str | None:
+    """Return path to an existing SSH key (prefer ed25519), else None."""
+    candidates = [
+        Path.home() / ".ssh" / "id_ed25519",
+        Path.home() / ".ssh" / "id_rsa",
+    ]
+    for p in candidates:
+        if p.exists() and (p.with_suffix(".pub")).exists():
+            return str(p)
+    return None
+
+
+def generate_ssh_key(passphrase: str, comment: str) -> tuple[bool, str]:
+    """Generate an ed25519 SSH key at ~/.ssh/id_ed25519.
+
+    Returns (ok, message). Refuses to overwrite if the key already exists.
+    """
+    SSH_KEY_PATH.parent.mkdir(mode=0o700, exist_ok=True)
+    if SSH_KEY_PATH.exists():
+        return False, f"{SSH_KEY_PATH} already exists; refusing to overwrite."
+    try:
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-C", comment,
+             "-f", str(SSH_KEY_PATH), "-N", passphrase],
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+        SSH_KEY_PATH.chmod(0o600)
+        SSH_KEY_PATH.with_suffix(".pub").chmod(0o644)
+        return True, "SSH key generated."
+    except subprocess.CalledProcessError as err:
+        return False, f"ssh-keygen failed: {err.stderr or err}"
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        return False, str(err)
+
+
+def read_ssh_pubkey(key_path: str) -> str:
+    """Read the public key file matching `key_path`."""
+    pub = Path(key_path).with_suffix(".pub")
+    try:
+        return pub.read_text().strip()
+    except OSError:
+        return ""
+
+
+def verify_ssh_github(timeout: int = 10) -> tuple[bool, str]:
+    """Run `ssh -T git@github.com` and check for a successful auth line."""
+    try:
+        r = subprocess.run(
+            ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "BatchMode=yes", "git@github.com"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        return False, str(err)
+    output = (r.stdout + r.stderr).strip()
+    # GitHub returns exit code 1 even on successful auth, with this message.
+    if "successfully authenticated" in output.lower():
+        return True, output
+    return False, output or "no response from GitHub"
+
+
+def existing_gpg_key(email: str) -> str | None:
+    """Return the long key-id of a secret GPG key matching `email`, or None."""
+    if not email:
+        return None
+    try:
+        r = subprocess.run(
+            ["gpg", "--list-secret-keys", "--keyid-format=long", email],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if r.returncode != 0:
+        return None
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith(("sec", "ssb")):
+            # Format:  sec   ed25519/ABCD1234EF567890 2026-…
+            parts = line.split()
+            if len(parts) >= 2 and "/" in parts[1]:
+                return parts[1].split("/", 1)[1]
+    return None
+
+
+def generate_gpg_key(name: str, email: str, passphrase: str) -> tuple[str | None, str]:
+    """Generate an ed25519 GPG key (with cv25519 subkey) for signing.
+
+    Returns (key_id, message). key_id is None on failure.
+    """
+    batch = (
+        "%echo Generating Maude signing key\n"
+        "Key-Type: EDDSA\n"
+        "Key-Curve: ed25519\n"
+        "Key-Usage: sign\n"
+        "Subkey-Type: ECDH\n"
+        "Subkey-Curve: cv25519\n"
+        "Subkey-Usage: encrypt\n"
+        f"Name-Real: {name}\n"
+        f"Name-Email: {email}\n"
+        "Expire-Date: 0\n"
+        f"{'Passphrase: ' + passphrase if passphrase else '%no-protection'}\n"
+        "%commit\n"
+        "%echo done\n"
+    )
+    try:
+        subprocess.run(
+            ["gpg", "--batch", "--pinentry-mode", "loopback", "--gen-key"],
+            input=batch, text=True, capture_output=True,
+            check=True, timeout=120,
+        )
+    except subprocess.CalledProcessError as err:
+        return None, f"gpg --gen-key failed: {err.stderr or err}"
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        return None, str(err)
+    key_id = existing_gpg_key(email)
+    if not key_id:
+        return None, "gpg succeeded but the new key was not found."
+    return key_id, "GPG key generated."
+
+
+def export_gpg_pubkey(key_id: str) -> str:
+    """Return the ASCII-armored public key for `key_id`."""
+    try:
+        r = subprocess.run(
+            ["gpg", "--armor", "--export", key_id],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.stdout if r.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+
+
+def verify_gpg_signing(key_id: str, passphrase: str) -> tuple[bool, str]:
+    """Sign a temp string with `key_id` to confirm signing works end-to-end."""
+    cmd = ["gpg", "--batch", "--pinentry-mode", "loopback", "-u", key_id,
+           "--clearsign", "--output", "-"]
+    if passphrase:
+        cmd[3:3] = ["--passphrase", passphrase]
+    try:
+        r = subprocess.run(
+            cmd, input="maude-git-setup-test\n", text=True,
+            capture_output=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        return False, str(err)
+    if r.returncode == 0 and "BEGIN PGP SIGNATURE" in r.stdout:
+        return True, "GPG signing verified."
+    return False, (r.stderr or "signing failed").strip()
+
+
+def install_keychain_via_mom() -> tuple[bool, str]:
+    """Install the keychain package via mom (idempotent)."""
+    if shutil.which("keychain"):
+        return True, "keychain already installed."
+    if not shutil.which("mom"):
+        return False, "mom is not available; cannot install keychain."
+    try:
+        r = subprocess.run(
+            ["mom", "install", "-y", "keychain"],
+            capture_output=True, text=True, timeout=180,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        return False, str(err)
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout).strip()
+    return True, "keychain installed."
+
+
+KEYCHAIN_BLOCK = """
+# Maude: ssh-agent via keychain
+if command -v keychain >/dev/null 2>&1; then
+    if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
+        eval "$(keychain --quiet --eval --agents ssh id_ed25519)"
+    fi
+fi
+"""
+
+
+def add_keychain_to_bashrc() -> bool:
+    """Append the keychain block to ~/.bashrc if not already present."""
+    rc = Path.home() / ".bashrc"
+    try:
+        text = rc.read_text() if rc.exists() else ""
+    except OSError:
+        return False
+    if "Maude: ssh-agent via keychain" in text:
+        return True
+    try:
+        with rc.open("a") as f:
+            f.write(KEYCHAIN_BLOCK)
+        return True
+    except OSError:
+        return False
+
+
 # ── Modal screens ──────────────────────────────────────────────────────────
 
-class NoCredsScreen(ModalScreen[None]):
-    """Full-screen error when no LLM credentials are configured."""
+CLAUDERC_PATH = Path.home() / ".azure" / "clauderc"
 
-    BINDINGS = [
-        Binding("escape", "quit_app", show=False),
-        Binding("q", "quit_app", show=False),
-    ]
+# Recognised credential-related env vars, for parsing pasted exports.
+CRED_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "OPENAI_")
+CRED_KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
-    def action_quit_app(self) -> None:
-        self.app.exit(1)
+
+def parse_creds_text(text: str) -> dict[str, str]:
+    """Parse pasted shell-style exports into a {KEY: VALUE} dict.
+
+    Accepts:
+        export FOO=bar
+        FOO=bar
+        FOO="bar baz"
+        FOO='bar baz'
+    Comments and blank lines are ignored. Only KEYs starting with one
+    of the known credential prefixes are kept, to avoid writing junk.
+    """
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        m = CRED_KEY_RE.match(line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if (val.startswith('"') and val.endswith('"')) or \
+           (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1]
+        if key.startswith(CRED_PREFIXES):
+            out[key] = val
+    return out
+
+
+def write_clauderc(values: dict[str, str]) -> None:
+    """Write env vars to ~/.azure/clauderc as `export KEY=VALUE` lines."""
+    CLAUDERC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f'export {k}="{v}"' for k, v in values.items()]
+    CLAUDERC_PATH.write_text("\n".join(lines) + "\n")
+    try:
+        CLAUDERC_PATH.chmod(0o600)
+    except OSError:
+        pass
+
+
+class CredsEntryScreen(ModalScreen[bool]):
+    """Modal that lets the user paste credential `export` lines.
+
+    On Save: parses, writes to ~/.azure/clauderc, updates os.environ,
+    and dismisses with True. On Cancel: dismisses with False.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, *, allow_cancel: bool = True) -> None:
+        super().__init__()
+        self._allow_cancel = allow_cancel
+
+    def action_cancel(self) -> None:
+        if self._allow_cancel:
+            self.dismiss(False)
 
     def compose(self) -> ComposeResult:
-        with Container(id="nocreds-box"):
-            yield Label("No LLM Credentials Found", id="nocreds-title")
+        with Container(id="creds-box"):
+            yield Label("Set LLM Credentials", id="creds-title")
             yield Label(
-                "Configure one of the following before launching Maude:\n\n"
-                "  ANTHROPIC_API_KEY            environment variable\n"
-                "  ANTHROPIC_FOUNDRY_API_KEY     environment variable\n"
-                "  ~/.aws/credentials            AWS Bedrock\n"
-                "  ~/.azure/clauderc             Azure config",
-                id="nocreds-detail",
+                "Paste your credentials below — accepts shell `export` lines or KEY=VALUE.\n"
+                "Saved to ~/.azure/clauderc (mode 0600). Recognised: "
+                "ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*.",
+                id="creds-help",
             )
-            yield Label("Press  q  or  Esc  to exit.", id="nocreds-hint")
+            yield TextArea(
+                "",
+                id="creds-text",
+                language=None,
+                show_line_numbers=False,
+            )
+            yield Label("", id="creds-status")
+            with Horizontal(id="creds-buttons"):
+                yield Button("Save",   variant="success", id="btn-creds-save")
+                if self._allow_cancel:
+                    yield Button("Cancel", variant="primary", id="btn-creds-cancel")
+                else:
+                    yield Button("Quit",   variant="error",   id="btn-creds-quit")
 
-    @on(Button.Pressed, "#btn-nocreds-exit")
-    def exit_pressed(self) -> None:
+    def on_mount(self) -> None:
+        self.query_one("#creds-text", TextArea).focus()
+
+    @on(Button.Pressed, "#btn-creds-save")
+    def save(self) -> None:
+        text = self.query_one("#creds-text", TextArea).text
+        values = parse_creds_text(text)
+        if not values:
+            self.query_one("#creds-status", Label).update(
+                "[bold red]No recognised credential lines found.[/]"
+            )
+            return
+        try:
+            write_clauderc(values)
+        except OSError as err:
+            self.query_one("#creds-status", Label).update(
+                f"[bold red]Could not write file: {err}[/]"
+            )
+            return
+        os.environ.update(values)
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#btn-creds-cancel")
+    def cancel(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#btn-creds-quit")
+    def quit_pressed(self) -> None:
         self.app.exit(1)
 
 
@@ -313,6 +640,360 @@ class NewProjectScreen(ModalScreen[str | None]):
     @on(Input.Submitted)
     def submitted(self) -> None:
         self.create()
+
+
+class GitSetupWizard(ModalScreen[bool]):
+    """Multi-step wizard that walks the user through Git/SSH/GPG setup.
+
+    Steps:
+        1. GitHub identity (username → fetch name + email)
+        2. SSH key (generate or detect, then paste pubkey at github.com)
+        3. GPG key + commit signing
+        4. Final config + keychain
+    """
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    STEP_TITLES = (
+        "Step 1 of 4 — GitHub Identity",
+        "Step 2 of 4 — SSH Key",
+        "Step 3 of 4 — GPG Key & Signing",
+        "Step 4 of 4 — Git Config & Keychain",
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.step = 0
+        # Carried across steps:
+        self.username = ""
+        self.full_name = git_config_get("user.name")
+        self.email     = git_config_get("user.email")
+        self.ssh_key_path: str | None = None
+        self.gpg_key_id: str | None = None
+        self.gpg_passphrase = ""
+        self._dismissed = False
+
+    # ── Top-level layout ────────────────────────────────────────────
+
+    def compose(self) -> ComposeResult:
+        with Container(id="wiz-box"):
+            yield Label(self.STEP_TITLES[0], id="wiz-title")
+            yield Container(id="wiz-body")
+            yield Log(id="wiz-log", auto_scroll=True, max_lines=200)
+            with Horizontal(id="wiz-buttons"):
+                yield Button("Back",   id="wiz-back",   variant="default")
+                yield Button("Skip",   id="wiz-skip",   variant="warning")
+                yield Button("Next",   id="wiz-next",   variant="success")
+                yield Button("Cancel", id="wiz-cancel", variant="error")
+
+    def on_mount(self) -> None:
+        self._render_step()
+
+    def action_cancel(self) -> None:
+        if not self._dismissed:
+            self._dismissed = True
+            self.dismiss(False)
+
+    # ── Step rendering ──────────────────────────────────────────────
+
+    def _set_buttons(self, *, back=True, skip=False, next_label="Next") -> None:
+        self.query_one("#wiz-back",  Button).disabled = not back
+        skip_btn = self.query_one("#wiz-skip", Button)
+        skip_btn.display = skip
+        self.query_one("#wiz-next",  Button).label = next_label
+
+    def _log(self, msg: str) -> None:
+        self.query_one("#wiz-log", Log).write_line(msg)
+
+    def _render_step(self) -> None:
+        self.query_one("#wiz-title", Label).update(self.STEP_TITLES[self.step])
+        body = self.query_one("#wiz-body", Container)
+        body.remove_children()
+        if self.step == 0:
+            self._render_identity(body)
+            self._set_buttons(back=False, skip=False, next_label="Next")
+        elif self.step == 1:
+            self._render_ssh(body)
+            self._set_buttons(back=True, skip=True, next_label="Next")
+        elif self.step == 2:
+            self._render_gpg(body)
+            self._set_buttons(back=True, skip=True, next_label="Next")
+        elif self.step == 3:
+            self._render_final(body)
+            self._set_buttons(back=True, skip=False, next_label="Finish")
+
+    # Step 1: GitHub identity
+    def _render_identity(self, body: Container) -> None:
+        body.mount(Label(
+            "Enter your GitHub username — we'll look up your public name and email.\n"
+            "If you don't have an account yet, create one at "
+            "[link=https://github.com/signup]https://github.com/signup[/link] "
+            "(Ctrl+click)."
+        ))
+        body.mount(Input(placeholder="github-username", id="wiz-username",
+                         value=self.username))
+        body.mount(Label("Full name (will be used for git config user.name):"))
+        body.mount(Input(placeholder="Your Name", id="wiz-name", value=self.full_name))
+        body.mount(Label("Email (will be used for git config user.email):"))
+        body.mount(Input(placeholder="you@example.com", id="wiz-email", value=self.email))
+        body.mount(Button("Look up GitHub user", id="wiz-lookup", variant="primary"))
+
+    # Step 2: SSH key
+    def _render_ssh(self, body: Container) -> None:
+        existing = existing_ssh_key()
+        self.ssh_key_path = existing
+        if existing:
+            pub = read_ssh_pubkey(existing)
+            body.mount(Label(
+                f"Found existing SSH key: [bold]{existing}[/]\n"
+                "Public key (already on disk — copy this if you haven't yet "
+                "added it to GitHub):"
+            ))
+            body.mount(TextArea(pub, id="wiz-ssh-pub", read_only=True,
+                                show_line_numbers=False))
+            body.mount(Label(
+                "Paste the public key at "
+                "[link=https://github.com/settings/ssh/new]"
+                "https://github.com/settings/ssh/new[/link] "
+                "(Ctrl+click), then press [bold]Verify[/]."
+            ))
+            body.mount(Horizontal(
+                Button("Verify GitHub auth", id="wiz-ssh-verify", variant="primary"),
+                id="wiz-ssh-actions",
+            ))
+        else:
+            body.mount(Label(
+                "No SSH key found at ~/.ssh/id_ed25519. Set a passphrase "
+                "(strongly recommended) and click [bold]Generate[/]."
+            ))
+            body.mount(Label("Passphrase (leave blank for none):"))
+            body.mount(Input(placeholder="passphrase", id="wiz-ssh-pass",
+                             password=True))
+            body.mount(Label("Confirm passphrase:"))
+            body.mount(Input(placeholder="confirm",   id="wiz-ssh-pass2",
+                             password=True))
+            body.mount(Horizontal(
+                Button("Generate ed25519 key", id="wiz-ssh-gen", variant="success"),
+                id="wiz-ssh-actions",
+            ))
+
+    # Step 3: GPG key + signing
+    def _render_gpg(self, body: Container) -> None:
+        if not shutil.which("gpg"):
+            body.mount(Label(
+                "[yellow]gpg is not installed.[/]\n\n"
+                "Run [bold]mom install -y gnupg[/] in another terminal, then "
+                "come back. Or click [bold]Skip[/] to leave commit signing for later."
+            ))
+            return
+        existing_id = existing_gpg_key(self.email)
+        self.gpg_key_id = existing_id
+        if existing_id:
+            pub = export_gpg_pubkey(existing_id)
+            body.mount(Label(
+                f"Found existing GPG key for [bold]{self.email}[/]: "
+                f"[cyan]{existing_id}[/]\n"
+                "Public key (paste at "
+                "[link=https://github.com/settings/gpg/new]"
+                "https://github.com/settings/gpg/new[/link] if not already added):"
+            ))
+            body.mount(TextArea(pub, id="wiz-gpg-pub", read_only=True,
+                                show_line_numbers=False))
+            body.mount(Label("Existing passphrase (only if you set one):"))
+            body.mount(Input(placeholder="passphrase", id="wiz-gpg-pass",
+                             password=True))
+            body.mount(Horizontal(
+                Button("Verify signing", id="wiz-gpg-verify", variant="primary"),
+                id="wiz-gpg-actions",
+            ))
+        else:
+            body.mount(Label(
+                "Generate an ed25519 GPG key for commit signing. "
+                "Set a passphrase (recommended) or leave blank.\n"
+                "Generation can take several seconds — be patient."
+            ))
+            body.mount(Label("Passphrase (leave blank for none):"))
+            body.mount(Input(placeholder="passphrase", id="wiz-gpg-pass",
+                             password=True))
+            body.mount(Label("Confirm passphrase:"))
+            body.mount(Input(placeholder="confirm",    id="wiz-gpg-pass2",
+                             password=True))
+            body.mount(Horizontal(
+                Button("Generate GPG key", id="wiz-gpg-gen", variant="success"),
+                id="wiz-gpg-actions",
+            ))
+
+    # Step 4: Final config + keychain
+    def _render_final(self, body: Container) -> None:
+        body.mount(Label(
+            "Finalise the setup:\n"
+            f"  • git config user.name = [bold]{self.full_name}[/]\n"
+            f"  • git config user.email = [bold]{self.email}[/]\n"
+            "  • init.defaultBranch = [bold]main[/]\n"
+            "  • Install [bold]keychain[/] via mom (if missing)\n"
+            "  • Add a keychain block to ~/.bashrc\n\n"
+            "Click [bold]Finish[/] to apply, or [bold]Back[/] to revisit a step."
+        ))
+
+    # ── Button dispatch ─────────────────────────────────────────────
+
+    @on(Button.Pressed, "#wiz-cancel")
+    def on_cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#wiz-back")
+    def on_back(self) -> None:
+        if self.step > 0:
+            self.step -= 1
+            self._render_step()
+
+    @on(Button.Pressed, "#wiz-skip")
+    def on_skip(self) -> None:
+        self._log(f"[skipped] {self.STEP_TITLES[self.step]}")
+        self._advance()
+
+    @on(Button.Pressed, "#wiz-next")
+    def on_next(self) -> None:
+        if self.step == 0:
+            self._capture_identity_then_advance()
+        elif self.step == 1:
+            self._advance_if_ssh_ready()
+        elif self.step == 2:
+            self._advance_if_gpg_ready()
+        elif self.step == 3:
+            self._finish()
+
+    def _advance(self) -> None:
+        if self.step < 3:
+            self.step += 1
+            self._render_step()
+
+    # ── Step 1 actions ──────────────────────────────────────────────
+
+    @on(Button.Pressed, "#wiz-lookup")
+    def on_lookup(self) -> None:
+        username = self.query_one("#wiz-username", Input).value.strip()
+        if not username:
+            self._log("Enter a GitHub username first.")
+            return
+        self._log(f"Looking up github.com/{username}…")
+        info = fetch_github_user(username)
+        if info is None:
+            self._log(f"User '{username}' not found. Create one at "
+                      "https://github.com/signup")
+            return
+        self.username = info["login"]
+        if info["name"]:
+            self.full_name = info["name"]
+            self.query_one("#wiz-name", Input).value = info["name"]
+        if info["email"]:
+            self.email = info["email"]
+            self.query_one("#wiz-email", Input).value = info["email"]
+        self._log(f"Found: {info['name']} <{info['email'] or '(email private)'}>"
+                  f"  →  {info['html_url']}")
+
+    def _capture_identity_then_advance(self) -> None:
+        self.username  = self.query_one("#wiz-username", Input).value.strip()
+        self.full_name = self.query_one("#wiz-name",     Input).value.strip()
+        self.email     = self.query_one("#wiz-email",    Input).value.strip()
+        if not self.full_name or not self.email:
+            self._log("Name and email are required to continue.")
+            return
+        self._advance()
+
+    # ── Step 2 actions ──────────────────────────────────────────────
+
+    @on(Button.Pressed, "#wiz-ssh-gen")
+    def on_ssh_gen(self) -> None:
+        p1 = self.query_one("#wiz-ssh-pass",  Input).value
+        p2 = self.query_one("#wiz-ssh-pass2", Input).value
+        if p1 != p2:
+            self._log("Passphrases do not match.")
+            return
+        self._log("Generating ed25519 SSH key…")
+        ok, msg = generate_ssh_key(p1, comment=self.email or self.username or "maude")
+        self._log(msg)
+        if ok:
+            self.ssh_key_path = str(SSH_KEY_PATH)
+            self._render_step()  # re-render to show the pubkey
+
+    @on(Button.Pressed, "#wiz-ssh-verify")
+    def on_ssh_verify(self) -> None:
+        self._log("Running: ssh -T git@github.com …")
+        ok, msg = verify_ssh_github()
+        self._log(msg)
+        if ok:
+            self._log("[green]✓ SSH auth to GitHub works.[/]")
+
+    def _advance_if_ssh_ready(self) -> None:
+        if not self.ssh_key_path:
+            self._log("Generate an SSH key first, or click Skip.")
+            return
+        self._advance()
+
+    # ── Step 3 actions ──────────────────────────────────────────────
+
+    @on(Button.Pressed, "#wiz-gpg-gen")
+    def on_gpg_gen(self) -> None:
+        if not shutil.which("gpg"):
+            self._log("gpg is not installed; install it with `mom install -y gnupg`.")
+            return
+        p1 = self.query_one("#wiz-gpg-pass",  Input).value
+        p2 = self.query_one("#wiz-gpg-pass2", Input).value
+        if p1 != p2:
+            self._log("Passphrases do not match.")
+            return
+        self.gpg_passphrase = p1
+        self._log("Generating ed25519 GPG key (this may take a few seconds)…")
+        key_id, msg = generate_gpg_key(self.full_name, self.email, p1)
+        self._log(msg)
+        if key_id:
+            self.gpg_key_id = key_id
+            self._render_step()
+
+    @on(Button.Pressed, "#wiz-gpg-verify")
+    def on_gpg_verify(self) -> None:
+        if not self.gpg_key_id:
+            self._log("Generate a GPG key first.")
+            return
+        passphrase = ""
+        try:
+            passphrase = self.query_one("#wiz-gpg-pass", Input).value
+        except Exception:
+            pass
+        self._log(f"Test-signing with {self.gpg_key_id}…")
+        ok, msg = verify_gpg_signing(self.gpg_key_id, passphrase)
+        self._log(msg)
+
+    def _advance_if_gpg_ready(self) -> None:
+        # GPG is optional; skipping is allowed via the Skip button.
+        self._advance()
+
+    # ── Step 4: finalise ────────────────────────────────────────────
+
+    def _finish(self) -> None:
+        self._log("Applying git config…")
+        if self.full_name: git_config_set("user.name",          self.full_name)
+        if self.email:     git_config_set("user.email",         self.email)
+        git_config_set("init.defaultBranch", "main")
+        if self.gpg_key_id:
+            git_config_set("user.signingkey", self.gpg_key_id)
+            git_config_set("commit.gpgsign",  "true")
+            self._log(f"  user.signingkey = {self.gpg_key_id}, commit.gpgsign = true")
+
+        self._log("Installing keychain via mom (if missing)…")
+        ok, msg = install_keychain_via_mom()
+        self._log(msg)
+
+        self._log("Wiring keychain into ~/.bashrc…")
+        if add_keychain_to_bashrc():
+            self._log("  ✓ ~/.bashrc updated.")
+        else:
+            self._log("  ! could not update ~/.bashrc (already present or read-only).")
+
+        self._log("[green]✓ Setup complete.[/]")
+        self._dismissed = True
+        self.dismiss(True)
 
 
 # ── Main app ───────────────────────────────────────────────────────────────
@@ -555,39 +1236,110 @@ class MaudeApp(App):
         margin: 0 1;
     }
 
-    /* Modal: no credentials */
-    NoCredsScreen {
+    /* Modal: credential entry */
+    CredsEntryScreen {
         align: center middle;
         background: #1e1e1e 90%;
     }
 
-    #nocreds-box {
-        padding: 3 6;
-        width: 70;
-        height: auto;
-        border: heavy #e05050;
-        background: #2a1010;
-        align: center middle;
+    #creds-box {
+        padding: 2 3;
+        width: 90;
+        height: 24;
+        border: heavy #b87878;
+        background: #242424;
     }
 
-    #nocreds-title {
+    #creds-title {
         text-style: bold;
-        color: #ff4444;
-        text-align: center;
-        width: 100%;
-        margin-bottom: 2;
+        color: #d4a0a0;
+        margin-bottom: 1;
     }
 
-    #nocreds-detail {
-        color: #e0b0b0;
-        margin-bottom: 2;
+    #creds-help {
+        color: #c09898;
+        margin-bottom: 1;
     }
 
-    #nocreds-hint {
-        color: #808080;
-        text-align: center;
-        width: 100%;
+    #creds-text {
+        height: 12;
+        border: solid #6a5058;
+        background: #1e1e1e;
+    }
+
+    #creds-status {
+        height: 1;
+        color: #c09898;
         margin-top: 1;
+    }
+
+    #creds-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    #creds-buttons Button {
+        margin: 0 1;
+    }
+
+    /* Modal: Git Setup Wizard */
+    GitSetupWizard {
+        align: center middle;
+        background: #1e1e1e 90%;
+    }
+
+    #wiz-box {
+        padding: 1 2;
+        width: 100;
+        height: 36;
+        border: heavy #b87878;
+        background: #242424;
+    }
+
+    #wiz-title {
+        text-style: bold;
+        color: #d4a0a0;
+        margin-bottom: 1;
+    }
+
+    #wiz-body {
+        height: 1fr;
+        overflow-y: auto;
+    }
+
+    #wiz-body Label {
+        color: #c0a8a8;
+        margin-bottom: 1;
+    }
+
+    #wiz-body Input {
+        margin-bottom: 1;
+    }
+
+    #wiz-body TextArea {
+        height: 8;
+        border: solid #6a5058;
+        background: #1e1e1e;
+        margin-bottom: 1;
+    }
+
+    #wiz-log {
+        height: 6;
+        border: solid #6a5058;
+        background: #1e1e1e;
+        color: #a09090;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+
+    #wiz-buttons {
+        height: auto;
+        align: right middle;
+    }
+
+    #wiz-buttons Button {
+        margin: 0 1;
     }
     """
 
@@ -609,7 +1361,7 @@ class MaudeApp(App):
                 yield Static(LOGO, id="logo", markup=False)
                 yield Static("─" * 28, id="divider")
                 yield Label("Start TUI with Maude", id="autostart-label")
-                yield Checkbox("", value=AUTOSTART_FLAG.exists(), id="autostart")
+                yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
                 yield Static("─" * 28, id="divider2")
                 yield Label("Tips", id="tips-title")
                 yield Static(
@@ -628,17 +1380,30 @@ class MaudeApp(App):
                 yield DataTable(id="projects-table", cursor_type="row",
                                 zebra_stripes=True)
         with Horizontal(id="bottom-bar"):
-            yield Button("Open Project", id="btn-open")
-            yield Button("+ New",        id="btn-new")
-            yield Button("Web UI",       id="btn-web")
-            yield Button("Command Line", id="btn-cli")
+            yield Button("Open Project",    id="btn-open")
+            yield Button("+ New",           id="btn-new")
+            yield Button("Web UI",          id="btn-web")
+            yield Button("Setup Git",       id="btn-setup-git")
+            yield Button("Set Credentials", id="btn-creds")
+            yield Button("Command Line",    id="btn-cli")
             yield Static("", id="kanna-url")
         yield Footer()
 
     def on_mount(self) -> None:
         self._kanna_proc: subprocess.Popen | None = None
         if not check_credentials():
-            self.push_screen(NoCredsScreen())
+            # Block the TUI until creds exist; cancel exits the app.
+            self.push_screen(
+                CredsEntryScreen(allow_cancel=False),
+                self._on_initial_creds,
+            )
+            return
+        self._refresh_table()
+        self.query_one("#projects-table", DataTable).focus()
+
+    def _on_initial_creds(self, saved: bool) -> None:
+        if not saved:
+            self.exit(1)
             return
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
@@ -701,21 +1466,50 @@ class MaudeApp(App):
             btn.label = "Web UI"
             self.query_one("#kanna-url", Static).update("")
             return
+        # Refuse to launch without credentials — pop the entry modal first.
+        if not check_credentials():
+            self.push_screen(CredsEntryScreen(), self._on_creds_for_web)
+            return
+        self._start_kanna()
+
+    def _on_creds_for_web(self, saved: bool) -> None:
+        if saved:
+            self._start_kanna()
+
+    def _start_kanna(self) -> None:
         # Make sure the port isn't held by a stale instance before launching.
         kill_port(KANNA_PORT)
         # Start kanna in its own process group so we can kill the whole tree.
-        extra_env = get_claude_env()
-        env = {**os.environ, **extra_env}
+        env = {**os.environ, **kanna_env()}
         self._kanna_proc = subprocess.Popen(
             [KANNA_CMD, "--no-open"], env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        btn = self.query_one("#btn-web", Button)
         btn.label = "Stop Web UI"
         url = f"http://localhost:{KANNA_PORT}"
         label = Text("Web UI: ")
         label.append(url, style=f"link {url} #72c09a")
         self.query_one("#kanna-url", Static).update(label)
+
+    @on(Button.Pressed, "#btn-creds")
+    def btn_creds(self) -> None:
+        self.push_screen(CredsEntryScreen(), self._on_creds_updated)
+
+    def _on_creds_updated(self, saved: bool) -> None:
+        if saved:
+            self.notify("Credentials saved to ~/.azure/clauderc")
+
+    @on(Button.Pressed, "#btn-setup-git")
+    def btn_setup_git(self) -> None:
+        self.push_screen(GitSetupWizard(), self._on_git_setup_done)
+
+    def _on_git_setup_done(self, completed: bool) -> None:
+        if completed:
+            self.notify("Git setup complete.")
+        else:
+            self.notify("Git setup cancelled.")
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
@@ -732,11 +1526,11 @@ class MaudeApp(App):
     @on(Checkbox.Changed, "#autostart")
     def autostart_toggled(self, event: Checkbox.Changed) -> None:
         if event.value:
-            AUTOSTART_FLAG.touch()
+            DISABLE_FLAG.unlink(missing_ok=True)
             self.notify("TUI will launch automatically with Maude")
         else:
-            AUTOSTART_FLAG.unlink(missing_ok=True)
-            self.notify("TUI auto-start disabled")
+            DISABLE_FLAG.touch()
+            self.notify("TUI auto-start disabled (text banner instead)")
 
     @on(RadioSet.Changed, "#model-select")
     def model_changed(self, event: RadioSet.Changed) -> None:
@@ -785,7 +1579,18 @@ class MaudeApp(App):
 
 # ── Entry point ────────────────────────────────────────────────────────────
 
+def run_wizard_only() -> int:
+    """Standalone wizard mode for `maude setup-git` — opens just the wizard."""
+    class _WizardApp(App):
+        CSS = MaudeApp.CSS
+        def on_mount(self) -> None:
+            self.push_screen(GitSetupWizard(), lambda result: self.exit(0 if result else 1))
+    return _WizardApp().run() or 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--setup-git":
+        sys.exit(run_wizard_only())
     maybe_self_update()
     app = MaudeApp()
     app.run()
