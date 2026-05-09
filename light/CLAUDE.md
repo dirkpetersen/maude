@@ -70,14 +70,14 @@ $clean = $raw -replace "`0", ""
 ## Credential forwarding (kanna web UI)
 Kanna is launched with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so it shells out to the Maude wrapper, which sets the appropriate auth env vars (Foundry/Azure/Bedrock/direct) per invocation. If the wrapper is missing, the env var isn't set and kanna falls back to plain `claude` on PATH. Both `maude web` (CLI) and the TUI's Web UI button refuse to launch when no credentials are detected (`ANTHROPIC_*` env, `~/.aws/credentials`, or `~/.azure/clauderc`).
 
-## Git Setup Wizard (`maude setup-git`)
+## Git Setup Wizard (`maude github`)
 A 4-step Textual wizard (`GitSetupWizard` modal) for first-run users:
 1. **GitHub identity** — username → `api.github.com/users/<name>` lookup → pre-fill name/email
 2. **SSH key** — detect or generate ed25519, paste pubkey into `https://github.com/settings/ssh/new`, verify via `ssh -T git@github.com`
 3. **GPG key + signing** — detect or generate ed25519 + cv25519, paste at `https://github.com/settings/gpg/new`, verify via clearsign round-trip
 4. **Final config** — `git config user.name/email/init.defaultBranch=main`, run `mom install -y keychain`, append keychain block to `~/.bashrc`
 
-Manual key paste flow throughout (no `gh` auth needed). Reachable from the **Setup Git** TUI bottom-bar button, the `maude setup-git` CLI command, or `python3 maude.py --setup-git` (standalone wizard mode).
+Manual key paste flow throughout (no `gh` auth needed). Reachable from the **Setup Git(hub)** TUI bottom-bar button, the `maude github` CLI command, or `python3 maude.py --github` (standalone wizard mode). The legacy `maude setup-git` / `--setup-git` aliases are still accepted for backward compatibility.
 
 ## Status line
 `maude-bootstrap.sh` installs `~/.claude/statusline.sh` (cwd + remaining context-window %) and merges `~/.claude/settings.json` to set `statusLine.command`. Existing user customisations in `settings.json` are preserved (the merge is a JSON load → mutate → dump, not an overwrite).

@@ -1649,7 +1649,7 @@ class MaudeApp(App):
 # ── Entry point ────────────────────────────────────────────────────────────
 
 def run_wizard_only() -> int:
-    """Standalone wizard mode for `maude setup-git` — opens just the wizard."""
+    """Standalone wizard mode for `maude github` — opens just the wizard."""
     class _WizardApp(App):
         CSS = MaudeApp.CSS
         def on_mount(self) -> None:
@@ -1658,7 +1658,8 @@ def run_wizard_only() -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--setup-git":
+    # `--setup-git` is kept as an alias for backward compatibility.
+    if len(sys.argv) > 1 and sys.argv[1] in ("--github", "--setup-git"):
         sys.exit(run_wizard_only())
     maybe_self_update()
     app = MaudeApp()

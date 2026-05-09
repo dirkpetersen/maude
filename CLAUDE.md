@@ -143,7 +143,7 @@ The `light/` directory contains the WSL2 sandbox implementation:
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom-inst (.deb), PATH, welcome screen, Claude Code |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config, yolo-mode marker |
-| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`, `maude setup-git`) |
+| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`, `maude github`, `maude update`) |
 | `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`) |
 
 Key implementation details:
@@ -161,7 +161,7 @@ Key implementation details:
 
 ## Maude TUI (`maude tui`)
 
-A Textual-based full-screen TUI which is the default welcome experience for new terminal sessions. Launched by `maude-welcome.sh` on login, by `maude tui`, or in wizard-only mode via `maude setup-git` (`python3 maude.py --setup-git`).
+A Textual-based full-screen TUI which is the default welcome experience for new terminal sessions. Launched by `maude-welcome.sh` on login, by `maude tui`, or in wizard-only mode via `maude github` (`python3 maude.py --github`).
 
 ### Layout
 

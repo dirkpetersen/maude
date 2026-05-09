@@ -4,7 +4,7 @@
 #   maude project-name   Create/open a project and launch Claude Code
 #   maude tui            Interactive project launcher (Textual UI)
 #   maude web            Launch kanna web UI (installs Chromium if needed)
-#   maude setup-git      Wizard for GitHub identity, SSH/GPG keys, signing
+#   maude github         Wizard for GitHub identity, SSH/GPG keys, signing
 #   maude update         Update Claude Code, the maude TUI, and kanna
 #   maude list           Show all available projects
 #   maude delete <name>  Move a project to Projects/.deleted (with confirmation)
@@ -32,7 +32,7 @@ show_help() {
     echo -e "  ${CYAN}maude delete <name>${NC}       Delete a project (moves to .deleted/)"
     echo -e "  ${CYAN}maude tui${NC}                 Interactive project launcher (experimental)"
     echo -e "  ${CYAN}maude web${NC}                 Launch web UI (kanna, experimental)"
-    echo -e "  ${CYAN}maude setup-git${NC}           Wizard for Git/SSH/GPG (Textual UI)"
+    echo -e "  ${CYAN}maude github${NC}              Wizard for Git/SSH/GPG (Textual UI)"
     echo -e "  ${CYAN}maude update${NC}              Update Claude Code, the maude TUI, and kanna"
     echo -e "  ${CYAN}maude help${NC}                Show this help message"
     echo ""
@@ -229,7 +229,7 @@ launch_setup_git() {
             exit 1
         }
     fi
-    python3 "$MAUDE_PY" --setup-git
+    python3 "$MAUDE_PY" --github
 }
 
 # ── Launch kanna web UI ───────────────────────────────────────────────
@@ -304,7 +304,8 @@ case "$1" in
         launch_web
         exit 0
         ;;
-    setup-git)
+    github|setup-git)
+        # `setup-git` kept as an alias for backward compatibility.
         launch_setup_git
         exit 0
         ;;

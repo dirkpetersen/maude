@@ -141,7 +141,7 @@ After install, open the **Maude** profile in Windows Terminal (or the desktop sh
 ```
   maude tui            Interactive project launcher (auto-launched on login)
   maude project-name   Create or open a coding project
-  maude setup-git      Wizard for GitHub identity, SSH/GPG keys, signing
+  maude github         Wizard for GitHub identity, SSH/GPG keys, signing
   maude list           Show your projects
   maude delete name    Delete a project (moves to .deleted/)
   maude help           Full usage info
@@ -173,7 +173,7 @@ Projects are sorted newest-first by last-modified time. Press **Enter** or click
 | Open Project | Launch Claude Code for the selected project |
 | + New | Create a new project (spaces become hyphens; git is initialized automatically) |
 | Web UI / Stop Web UI | Start or forcefully stop the [kanna](https://github.com/jakemor/kanna) web interface at `http://localhost:3210`. The kanna process inherits Maude's auth via `CLAUDE_EXECUTABLE=~/bin/claude`. |
-| Setup Git | 4-step wizard for GitHub identity, SSH key, GPG key + commit signing, and final git/keychain config. Also runnable as `maude setup-git`. |
+| Setup Git(hub) | 4-step wizard for GitHub identity, SSH key, GPG key + commit signing, and final git/keychain config. Also runnable as `maude github`. |
 | Set Credentials | Open a modal to paste Anthropic / Foundry / AWS / Azure `export` lines; saved to `~/.azure/clauderc` (mode 0600). |
 | Command Line | Exit the TUI and return to the shell prompt |
 
