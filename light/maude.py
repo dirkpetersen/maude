@@ -1221,39 +1221,62 @@ class GitSetupWizard(ModalScreen[bool]):
         self.run_worker(self._gh_auth_worker, exclusive=True, thread=True)
 
     def _gh_auth_worker(self) -> None:
-        """Spawn gh, stream output to the Log, and call back when it exits."""
-        try:
-            proc = subprocess.Popen(
-                ["gh", "auth", "login",
-                 "--hostname", "github.com",
-                 "--git-protocol", "ssh",
-                 "--web", "--skip-ssh-key"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-            )
-        except FileNotFoundError as err:
-            self.app.call_from_thread(self._log, f"gh failed to launch: {err}")
-            self.app.call_from_thread(self._gh_auth_done, 1)
-            return
-        # gh prints the one-time code, then "Press Enter to open browser".
-        # Send a newline so it proceeds past that prompt to the polling
-        # phase. xdg-open will fail (no browser inside WSL) but gh keeps
-        # polling until the user completes auth in their Windows browser.
-        if proc.stdin:
+        """Spawn gh, stream output to the Log, and call back when it exits.
+
+        Older gh versions don't support `--skip-ssh-key`. To suppress
+        the "Upload your SSH public key?" prompt we temporarily move
+        the .pub file aside while gh runs, then restore it. Step 2
+        already uploaded it manually, so gh has nothing to do here
+        beyond authenticating.
+        """
+        pub      = SSH_KEY_PATH.with_suffix(".pub")
+        pub_tmp  = pub.with_suffix(".pub.maude-tmp")
+        moved    = False
+        if pub.exists():
             try:
-                proc.stdin.write("\n")
-                proc.stdin.flush()
-                proc.stdin.close()
+                pub.rename(pub_tmp)
+                moved = True
             except OSError:
                 pass
-        if proc.stdout:
-            for line in iter(proc.stdout.readline, ""):
-                line = line.rstrip()
-                if line:
-                    self.app.call_from_thread(self._log, line)
-        rc = proc.wait()
+        try:
+            try:
+                proc = subprocess.Popen(
+                    ["gh", "auth", "login",
+                     "--hostname", "github.com",
+                     "--git-protocol", "ssh",
+                     "--web"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                )
+            except FileNotFoundError as err:
+                self.app.call_from_thread(self._log, f"gh failed to launch: {err}")
+                self.app.call_from_thread(self._gh_auth_done, 1)
+                return
+            # gh prints the one-time code, then "Press Enter to open browser".
+            # Send a newline so it proceeds past that prompt to the polling
+            # phase. xdg-open will fail (no browser inside WSL) but gh keeps
+            # polling until the user completes auth in their Windows browser.
+            if proc.stdin:
+                try:
+                    proc.stdin.write("\n")
+                    proc.stdin.flush()
+                    proc.stdin.close()
+                except OSError:
+                    pass
+            if proc.stdout:
+                for line in iter(proc.stdout.readline, ""):
+                    line = line.rstrip()
+                    if line:
+                        self.app.call_from_thread(self._log, line)
+            rc = proc.wait()
+        finally:
+            if moved:
+                try:
+                    pub_tmp.rename(pub)
+                except OSError:
+                    pass
         self.app.call_from_thread(self._gh_auth_done, rc)
 
     def _gh_auth_done(self, returncode: int) -> None:
@@ -1679,7 +1702,7 @@ class MaudeApp(App):
     #wiz-box {
         padding: 1 2;
         width: 100;
-        height: 36;
+        height: 42;
         border: heavy #b87878;
         background: #242424;
     }
@@ -1712,7 +1735,7 @@ class MaudeApp(App):
     }
 
     #wiz-log {
-        height: 6;
+        height: 10;
         border: solid #6a5058;
         background: #1e1e1e;
         color: #a09090;
