@@ -26,62 +26,66 @@ or a simple CLI
 
 ## Install
 
+Maude installs in two phases. The **admin phase** (`-Admin`) installs WSL, imports the Ubuntu distro, and runs the root-level bootstrap inside WSL. The **user phase** (no flag) creates the shared folder, configures Windows Terminal, and runs the user-level bootstrap. The phases are deliberately separated so the user-context configuration (Windows Terminal profile, desktop shortcut, OneDrive folder) is written into the *end user's* profile, not the admin's.
+
+### Step 1 — Admin phase
+
 Open **PowerShell as Administrator** (right-click → "Run as Administrator") and run:
+
+```powershell
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Admin
+```
+
+This installs WSL2 (if needed), imports Ubuntu as the `Maude` distro, and runs the root-level bootstrap. When it finishes, **close the elevated window**.
+
+### Step 2 — User phase
+
+Open a **non-elevated** PowerShell and run:
 
 ```powershell
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
 
-That's it — one line. Installs Ubuntu 26.04 (Resolute Raccoon) with the shared folder in `AppData\LocalLow\Maude`, pinned to Quick Access in File Explorer. On reinstalls, the script automatically reuses the previous folder location.
+This creates the `Maude` shared folder in `AppData\LocalLow\Maude`, pins it to Quick Access, configures Windows Terminal, creates the desktop shortcut, and runs the user-level bootstrap.
 
 > **Note:** Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`. Piping via `iex` may be blocked by antivirus on corporate machines; the file-based approach above works reliably everywhere.
 
-### Install with OneDrive sync
+### Install options
 
-Store the shared folder inside OneDrive for cross-device sync (Business > Personal > generic):
+Add these flags to the **user-phase** command (and `-Noble` to the admin phase if you want Ubuntu 24.04):
 
-```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -OneDrive
-```
-
-### Install without OneDrive
-
-Force `AppData\LocalLow\Maude` even on reinstall (ignores previous location):
-
-```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -NoOneDrive
-```
-
-### Install with Ubuntu 24.04
-
-Use Ubuntu 24.04 LTS (Noble Numbat) instead of the default 26.04:
-
-```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Noble
-```
-
-### Install options summary
-
-| Flag | Effect |
-|------|--------|
-| *(default)* | Ubuntu 26.04, `AppData\LocalLow\Maude` (new) or previous location (reinstall) |
-| `-OneDrive` | Shared folder in OneDrive |
-| `-NoOneDrive` | Force `AppData\LocalLow\Maude` |
-| `-Noble` | Use Ubuntu 24.04 instead of 26.04 |
+| Flag | Phase | Effect |
+|------|-------|--------|
+| *(default)* | user | `AppData\LocalLow\Maude` (new install) or the previous location (reinstall) |
+| `-OneDrive` | user | Shared folder in OneDrive (Business > Personal > generic) |
+| `-NoOneDrive` | user | Force `AppData\LocalLow\Maude` |
+| `-Noble` | both | Use Ubuntu 24.04 instead of the default 26.04 |
+| `-Release <tag>` | both | Pin to a tagged release and verify SHA-256 of every downloaded file against `light/checksums.txt` from that tag (see below) |
 
 Flags can be combined, e.g. `-OneDrive -Noble`.
 
-The setup script will:
+> **OneDrive sharing risk:** if you choose `-OneDrive`, the user-phase script will print a warning about prompt-injection risk via OneDrive sharing. If anyone has edit access to the Maude folder (or any ancestor) through OneDrive sharing, they can drop files that the AI will execute as instructions. Verify the folder and its parents are not shared, or use `-NoOneDrive` instead.
 
-1. Install WSL and Windows Terminal (if not already present)
-2. Create a `Maude` shared folder (see options above) and pin it to Quick Access
-3. Download Ubuntu from the Microsoft Store and bake in all packages as a reusable template
-4. Import the template as a new `Maude` WSL distro
-5. Run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen)
-6. Run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher)
-7. Create a Windows Terminal profile and desktop shortcut with the Maude icon
+### Verified install (recommended for production)
 
-On subsequent runs, step 3 is skipped (the template already exists), so rebuilds are fast.
+`-Release main` (the default) downloads the latest scripts from `main` without checksum verification. For production, pin to a tagged release:
+
+```powershell
+# Admin phase
+... setup-wsl-maude.ps1 -Admin -Release v0.4.0
+
+# User phase
+... setup-wsl-maude.ps1 -Release v0.4.0
+```
+
+When `-Release` is anything other than `main`, the script downloads `light/checksums.txt` from that tag and verifies every file's SHA-256 before using it. A mismatch aborts the install.
+
+### What the setup script does
+
+1. **Admin phase:** install WSL and Windows Terminal (if not already present); download Ubuntu and bake in all packages as a reusable template; import the template as `Maude`; run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen).
+2. **User phase:** create the `Maude` shared folder and pin it to Quick Access; run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher); create a Windows Terminal profile and desktop shortcut with the Maude icon.
+
+On subsequent admin-phase runs, the template step is skipped (the template already exists), so rebuilds are fast.
 
 ### Disk space
 
@@ -233,7 +237,7 @@ Maude Light could be ported to macOS using [Lima](https://github.com/lima-vm/lim
 
 | File | Runs as | Purpose |
 |------|---------|---------|
-| `setup-wsl-maude.ps1` | Admin (PowerShell) | 7-step orchestrator: WSL, WT, host folder, template, import, bootstrap, open |
+| `setup-wsl-maude.ps1` | Two phases (PowerShell) | `-Admin` (elevated): WSL install, distro import, root bootstrap. *(no flag, unelevated)*: host folder, WT profile, shortcut, user bootstrap |
 | `teardown-wsl-maude.ps1` | Admin (PowerShell) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config |

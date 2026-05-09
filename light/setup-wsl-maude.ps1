@@ -4,26 +4,56 @@
     Sets up a WSL2 Ubuntu dev environment named "Maude".
 
 .DESCRIPTION
-    Idempotent script that:
-    1. Installs WSL2 (if not present)
-    2. Installs Windows Terminal (if not present)
-    3. Creates a shared host folder (OneDrive or AppData\LocalLow) with custom icon
-    4. Imports Ubuntu (24.04 or 26.04) as a WSL distro named "Maude"
-    5. Runs root-bootstrap.sh  (user, mom, PATH, packages, sandbox mount)
-    6. Runs maude-bootstrap.sh (dev-station, maude launcher, PS1)
-    7. Opens Maude in Windows Terminal
+    Two-phase installer:
 
-    The distro is sandboxed: automatic Windows drive mounting is disabled,
-    and only the shared Maude folder is mounted into /home/maude/Maude
-    via drvfs + /etc/fstab.
+      Admin phase (-Admin, runs elevated):
+        - Install WSL2 (and VM Platform feature) if missing
+        - Import Ubuntu (24.04 or 26.04) as a WSL distro named "Maude"
+        - Run root-bootstrap.sh inside WSL (user, mom, /etc/wsl.conf, fstab,
+          PATH, sandbox mount)
+        - Terminate WSL so wsl.conf takes effect (interop disabled)
+
+      User phase (no flag, runs unelevated):
+        - Install Windows Terminal (if missing)
+        - Create the Maude shared folder (OneDrive or AppData\LocalLow),
+          set its custom icon, pin to Quick Access
+        - Run maude-bootstrap.sh inside WSL (dev-station, kanna, skills,
+          Claude Code config, maude launcher)
+        - Configure the Windows Terminal profile and desktop shortcut
+
+    The two phases are deliberately separated. The user phase configures
+    HKCU and the user's profile (Windows Terminal settings, desktop
+    shortcut, OneDrive folder), so it MUST run as the actual end user.
+    The admin phase performs the privileged operations and the trusted
+    parts of the WSL bootstrap.
+
+    The distro is sandboxed: automatic Windows drive mounting is
+    disabled, and only the shared Maude folder is mounted into
+    /home/maude/Maude via drvfs + /etc/fstab.
 
 .NOTES
-    Run from an elevated PowerShell prompt:
+    Typical install (one machine, single admin user):
+
+        # 1. From an elevated PowerShell:
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        .\setup-wsl-maude.ps1                # default: Ubuntu 26.04, AppData\LocalLow
-        .\setup-wsl-maude.ps1 -OneDrive      # force OneDrive location
-        .\setup-wsl-maude.ps1 -NoOneDrive    # force AppData\LocalLow
-        .\setup-wsl-maude.ps1 -Noble         # use Ubuntu 24.04 instead of 26.04
+        .\setup-wsl-maude.ps1 -Admin
+
+        # 2. From a NON-elevated PowerShell (after admin phase exits):
+        .\setup-wsl-maude.ps1                # Ubuntu 26.04, AppData\LocalLow
+        .\setup-wsl-maude.ps1 -OneDrive      # Shared folder in OneDrive
+        .\setup-wsl-maude.ps1 -NoOneDrive    # Force AppData\LocalLow
+        .\setup-wsl-maude.ps1 -Noble         # Ubuntu 24.04 instead of 26.04
+
+    Verified install (recommended in production):
+
+        .\setup-wsl-maude.ps1 -Admin -Release v0.4.0
+
+        # Then user phase:
+        .\setup-wsl-maude.ps1 -Release v0.4.0
+
+    -Release pins downloads to a specific git tag and verifies every
+    downloaded file's SHA-256 against light/checksums.txt at that tag.
+    The default ("main") is for development and skips checksum verification.
 #>
 
 param(
@@ -32,10 +62,12 @@ param(
     [string]$InstallDir  = "$env:LOCALAPPDATA\Maude",
     [switch]$OneDrive,
     [switch]$NoOneDrive,
-    [switch]$Noble
+    [switch]$Noble,
+    [switch]$Admin,
+    [string]$Release     = "main"
 )
 
-# Ubuntu version: default 26.04 (Resolute Raccoon), -Noble for 24.04
+# ── Ubuntu version: default 26.04 (Resolute Raccoon), -Noble for 24.04 ──
 if ($Noble) {
     $ubuntuVersion  = "24.04"
     $ubuntuCodename = "noble"
@@ -45,8 +77,12 @@ if ($Noble) {
     $ubuntuCodename = "resolute"
     $ubuntuLabel    = "Ubuntu 26.04 (Resolute Raccoon)"
 }
+$templateDistro = "Ubuntu-${ubuntuVersion}-Template"
 
-# ── Locate Windows Terminal settings.json ─────────────────────────────
+$GH_RAW    = "https://raw.githubusercontent.com/dirkpetersen/maude/$Release"
+$cacheBust = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+
+# ── Helper: locate Windows Terminal settings.json ─────────────────────
 # Supports Store, Preview, and non-Store (winget/scoop) installs.
 function Find-WTSettingsPath {
     $candidates = @(
@@ -55,94 +91,12 @@ function Find-WTSettingsPath {
         Join-Path $env:LOCALAPPDATA "Microsoft\Windows Terminal\settings.json"
     )
     foreach ($c in $candidates) {
-        if (Test-Path $c) { return $c }
+        if (Test-Path -LiteralPath $c) { return $c }
     }
     return $null
 }
 
-# ── Resolve script directory and download missing files from GitHub ───
-# $PSScriptRoot is empty when run via iex. Even when set, the user may
-# have downloaded only setup-wsl-maude.ps1 — companion files may be missing.
-$GH_RAW = "https://raw.githubusercontent.com/dirkpetersen/maude/main"
-$cacheBust = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-
-if ($PSScriptRoot -and $PSScriptRoot -ne '') {
-    $ScriptDir = $PSScriptRoot
-} else {
-    $ScriptDir = Join-Path $env:TEMP "maude-setup"
-    New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null
-}
-
-# Always download companion files from GitHub (cache-bust to avoid stale CDN copies)
-$filesToDownload = @(
-    @{ Url = "$GH_RAW/light/root-bootstrap.sh";       Dest = "root-bootstrap.sh" }
-    @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh" }
-    @{ Url = "$GH_RAW/light/maude";                   Dest = "maude" }
-    @{ Url = "$GH_RAW/maude.png";                     Dest = "maude.png" }
-    @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml" }
-)
-$wc = New-Object Net.WebClient
-foreach ($dl in $filesToDownload) {
-    $destPath = Join-Path $ScriptDir $dl.Dest
-    $destDir = Split-Path $destPath -Parent
-    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
-    try {
-        $wc.DownloadFile("$($dl.Url)?cache=$cacheBust", $destPath)
-    } catch {
-        Write-Host "WARNING: Could not download $($dl.Url): $_" -ForegroundColor Yellow
-    }
-}
-
-# ── Self-elevate to Administrator if needed ──
-
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Not running as Administrator. Attempting to elevate..." -ForegroundColor Yellow
-    try {
-        $extraArgs = ""
-        if ($OneDrive)   { $extraArgs += " -OneDrive" }
-        if ($NoOneDrive) { $extraArgs += " -NoOneDrive" }
-        if ($Noble)      { $extraArgs += " -Noble" }
-        if ($PSCommandPath) {
-            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$extraArgs"
-        } else {
-            # Running via iex — re-download and run the script elevated
-            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; & { `$f = `$env:TEMP + '\setup-wsl-maude.ps1'; (New-Object Net.WebClient).DownloadFile('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust', `$f); & `$f$extraArgs }"
-            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command `"$cmd`""
-        }
-    } catch {
-        Write-Host @"
-
-ERROR: This script requires Administrator privileges.
-Please right-click PowerShell → "Run as Administrator", then run:
-
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1'))
-
-"@ -ForegroundColor Red
-    }
-    exit
-}
-
-# ── Check free disk space on C: drive ────────────────────────────────
-$cDrive = Get-PSDrive -Name C
-$freeGB = [math]::Round($cDrive.Free / 1GB, 1)
-Write-Host "Free disk space on C: drive: ${freeGB} GB" -ForegroundColor Cyan
-
-$removeTplAfterInstall = $false
-if ($freeGB -lt 5) {
-    Write-Host "`nWARNING: Very low disk space (${freeGB} GB free)!" -ForegroundColor Red
-    Write-Host "Maude may not function properly with less than 5 GB free." -ForegroundColor Red
-    Write-Host "Press Ctrl+C within 10 seconds to cancel installation..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 10
-    $removeTplAfterInstall = $true
-} elseif ($freeGB -lt 10) {
-    Write-Host "NOTE: Less than 10 GB free. The Ubuntu template will be removed after" -ForegroundColor Yellow
-    Write-Host "install to free disk space (reinstalls will take longer)." -ForegroundColor Yellow
-    $removeTplAfterInstall = $true
-}
-
-# ── Helper: reliably test if a WSL distro is registered ───────────────
+# ── Helper: reliably test if a WSL distro is registered ──
 # wsl -l -q has UTF-16/null-byte encoding issues.
 # wsl --list --verbose is more robust: parse the NAME column directly.
 function Test-WslDistro([string]$name) {
@@ -158,11 +112,10 @@ function Test-WslDistro([string]$name) {
 # Writes a valid ICO container that embeds the PNG data directly.
 # Works with any PNG size; Explorer picks the best fit.
 function Convert-PngToIco($pngPath, $icoPath) {
-    $pngBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $pngPath).Path)
+    $pngBytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $pngPath).Path)
 
-    # Read PNG dimensions from IHDR chunk (bytes 16-23)
     Add-Type -AssemblyName System.Drawing
-    $img = [System.Drawing.Image]::FromFile((Resolve-Path $pngPath).Path)
+    $img = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $pngPath).Path)
     $w = [Math]::Min($img.Width, 256)
     $h = [Math]::Min($img.Height, 256)
     $img.Dispose()
@@ -175,21 +128,20 @@ function Convert-PngToIco($pngPath, $icoPath) {
     $bw = New-Object System.IO.BinaryWriter($ms)
 
     # ICO header: reserved(2) + type=1(2) + count=1(2)
-    $bw.Write([UInt16]0)      # reserved
-    $bw.Write([UInt16]1)      # type: 1 = ICO
-    $bw.Write([UInt16]1)      # image count
+    $bw.Write([UInt16]0)
+    $bw.Write([UInt16]1)
+    $bw.Write([UInt16]1)
 
     # Directory entry: w(1) h(1) colors(1) reserved(1) planes(2) bpp(2) size(4) offset(4)
-    $bw.Write($wb)            # width
-    $bw.Write($hb)            # height
-    $bw.Write([byte]0)        # color palette count (0 = no palette)
-    $bw.Write([byte]0)        # reserved
-    $bw.Write([UInt16]1)      # color planes
-    $bw.Write([UInt16]32)     # bits per pixel
-    $bw.Write([UInt32]$pngBytes.Length)  # image data size
-    $bw.Write([UInt32]22)     # offset to image data (6 header + 16 entry)
+    $bw.Write($wb)
+    $bw.Write($hb)
+    $bw.Write([byte]0)
+    $bw.Write([byte]0)
+    $bw.Write([UInt16]1)
+    $bw.Write([UInt16]32)
+    $bw.Write([UInt32]$pngBytes.Length)
+    $bw.Write([UInt32]22)
 
-    # PNG data
     $bw.Write($pngBytes)
     $bw.Flush()
 
@@ -198,16 +150,7 @@ function Convert-PngToIco($pngPath, $icoPath) {
     $ms.Dispose()
 }
 
-# ── Detect host folder ──
-# -NoOneDrive → always AppData\LocalLow\Maude
-# -OneDrive   → always OneDrive (Business > Personal > generic)
-# Neither     → scan for existing Maude folders on disk:
-#   - Found in both OneDrive and LocalLow → pick LocalLow
-#   - Found only in OneDrive → pick OneDrive
-#   - Found only in LocalLow → pick LocalLow
-#   - Found nowhere → pick LocalLow (new install default)
-# A "Projects" subfolder confirms a real previous install.
-
+# ── Helper: discover existing OneDrive Maude folders ──
 function Find-OneDriveMaudeFolder {
     $candidates = @()
     if ($env:OneDriveCommercial) {
@@ -227,255 +170,287 @@ function Find-OneDriveMaudeFolder {
         }
     }
     $odPersonal = Join-Path $env:USERPROFILE "OneDrive"
-    if ((Test-Path $odPersonal) -and -not ($candidates | Where-Object { $_.Path -eq (Join-Path $odPersonal "Maude") })) {
+    if ((Test-Path -LiteralPath $odPersonal) -and -not ($candidates | Where-Object { $_.Path -eq (Join-Path $odPersonal "Maude") })) {
         $candidates += [PSCustomObject]@{ Path = Join-Path $odPersonal "Maude"; Source = "OneDrive Personal" }
     }
     return $candidates
 }
 
-$localLowFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
-
-if ($NoOneDrive) {
-    $HostFolder = $localLowFolder
-    $HostFolderSource = "LocalLow (-NoOneDrive)"
-} elseif ($OneDrive) {
-    $odCandidates = Find-OneDriveMaudeFolder
-    if ($odCandidates.Count -gt 0) {
-        $HostFolder = $odCandidates[0].Path
-        $HostFolderSource = "$($odCandidates[0].Source) (-OneDrive)"
-    } else {
-        Write-Host "WARNING: -OneDrive specified but no OneDrive folder found. Using LocalLow." -ForegroundColor Yellow
-        $HostFolder = $localLowFolder
-        $HostFolderSource = "LocalLow (OneDrive not found)"
-    }
-} else {
-    # No flag — scan for existing Maude/Projects folders on disk
-    $localLowExists = Test-Path (Join-Path $localLowFolder "Projects")
-    $odCandidates = Find-OneDriveMaudeFolder
-    $odExisting = $odCandidates | Where-Object { Test-Path (Join-Path $_.Path "Projects") } | Select-Object -First 1
-
-    if ($localLowExists) {
-        # LocalLow wins when it exists (even if OneDrive also has one)
-        $HostFolder = $localLowFolder
-        $HostFolderSource = "LocalLow (existing)"
-    } elseif ($odExisting) {
-        # Only in OneDrive — use it
-        $HostFolder = $odExisting.Path
-        $HostFolderSource = "$($odExisting.Source) (existing)"
-    } else {
-        # New install — default to LocalLow
-        $HostFolder = $localLowFolder
-        $HostFolderSource = "LocalLow"
-    }
+# ── Helper: warn the user about OneDrive sharing risk ──
+# Triggered when the chosen host folder is inside OneDrive. The cybersec
+# review flagged OneDrive sharing as a prompt-injection amplifier: anyone
+# with edit access to the Maude folder (or any ancestor) can inject files
+# the AI will treat as instructions.
+function Show-OneDriveSharingWarning {
+    param([string]$Path)
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host "  WARNING: OneDrive Sharing Risk" -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  The Maude folder will live inside OneDrive:"
+    Write-Host "    $Path"
+    Write-Host ""
+    Write-Host "  If this folder OR ANY ANCESTOR folder is shared via" -ForegroundColor Yellow
+    Write-Host "  OneDrive's sharing feature, anyone with edit access can" -ForegroundColor Yellow
+    Write-Host "  drop files into Maude that the AI will execute as" -ForegroundColor Yellow
+    Write-Host "  instructions (prompt-injection vector)." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Verify NOTHING in the Maude path is shared:"
+    Write-Host "    * Right-click each folder -> 'Manage access' in Explorer"
+    Write-Host "    * Or visit https://onedrive.com -> 'Shared by me'"
+    Write-Host ""
+    Write-Host "  Press Ctrl+C in 8 seconds to abort, then re-run with" -ForegroundColor Yellow
+    Write-Host "  -NoOneDrive to use AppData\LocalLow instead." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Start-Sleep -Seconds 8
 }
 
-Write-Host "=== Maude WSL Setup ===" -ForegroundColor Cyan
-
-# ── Step 1: Install WSL2 ──                                       # REQUIRES ADMIN
-
-Write-Host "`n[1/7] Checking WSL..." -ForegroundColor Green
-
-$needsReboot = $false
-
-if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-    # wsl.exe exists -- verify it's actually operational
-    $wslStatus = (wsl --status 2>&1) -join "`n"
-    if ($wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-        # WSL binary exists but VM platform isn't working -- try enabling features
-        Write-Host "WSL needs setup/upgrade..."
-        wsl --install --no-distribution
-        # On Windows Server, wsl --install may not enable all required features.
-        $vmPlatform = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
-        if ($vmPlatform -and $vmPlatform.State -ne 'Enabled') {
-            Write-Host "Enabling Virtual Machine Platform..."
-            dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+# ── Helper: load checksums.txt into a hashtable ──
+# Parses standard `sha256sum` output: one line per file, "<hash> <filename>"
+# (with optional binary-mode "*" prefix on the filename).
+function Get-ChecksumsTable([string]$path) {
+    $tbl = @{}
+    if (-not (Test-Path -LiteralPath $path)) { return $tbl }
+    foreach ($line in Get-Content -LiteralPath $path) {
+        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$') {
+            $tbl[$Matches[2].Trim()] = $Matches[1].ToLower()
         }
-        $needsReboot = $true
-    } else {
-        Write-Host "WSL is already installed." -ForegroundColor Gray
     }
-} else {
-    Write-Host "Installing WSL2..."
-    wsl --install --no-distribution
-    $needsReboot = $true
+    return $tbl
 }
 
-if ($needsReboot) {
-    Write-Host "`nA reboot is required before continuing." -ForegroundColor Yellow
-    Write-Host "After rebooting, re-run this setup script." -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
+# ── Elevation gating ────────────────────────────────────────────────
+# -Admin   ⇒ MUST run elevated; self-elevate if not already
+# no flag  ⇒ MUST NOT run elevated (would write user state into admin's
+#            profile — Windows Terminal settings, desktop shortcut,
+#            OneDrive detection)
+
+$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if ($Admin -and -not $isElevated) {
+    Write-Host "-Admin specified but PowerShell is not elevated. Self-elevating..." -ForegroundColor Yellow
+    try {
+        $extraArgs = " -Admin"
+        if ($OneDrive)             { $extraArgs += " -OneDrive" }
+        if ($NoOneDrive)           { $extraArgs += " -NoOneDrive" }
+        if ($Noble)                { $extraArgs += " -Noble" }
+        if ($Release -ne 'main')   { $extraArgs += " -Release $Release" }
+        if ($PSCommandPath) {
+            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$extraArgs"
+        } else {
+            # Running via iex — re-download the script into the elevated TEMP and run it.
+            $cmd = "Set-ExecutionPolicy Bypass -Scope Process -Force; & { `$f = `$env:TEMP + '\setup-wsl-maude.ps1'; (New-Object Net.WebClient).DownloadFile('$GH_RAW/light/setup-wsl-maude.ps1?cache=$cacheBust', `$f); & `$f$extraArgs }"
+            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command `"$cmd`""
+        }
+    } catch {
+        Write-Host @"
+
+ERROR: Self-elevation failed.
+
+Open PowerShell as Administrator (right-click -> 'Run as Administrator')
+and run:
+
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    iex ((New-Object Net.WebClient).DownloadString('$GH_RAW/light/setup-wsl-maude.ps1')) -Admin
+
+"@ -ForegroundColor Red
+    }
     exit
 }
 
-# ── Step 2: Install Windows Terminal ──                            # does NOT require admin
-
-Write-Host "`n[2/7] Checking Windows Terminal..." -ForegroundColor Green
-$wtPresent = (Get-Command wt.exe -ErrorAction SilentlyContinue) -or
-             (Get-AppxPackage -Name "Microsoft.WindowsTerminal" -ErrorAction SilentlyContinue)
-if ($wtPresent) {
-    Write-Host "Windows Terminal is already installed." -ForegroundColor Gray
-} else {
-    $wtInstalled = $false
-    # Method 1: winget (Desktop Windows with App Installer)
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "Installing Windows Terminal via winget..."
-        winget install --id Microsoft.WindowsTerminal --accept-source-agreements --accept-package-agreements
-        if ($LASTEXITCODE -eq 0) { $wtInstalled = $true }
-    }
-    # Method 2: AppX store registration (Desktop Windows without winget)
-    if (-not $wtInstalled) {
-        Write-Host "Trying AppX store registration..." -ForegroundColor Yellow
-        try {
-            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.WindowsTerminal_8wekyb3d8bbwe -ErrorAction Stop
-            $wtInstalled = $true
-        } catch {
-            Write-Host "AppX registration not available." -ForegroundColor Yellow
-        }
-    }
-    # Method 3: Direct download from GitHub (Windows Server, no Store)
-    if (-not $wtInstalled) {
-        Write-Host "Downloading Windows Terminal from GitHub..." -ForegroundColor Yellow
-        $wtTmp = Join-Path $env:TEMP "wt-install"
-        New-Item -ItemType Directory -Force -Path $wtTmp | Out-Null
-        try {
-            $wtRelease = curl.exe -s "https://api.github.com/repos/microsoft/terminal/releases/latest?cache=$cacheBust" | ConvertFrom-Json
-            $msixUrl = ($wtRelease.assets | Where-Object { $_.name -match '\.msixbundle$' } | Select-Object -First 1).browser_download_url
-            if ($msixUrl) {
-                $vclibsUrl = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
-                $xamlUrl   = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
-                curl.exe -sL -o "$wtTmp\vclibs.appx" $vclibsUrl
-                curl.exe -sL -o "$wtTmp\uixaml.appx" $xamlUrl
-                curl.exe -sL -o "$wtTmp\terminal.msixbundle" $msixUrl
-                Add-AppxPackage -Path "$wtTmp\vclibs.appx" -ErrorAction SilentlyContinue
-                Add-AppxPackage -Path "$wtTmp\uixaml.appx" -ErrorAction SilentlyContinue
-                Add-AppxPackage -Path "$wtTmp\terminal.msixbundle" -ErrorAction Stop
-                $wtInstalled = $true
-            }
-        } catch {
-            Write-Host "GitHub download install failed: $_" -ForegroundColor Yellow
-        } finally {
-            Remove-Item -Recurse -Force -Path $wtTmp -ErrorAction SilentlyContinue
-        }
-    }
-    if ($wtInstalled) {
-        Write-Host "Windows Terminal installed." -ForegroundColor Gray
-    } else {
-        Write-Host "Windows Terminal could not be installed." -ForegroundColor Yellow
-        Write-Host "Maude will still work -- launch via: wsl -d $DistroName" -ForegroundColor Yellow
-    }
-}
-
-# ── Step 3: Create shared host folder with icon ──                 # does NOT require admin
-
-Write-Host "`n[3/7] Setting up host folder ($HostFolderSource)..." -ForegroundColor Green
-New-Item -ItemType Directory -Force -Path $HostFolder | Out-Null
-# Pre-create .claude, .kanna, and Projects so they exist when the drvfs mount activates
-$claudeDir = Join-Path $HostFolder ".claude"
-$kannaDir = Join-Path $HostFolder ".kanna"
-$projectsDir = Join-Path $HostFolder "Projects"
-New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
-New-Item -ItemType Directory -Force -Path $kannaDir | Out-Null
-New-Item -ItemType Directory -Force -Path $projectsDir | Out-Null
-if (Test-Path $claudeDir) {
-    Write-Host "Created $claudeDir" -ForegroundColor Gray
-} else {
-    Write-Host "WARNING: Failed to create $claudeDir" -ForegroundColor Yellow
-}
-if (Test-Path $kannaDir) {
-    Write-Host "Created $kannaDir" -ForegroundColor Gray
-} else {
-    Write-Host "WARNING: Failed to create $kannaDir" -ForegroundColor Yellow
-}
-if (Test-Path $projectsDir) {
-    Write-Host "Created $projectsDir" -ForegroundColor Gray
-} else {
-    Write-Host "WARNING: Failed to create $projectsDir" -ForegroundColor Yellow
-}
-Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
-
-# Set custom folder icon (PNG -> ICO conversion for desktop.ini)
-$iconSrc = Join-Path $ScriptDir "maude.png"
-if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $ScriptDir "..\maude.png" }
-
-if (Test-Path $iconSrc) {
-    try {
-        $icoPath = Join-Path $HostFolder "maude.ico"
-        $desktopIni = Join-Path $HostFolder "desktop.ini"
-        # Clear hidden+system attributes from previous run so we can overwrite
-        foreach ($f in @($icoPath, $desktopIni)) {
-            if (Test-Path $f) { attrib -h -s "$f" }
-        }
-        Convert-PngToIco $iconSrc $icoPath
-
-        # desktop.ini tells Explorer to use the custom icon
-        "[.ShellClassInfo]`r`nIconResource=$icoPath,0" | Set-Content $desktopIni -Encoding Unicode
-        attrib +h +s "$desktopIni"
-        attrib +h +s "$icoPath"
-
-        # Mark folder as System so Explorer reads desktop.ini
-        attrib +s "$HostFolder"
-        Write-Host "Folder icon set." -ForegroundColor Gray
-    } catch {
-        Write-Host "Could not set folder icon: $_" -ForegroundColor Yellow
-    }
-}
-
-# Pin Maude folder to Quick Access in File Explorer
-try {
-    $Shell = New-Object -ComObject Shell.Application
-    $QuickAccess = $Shell.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}")
-    $isPinned = $false
-    foreach ($item in $QuickAccess.Items()) {
-        if ($item.Path -eq $HostFolder) { $isPinned = $true; break }
-    }
-    if (-not $isPinned) {
-        $FolderToPin = $Shell.Namespace($HostFolder)
-        if ($FolderToPin) {
-            $FolderToPin.Self.InvokeVerb("pintohome")
-            Write-Host "Pinned Maude folder to Quick Access." -ForegroundColor Gray
-        }
-    } else {
-        Write-Host "Maude folder already pinned to Quick Access." -ForegroundColor Gray
-    }
-} catch {
-    Write-Host "Could not pin to Quick Access: $_" -ForegroundColor Yellow
-}
-
-# ── Parse package list (needed for template creation) ────────────────
-
-$packagesYaml = Join-Path $ScriptDir "..\packages\ubuntu-packages.yaml"
-$packageList = ""
-if (Test-Path $packagesYaml) {
-    $packages = @(
-        (Get-Content $packagesYaml) |
-            Where-Object { $_ -match '^\s+-\s+\S' } |
-            ForEach-Object { ($_ -replace '^\s+-\s+', '' -replace '\s*#.*$', '').Trim() } |
-            Where-Object { $_ -ne "" }
-    )
-    $packageList = ($packages -join "`n") -replace "`r", ""
-    Write-Host "  $($packages.Count) packages from ubuntu-packages.yaml"
-}
-
-# ── Step 4: Import $ubuntuLabel as "Maude" ──                     # REQUIRES ADMIN (wsl --install, --import, --unregister)
-# WSL -l -q outputs UTF-16 LE with embedded null bytes; strip them before matching.
-# Packages are pre-installed into the template so rebuilds are fast (~30s vs ~5min).
-
-Write-Host "`n[4/7] Checking $DistroName WSL distro..." -ForegroundColor Green
-if (Test-WslDistro $DistroName) {
+if (-not $Admin -and $isElevated) {
     Write-Host @"
+
+ERROR: PowerShell is running as Administrator but -Admin was NOT supplied.
+
+The user phase configures Windows Terminal, the desktop shortcut, and the
+Maude folder for the *current user*. Running it elevated will write those
+into the admin's profile instead of yours.
+
+Do one of:
+  * Run from a non-elevated PowerShell to perform user-phase setup, or
+  * Re-run with -Admin to perform admin-phase setup (WSL install, distro
+    import, root bootstrap).
+
+"@ -ForegroundColor Red
+    exit 1
+}
+
+# ── ScriptDir: ALWAYS the current process's own TEMP ──────────────────
+# Cybersec mitigation (TOCTOU): the previous version used $PSScriptRoot
+# when the script was launched from disk, which could be a user-writable
+# directory like Downloads. A non-admin user could swap root-bootstrap.sh
+# during the install window to escalate privileges via WSL interop.
+#
+# Resolving unconditionally to $env:TEMP\maude-setup ensures the bootstrap
+# files only ever come from the elevated identity's TEMP folder (in admin
+# phase) or the unelevated user's own TEMP (in user phase) — never from a
+# location another local user can write to.
+$ScriptDir = Join-Path $env:TEMP "maude-setup"
+New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null
+
+# ── Download bootstrap files (with checksum verification when pinned) ──
+$filesToDownload = @(
+    @{ Url = "$GH_RAW/light/root-bootstrap.sh";       Dest = "root-bootstrap.sh";                  Key = "light/root-bootstrap.sh" }
+    @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh";                 Key = "light/maude-bootstrap.sh" }
+    @{ Url = "$GH_RAW/light/maude";                   Dest = "maude";                              Key = "light/maude" }
+    @{ Url = "$GH_RAW/maude.png";                     Dest = "maude.png";                          Key = "maude.png" }
+    @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml";   Key = "packages/ubuntu-packages.yaml" }
+)
+
+$verifyChecksums = ($Release -ne 'main')
+$checksums = @{}
+
+if ($verifyChecksums) {
+    Write-Host "Fetching checksums.txt for release '$Release'..." -ForegroundColor Cyan
+    $checksumPath = Join-Path $ScriptDir "checksums.txt"
+    try {
+        (New-Object Net.WebClient).DownloadFile("$GH_RAW/light/checksums.txt?cache=$cacheBust", $checksumPath)
+    } catch {
+        Write-Host "ERROR: Could not download checksums.txt from release '$Release'." -ForegroundColor Red
+        Write-Host "$_" -ForegroundColor Red
+        Write-Host "If this release pre-dates the checksum process, use -Release main (development mode)." -ForegroundColor Yellow
+        exit 1
+    }
+    $checksums = Get-ChecksumsTable $checksumPath
+    if ($checksums.Count -eq 0) {
+        Write-Host "ERROR: checksums.txt is empty or unparseable." -ForegroundColor Red
+        exit 1
+    }
+}
+
+$wc = New-Object Net.WebClient
+foreach ($dl in $filesToDownload) {
+    $destPath = Join-Path $ScriptDir $dl.Dest
+    $destDir  = Split-Path $destPath -Parent
+    if (-not (Test-Path -LiteralPath $destDir)) {
+        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+    }
+    try {
+        $wc.DownloadFile("$($dl.Url)?cache=$cacheBust", $destPath)
+    } catch {
+        if ($verifyChecksums) {
+            Write-Host "ERROR: Could not download $($dl.Url): $_" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "WARNING: Could not download $($dl.Url): $_" -ForegroundColor Yellow
+        continue
+    }
+    if ($verifyChecksums) {
+        $expected = $checksums[$dl.Key]
+        if (-not $expected) {
+            Write-Host "ERROR: No checksum entry for '$($dl.Key)' in checksums.txt." -ForegroundColor Red
+            Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
+            exit 1
+        }
+        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $destPath).Hash.ToLower()
+        if ($actual -ne $expected) {
+            Write-Host "ERROR: Checksum mismatch for $($dl.Url)" -ForegroundColor Red
+            Write-Host "  Expected: $expected" -ForegroundColor Red
+            Write-Host "  Actual:   $actual" -ForegroundColor Red
+            Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
+            exit 1
+        }
+    }
+}
+
+if ($verifyChecksums) {
+    Write-Host "All files verified against release '$Release' checksums.txt." -ForegroundColor Green
+} else {
+    Write-Host "Note: -Release main; checksums NOT verified (development mode)." -ForegroundColor Yellow
+}
+
+# =====================================================================
+# ADMIN PHASE — runs elevated only
+# =====================================================================
+if ($Admin) {
+
+    Write-Host ""
+    Write-Host "=== Maude Setup: Admin Phase ===" -ForegroundColor Cyan
+    Write-Host "(WSL install, distro import, root bootstrap)" -ForegroundColor DarkGray
+
+    # ── Free disk space check ──
+    $cDrive = Get-PSDrive -Name C
+    $freeGB = [math]::Round($cDrive.Free / 1GB, 1)
+    Write-Host "Free disk space on C: drive: ${freeGB} GB" -ForegroundColor Cyan
+
+    $removeTplAfterInstall = $false
+    if ($freeGB -lt 5) {
+        Write-Host "`nWARNING: Very low disk space (${freeGB} GB free)!" -ForegroundColor Red
+        Write-Host "Maude may not function properly with less than 5 GB free." -ForegroundColor Red
+        Write-Host "Press Ctrl+C within 10 seconds to cancel installation..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
+        $removeTplAfterInstall = $true
+    } elseif ($freeGB -lt 10) {
+        Write-Host "NOTE: Less than 10 GB free. The Ubuntu template will be removed after" -ForegroundColor Yellow
+        Write-Host "install to free disk space (reinstalls will take longer)." -ForegroundColor Yellow
+        $removeTplAfterInstall = $true
+    }
+
+    # ── Step 1 (admin): Install WSL2 ──
+    Write-Host "`n[1/3] Checking WSL..." -ForegroundColor Green
+    $needsReboot = $false
+    if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+        $wslStatus = (wsl --status 2>&1) -join "`n"
+        if ($wslStatus -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+            Write-Host "WSL needs setup/upgrade..."
+            wsl --install --no-distribution
+            $vmPlatform = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
+            if ($vmPlatform -and $vmPlatform.State -ne 'Enabled') {
+                Write-Host "Enabling Virtual Machine Platform..."
+                dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+            }
+            $needsReboot = $true
+        } else {
+            Write-Host "WSL is already installed." -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "Installing WSL2..."
+        wsl --install --no-distribution
+        $needsReboot = $true
+    }
+
+    if ($needsReboot) {
+        Write-Host "`nA reboot is required before continuing." -ForegroundColor Yellow
+        Write-Host "After rebooting, re-run this script with -Admin." -ForegroundColor Yellow
+        Read-Host "Press Enter to exit"
+        exit
+    }
+
+    # ── Parse the package list (used by template install below) ──
+    $packagesYaml = Join-Path $ScriptDir "..\packages\ubuntu-packages.yaml"
+    $packageList = ""
+    if (Test-Path -LiteralPath $packagesYaml) {
+        $packages = @(
+            (Get-Content -LiteralPath $packagesYaml) |
+                Where-Object { $_ -match '^\s+-\s+\S' } |
+                ForEach-Object { ($_ -replace '^\s+-\s+', '' -replace '\s*#.*$', '').Trim() } |
+                Where-Object { $_ -ne "" }
+        )
+        $packageList = ($packages -join "`n") -replace "`r", ""
+        Write-Host "  $($packages.Count) packages from ubuntu-packages.yaml"
+    }
+
+    # ── Step 2 (admin): Import $ubuntuLabel as "Maude" ──
+    Write-Host "`n[2/3] Checking $DistroName WSL distro..." -ForegroundColor Green
+    if (Test-WslDistro $DistroName) {
+        Write-Host @"
 
 $DistroName is already installed. To reinstall, run teardown first:
 
-    curl.exe -sLo `$env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
+    curl.exe -sLo `$env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/$Release/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
 
 "@ -ForegroundColor Yellow
-    exit 0
-} else {
-    # Use a persistent template distro with all packages pre-installed.
+        exit 0
+    }
+
+    # Persistent template distro with all packages pre-installed.
     # Avoids re-downloading from the Microsoft Store and re-installing
     # packages on every rebuild. teardown-wsl-maude.ps1 -IncludeTemplate removes it.
-    $templateDistro = "Ubuntu-${ubuntuVersion}-Template"
-    $rootfsTar      = "$env:TEMP\ubuntu-$($ubuntuVersion -replace '\.','')_rootfs.tar"
+    $rootfsTar = "$env:TEMP\ubuntu-$($ubuntuVersion -replace '\.','')_rootfs.tar"
 
     if (-not (Test-WslDistro $templateDistro)) {
         Write-Host "Installing '$templateDistro' (first time only)..."
@@ -541,7 +516,7 @@ $DistroName is already installed. To reinstall, run teardown first:
             $rootfsFile = Join-Path $env:TEMP "ubuntu-$ubuntuVersion-wsl-amd64.wsl"
             Write-Host "Downloading ~375 MB (this may take a few minutes)..."
             curl.exe -L -o $rootfsFile "$rootfsUrl"
-            if (-not (Test-Path $rootfsFile) -or (Get-Item $rootfsFile).Length -lt 100MB) {
+            if (-not (Test-Path -LiteralPath $rootfsFile) -or (Get-Item -LiteralPath $rootfsFile).Length -lt 100MB) {
                 Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
                 exit 1
             }
@@ -557,16 +532,16 @@ $DistroName is already installed. To reinstall, run teardown first:
             wsl --unregister $templateDistro 2>&1 | Out-Null
             # Remove stale directory from failed Store installs (ext4.vhdx)
             $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
-            if (Test-Path $tplDir) {
+            if (Test-Path -LiteralPath $tplDir) {
                 Start-Sleep -Seconds 2
-                Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
             }
             # If directory is still locked, escalate: stop LxssManager to release all handles
-            if (Test-Path $tplDir) {
+            if (Test-Path -LiteralPath $tplDir) {
                 Write-Host "Files locked. Restarting WSL service to release locks..." -ForegroundColor Yellow
                 Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 3
-                Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
                 Start-Service LxssManager -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 3
             }
@@ -580,14 +555,14 @@ $DistroName is already installed. To reinstall, run teardown first:
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "WSL2 import failed. Trying WSL1 (no virtualization needed)..." -ForegroundColor Yellow
                 wsl --unregister $templateDistro 2>&1 | Out-Null
-                if (Test-Path $tplDir) {
-                    Remove-Item -Path $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $tplDir) {
+                    Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
                 }
                 New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
                 $wslVersion = 1
                 wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
             }
-            Remove-Item -Path $rootfsFile -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $rootfsFile -ErrorAction SilentlyContinue
             # Remove the temporary Defender exclusions
             foreach ($excl in $defenderExclusions) {
                 Remove-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
@@ -606,7 +581,7 @@ $DistroName is already installed. To reinstall, run teardown first:
         wsl -d $templateDistro -- echo ok 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
-            Write-Host "After rebooting, re-run this setup script to finish." -ForegroundColor Yellow
+            Write-Host "After rebooting, re-run this script with -Admin." -ForegroundColor Yellow
             Read-Host "Press Enter to exit"
             exit
         }
@@ -659,80 +634,283 @@ $DistroName is already installed. To reinstall, run teardown first:
         Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
         exit 1
     }
-    Remove-Item -Path $rootfsTar -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $rootfsTar -ErrorAction SilentlyContinue
     Write-Host "$DistroName imported from '$templateDistro'." -ForegroundColor Gray
+
+    # ── Step 3 (admin): Run root-bootstrap.sh ──
+    # The host-folder path is decided in the user phase, so we bootstrap WSL
+    # without it and let the user phase write the fstab entry on its first run.
+    # root-bootstrap.sh tolerates missing /tmp/maude-hostfolder.
+    Write-Host "`n[3/3] Running root bootstrap..." -ForegroundColor Green
+
+    # Pipe files into the distro's /tmp via stdin — automount is disabled so
+    # /mnt/c/ paths are not available.
+    $filesToPipe = @(
+        @{ Src = "root-bootstrap.sh";  Dst = "root-bootstrap.sh" }
+        @{ Src = "maude";              Dst = "maude-launcher" }
+    )
+    foreach ($f in $filesToPipe) {
+        $src = Join-Path $ScriptDir $f.Src
+        if (Test-Path -LiteralPath $src) {
+            Get-Content -LiteralPath $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$($f.Dst) && sed -i 's/\r$//' /tmp/$($f.Dst) && chmod +x /tmp/$($f.Dst)"
+        } else {
+            Write-Host "ERROR: Required file '$($f.Src)' not found in $ScriptDir" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    # Run root-bootstrap.sh (no host-folder argument — user phase writes the fstab entry).
+    wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Root bootstrap failed." -ForegroundColor Red
+        exit 1
+    }
+
+    # Restart so /etc/wsl.conf takes effect (default user + automount disabled + interop off).
+    # After this point, WSL interop into Windows is disabled — closing the
+    # admin-elevated TOCTOU window for any subsequent invocations.
+    wsl --terminate $DistroName
+
+    # Cleanup: drop the template if we're tight on disk
+    if ($removeTplAfterInstall -and (Test-WslDistro $templateDistro)) {
+        Write-Host "`nRemoving Ubuntu template to free disk space (low disk: ${freeGB} GB)..." -ForegroundColor Yellow
+        wsl --unregister $templateDistro 2>&1 | Out-Null
+        Write-Host "Template removed. Note: future reinstalls will take longer." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "=============================================================" -ForegroundColor Cyan
+    Write-Host "  Admin phase complete!" -ForegroundColor Cyan
+    Write-Host "=============================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Next: close this elevated window and run the user phase from" -ForegroundColor White
+    Write-Host "a NON-elevated PowerShell:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "    curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1$(if($OneDrive){' -OneDrive'})$(if($NoOneDrive){' -NoOneDrive'})$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "The user phase configures the Maude folder, Windows Terminal" -ForegroundColor White
+    Write-Host "profile, desktop shortcut, and runs the user-level bootstrap." -ForegroundColor White
+    Write-Host ""
+    Read-Host "Press Enter to close this window"
+    exit
 }
 
-# ── Step 5: Run root-bootstrap.sh ──                              # does NOT require Windows admin (runs inside WSL as root)
-# Copies scripts into /tmp, strips CRLF, then runs root-bootstrap.sh.
-# Packages are already in the template — root-bootstrap only does user/config setup.
-# Host folder path is written to /tmp/maude-hostfolder for sandbox mount config.
+# =====================================================================
+# USER PHASE — runs unelevated
+# =====================================================================
+Write-Host ""
+Write-Host "=== Maude Setup: User Phase ===" -ForegroundColor Cyan
+Write-Host "(Host folder, Windows Terminal, desktop shortcut, user bootstrap)" -ForegroundColor DarkGray
 
-Write-Host "`n[5/7] Running root bootstrap..." -ForegroundColor Green
+# ── Verify the Maude distro exists (admin phase must have run first) ──
+if (-not (Test-WslDistro $DistroName)) {
+    Write-Host @"
 
-# Pipe files into the distro's /tmp via stdin — automount is disabled so
-# /mnt/c/ paths are not available.
-# Only root-bootstrap.sh and maude-launcher are needed in step 5.
-# maude-bootstrap.sh is re-piped in step 6 (after wsl --terminate clears /tmp).
-$filesToPipe = @(
-    @{ Src = "root-bootstrap.sh";  Dst = "root-bootstrap.sh" }
-    @{ Src = "maude";              Dst = "maude-launcher" }
-)
-foreach ($f in $filesToPipe) {
-    $src = Join-Path $ScriptDir $f.Src
-    if (Test-Path $src) {
-        Get-Content $src -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/$($f.Dst) && sed -i 's/\r$//' /tmp/$($f.Dst) && chmod +x /tmp/$($f.Dst)"
+ERROR: $DistroName WSL distro is not registered.
+
+The admin phase has not been run yet. From an ELEVATED PowerShell:
+
+    curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
+
+Then re-run this user-phase command.
+
+"@ -ForegroundColor Red
+    exit 1
+}
+
+# ── Step 1 (user): Install Windows Terminal ──
+Write-Host "`n[1/4] Checking Windows Terminal..." -ForegroundColor Green
+$wtPresent = (Get-Command wt.exe -ErrorAction SilentlyContinue) -or
+             (Get-AppxPackage -Name "Microsoft.WindowsTerminal" -ErrorAction SilentlyContinue)
+if ($wtPresent) {
+    Write-Host "Windows Terminal is already installed." -ForegroundColor Gray
+} else {
+    $wtInstalled = $false
+    # Method 1: winget
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Installing Windows Terminal via winget..."
+        winget install --id Microsoft.WindowsTerminal --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -eq 0) { $wtInstalled = $true }
+    }
+    # Method 2: AppX store registration
+    if (-not $wtInstalled) {
+        Write-Host "Trying AppX store registration..." -ForegroundColor Yellow
+        try {
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.WindowsTerminal_8wekyb3d8bbwe -ErrorAction Stop
+            $wtInstalled = $true
+        } catch {
+            Write-Host "AppX registration not available." -ForegroundColor Yellow
+        }
+    }
+    # Method 3: Direct download from GitHub (Windows Server, no Store)
+    if (-not $wtInstalled) {
+        Write-Host "Downloading Windows Terminal from GitHub..." -ForegroundColor Yellow
+        $wtTmp = Join-Path $env:TEMP "wt-install"
+        New-Item -ItemType Directory -Force -Path $wtTmp | Out-Null
+        try {
+            $wtRelease = curl.exe -s "https://api.github.com/repos/microsoft/terminal/releases/latest?cache=$cacheBust" | ConvertFrom-Json
+            $msixUrl = ($wtRelease.assets | Where-Object { $_.name -match '\.msixbundle$' } | Select-Object -First 1).browser_download_url
+            if ($msixUrl) {
+                $vclibsUrl = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
+                $xamlUrl   = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
+                curl.exe -sL -o "$wtTmp\vclibs.appx" $vclibsUrl
+                curl.exe -sL -o "$wtTmp\uixaml.appx" $xamlUrl
+                curl.exe -sL -o "$wtTmp\terminal.msixbundle" $msixUrl
+                Add-AppxPackage -Path "$wtTmp\vclibs.appx" -ErrorAction SilentlyContinue
+                Add-AppxPackage -Path "$wtTmp\uixaml.appx" -ErrorAction SilentlyContinue
+                Add-AppxPackage -Path "$wtTmp\terminal.msixbundle" -ErrorAction Stop
+                $wtInstalled = $true
+            }
+        } catch {
+            Write-Host "GitHub download install failed: $_" -ForegroundColor Yellow
+        } finally {
+            Remove-Item -Recurse -Force -LiteralPath $wtTmp -ErrorAction SilentlyContinue
+        }
+    }
+    if ($wtInstalled) {
+        Write-Host "Windows Terminal installed." -ForegroundColor Gray
     } else {
-        Write-Host "ERROR: Required file '$($f.Src)' not found in $ScriptDir" -ForegroundColor Red
-        exit 1
+        Write-Host "Windows Terminal could not be installed." -ForegroundColor Yellow
+        Write-Host "Maude will still work -- launch via: wsl -d $DistroName" -ForegroundColor Yellow
     }
 }
 
-# Write host folder path to /tmp so root-bootstrap.sh can configure fstab
-$HostFolder | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
+# ── Determine host folder location ──
+# -NoOneDrive → always AppData\LocalLow\Maude
+# -OneDrive   → always OneDrive (Business > Personal > generic)
+# Neither     → scan for existing Maude folders on disk:
+#   - Found in both OneDrive and LocalLow → pick LocalLow
+#   - Found only in OneDrive → pick OneDrive
+#   - Found only in LocalLow → pick LocalLow
+#   - Found nowhere → pick LocalLow (new install default)
+$localLowFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
 
-# Run root-bootstrap.sh (no package piping — packages are baked into the template)
-wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Root bootstrap failed." -ForegroundColor Red
-    exit 1
+if ($NoOneDrive) {
+    $HostFolder = $localLowFolder
+    $HostFolderSource = "LocalLow (-NoOneDrive)"
+} elseif ($OneDrive) {
+    $odCandidates = Find-OneDriveMaudeFolder
+    if ($odCandidates.Count -gt 0) {
+        $HostFolder = $odCandidates[0].Path
+        $HostFolderSource = "$($odCandidates[0].Source) (-OneDrive)"
+    } else {
+        Write-Host "WARNING: -OneDrive specified but no OneDrive folder found. Using LocalLow." -ForegroundColor Yellow
+        $HostFolder = $localLowFolder
+        $HostFolderSource = "LocalLow (OneDrive not found)"
+    }
+} else {
+    $localLowExists = Test-Path -LiteralPath (Join-Path $localLowFolder "Projects")
+    $odCandidates = Find-OneDriveMaudeFolder
+    $odExisting = $odCandidates | Where-Object { Test-Path -LiteralPath (Join-Path $_.Path "Projects") } | Select-Object -First 1
+
+    if ($localLowExists) {
+        $HostFolder = $localLowFolder
+        $HostFolderSource = "LocalLow (existing)"
+    } elseif ($odExisting) {
+        $HostFolder = $odExisting.Path
+        $HostFolderSource = "$($odExisting.Source) (existing)"
+    } else {
+        $HostFolder = $localLowFolder
+        $HostFolderSource = "LocalLow"
+    }
 }
 
-# Restart so /etc/wsl.conf takes effect (default user + automount disabled)
-wsl --terminate $DistroName
+# OneDrive sharing risk warning (cybersec finding)
+if ($HostFolderSource -match 'OneDrive') {
+    Show-OneDriveSharingWarning -Path $HostFolder
+}
 
-# ── Step 6: Run maude-bootstrap.sh ──                             # does NOT require admin
-# /tmp is cleared after wsl --terminate, so re-pipe the script.
+# ── Step 2 (user): Create shared host folder + icon + Quick Access ──
+Write-Host "`n[2/4] Setting up host folder ($HostFolderSource)..." -ForegroundColor Green
+New-Item -ItemType Directory -Force -Path $HostFolder | Out-Null
+$claudeDir   = Join-Path $HostFolder ".claude"
+$kannaDir    = Join-Path $HostFolder ".kanna"
+$projectsDir = Join-Path $HostFolder "Projects"
+New-Item -ItemType Directory -Force -Path $claudeDir   | Out-Null
+New-Item -ItemType Directory -Force -Path $kannaDir    | Out-Null
+New-Item -ItemType Directory -Force -Path $projectsDir | Out-Null
+Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
 
-Write-Host "`n[6/7] Running user bootstrap..." -ForegroundColor Green
+# Custom folder icon (PNG → ICO conversion for desktop.ini)
+$iconSrc = Join-Path $ScriptDir "maude.png"
+if (Test-Path -LiteralPath $iconSrc) {
+    try {
+        $icoPath    = Join-Path $HostFolder "maude.ico"
+        $desktopIni = Join-Path $HostFolder "desktop.ini"
+        foreach ($f in @($icoPath, $desktopIni)) {
+            if (Test-Path -LiteralPath $f) { attrib -h -s "$f" }
+        }
+        Convert-PngToIco $iconSrc $icoPath
+        "[.ShellClassInfo]`r`nIconResource=$icoPath,0" | Set-Content -LiteralPath $desktopIni -Encoding Unicode
+        attrib +h +s "$desktopIni"
+        attrib +h +s "$icoPath"
+        attrib +s "$HostFolder"
+        Write-Host "Folder icon set." -ForegroundColor Gray
+    } catch {
+        Write-Host "Could not set folder icon: $_" -ForegroundColor Yellow
+    }
+}
 
+# Pin Maude folder to Quick Access in File Explorer
+try {
+    $Shell = New-Object -ComObject Shell.Application
+    $QuickAccess = $Shell.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}")
+    $isPinned = $false
+    foreach ($item in $QuickAccess.Items()) {
+        if ($item.Path -eq $HostFolder) { $isPinned = $true; break }
+    }
+    if (-not $isPinned) {
+        $FolderToPin = $Shell.Namespace($HostFolder)
+        if ($FolderToPin) {
+            $FolderToPin.Self.InvokeVerb("pintohome")
+            Write-Host "Pinned Maude folder to Quick Access." -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "Maude folder already pinned to Quick Access." -ForegroundColor Gray
+    }
+} catch {
+    Write-Host "Could not pin to Quick Access: $_" -ForegroundColor Yellow
+}
+
+# Push the host folder path into WSL so root-bootstrap can write the fstab entry.
+# We re-run a small fragment of root-bootstrap from /tmp; root-bootstrap.sh is
+# idempotent for the fstab section.
+$HostFolder | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
+
+# Re-pipe root-bootstrap.sh (admin phase already ran it, but /tmp was cleared by
+# wsl --terminate). We invoke it again with the host folder argument; the script
+# is idempotent and will only update the fstab/mount.
+$rootBootstrapSrc = Join-Path $ScriptDir "root-bootstrap.sh"
+if (Test-Path -LiteralPath $rootBootstrapSrc) {
+    Get-Content -LiteralPath $rootBootstrapSrc -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/root-bootstrap.sh && sed -i 's/\r$//' /tmp/root-bootstrap.sh && chmod +x /tmp/root-bootstrap.sh"
+    wsl -d $DistroName -u root -- bash /tmp/root-bootstrap.sh $DefaultUser 2>&1 | Out-Null
+}
+
+# ── Step 3 (user): Run maude-bootstrap.sh ──
+Write-Host "`n[3/4] Running user bootstrap..." -ForegroundColor Green
 $bootstrapSrc = Join-Path $ScriptDir "maude-bootstrap.sh"
-if (-not (Test-Path $bootstrapSrc)) {
+if (-not (Test-Path -LiteralPath $bootstrapSrc)) {
     Write-Host "ERROR: Required file 'maude-bootstrap.sh' not found in $ScriptDir" -ForegroundColor Red
     exit 1
 }
-Get-Content $bootstrapSrc -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-bootstrap.sh && sed -i 's/\r$//' /tmp/maude-bootstrap.sh && chmod +x /tmp/maude-bootstrap.sh"
+Get-Content -LiteralPath $bootstrapSrc -Raw | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-bootstrap.sh && sed -i 's/\r$//' /tmp/maude-bootstrap.sh && chmod +x /tmp/maude-bootstrap.sh"
 wsl -d $DistroName -u $DefaultUser -- bash /tmp/maude-bootstrap.sh
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: User bootstrap had errors." -ForegroundColor Yellow
 }
 
-# ── Configure Windows Terminal profile (name + icon) ──           # does NOT require admin
+# ── Step 4 (user): WT profile + desktop shortcut ──
+Write-Host "`n[4/4] Configuring Windows Terminal and desktop shortcut..." -ForegroundColor Green
 
-$iconSrc = Join-Path $ScriptDir "maude.png"
-if (-not (Test-Path $iconSrc)) {
-    $iconSrc = Join-Path $ScriptDir "..\maude.png"
-}
 $iconDst = Join-Path $InstallDir "maude.png"
-
-if (Test-Path $iconSrc) {
+if (Test-Path -LiteralPath $iconSrc) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Copy-Item -Path $iconSrc -Destination $iconDst -Force
+    Copy-Item -LiteralPath $iconSrc -Destination $iconDst -Force
 }
 
 $wtSettingsPath = Find-WTSettingsPath
-if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
-    $wtJson    = Get-Content $wtSettingsPath -Raw | ConvertFrom-Json
+if ($wtSettingsPath -and (Test-Path -LiteralPath $wtSettingsPath)) {
+    $wtJson = Get-Content -LiteralPath $wtSettingsPath -Raw | ConvertFrom-Json
 
     # Enable copy-on-select: marking text copies it to clipboard automatically
     $wtJson | Add-Member -NotePropertyName 'copyOnSelect' -NotePropertyValue $true -Force
@@ -742,7 +920,7 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
     # This can produce duplicate entries.  We keep exactly one Maude profile
     # (customized with our icon), hide all template profiles, and remove
     # everything else with a matching name (stale manual profiles, duplicates).
-    $wtIconPath = if (Test-Path $iconDst) { $iconDst -replace '\\', '/' } else { $null }
+    $wtIconPath = if (Test-Path -LiteralPath $iconDst) { $iconDst -replace '\\', '/' } else { $null }
     $hasAutoProfile     = $false
     $hasTemplateProfile = $false
     $keepProfiles = @()
@@ -753,19 +931,16 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
 
         if ($nm -eq $DistroName) {
             if ($src -ne '' -and -not $hasAutoProfile) {
-                # Keep the first auto-generated Maude profile, customize it
                 if ($wtIconPath) {
                     $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
                 }
                 $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
                 $hasAutoProfile = $true
             } else {
-                # Remove duplicates and stale manual profiles
                 continue
             }
         }
 
-        # Hide all template profiles
         if ($nm -eq $templateDistro) {
             $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $true -Force
             $hasTemplateProfile = $true
@@ -775,8 +950,6 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
     }
     $wtJson.profiles.list = $keepProfiles
 
-    # If WT hasn't created any auto-generated profile yet, insert a fragment
-    # without a guid — WT merges by name + source, avoiding GUID conflicts.
     if (-not $hasAutoProfile) {
         $autoProfile = [PSCustomObject]@{
             name   = $DistroName
@@ -797,30 +970,25 @@ if ($wtSettingsPath -and (Test-Path $wtSettingsPath)) {
         $wtJson.profiles.list += $templateStub
     }
 
-    $wtJson | ConvertTo-Json -Depth 100 | Set-Content $wtSettingsPath -Encoding UTF8
+    $wtJson | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $wtSettingsPath -Encoding UTF8
     Write-Host "Windows Terminal profile created for $DistroName." -ForegroundColor Gray
 } else {
     Write-Host "Windows Terminal settings not found, skipping profile config." -ForegroundColor Gray
 }
 
-# ── Create desktop shortcut (Maude icon → Windows Terminal) ──    # does NOT require admin
-
-$desktopPath = [Environment]::GetFolderPath('Desktop')
+# Desktop shortcut
+$desktopPath  = [Environment]::GetFolderPath('Desktop')
 $shortcutFile = Join-Path $desktopPath "$DistroName.lnk"
-$icoFile = Join-Path $InstallDir "maude.ico"
+$icoFile      = Join-Path $InstallDir "maude.ico"
 
-# Convert maude.png → maude.ico for the shortcut (lnk files require ico)
-$iconSrc = Join-Path $ScriptDir "maude.png"
-if (-not (Test-Path $iconSrc)) { $iconSrc = Join-Path $ScriptDir "..\maude.png" }
-
-if (Test-Path $iconSrc) {
+if (Test-Path -LiteralPath $iconSrc) {
     try {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
         Convert-PngToIco $iconSrc $icoFile
         # Overwrite the WSL-generated shortcut icon with ours
         $shortcutIco = Join-Path $InstallDir "shortcut.ico"
-        if (Test-Path $shortcutIco) {
-            Copy-Item -Path $icoFile -Destination $shortcutIco -Force
+        if (Test-Path -LiteralPath $shortcutIco) {
+            Copy-Item -LiteralPath $icoFile -Destination $shortcutIco -Force
             Write-Host "Replaced shortcut.ico with Maude icon." -ForegroundColor Gray
         }
     } catch {
@@ -828,7 +996,7 @@ if (Test-Path $iconSrc) {
     }
 }
 
-# Read the distro's distribution-id from the WSL registry — this is what WT uses internally
+# Read the distro's distribution-id from the WSL registry — what WT uses internally.
 $distroGuid = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss\*" |
     Where-Object { $_.DistributionName -eq $DistroName }).PSChildName
 
@@ -843,20 +1011,13 @@ if ($wtExe) {
         $sc.Arguments = "new-tab -- wsl -d $DistroName"
     }
     $sc.Description = "Open $DistroName in Windows Terminal"
-    if (Test-Path $icoFile) { $sc.IconLocation = "$icoFile,0" }
+    if (Test-Path -LiteralPath $icoFile) { $sc.IconLocation = "$icoFile,0" }
     $sc.Save()
     Write-Host "Desktop shortcut created: $shortcutFile" -ForegroundColor Gray
 } else {
     Write-Host "wt.exe not found, skipping desktop shortcut." -ForegroundColor Yellow
 }
 
-# ── Step 7: Cleanup & Done ──
-
-if ($removeTplAfterInstall -and (Test-WslDistro $templateDistro)) {
-    Write-Host "`nRemoving Ubuntu template to free disk space (low disk: ${freeGB} GB)..." -ForegroundColor Yellow
-    wsl --unregister $templateDistro 2>&1 | Out-Null
-    Write-Host "Template removed. Note: future reinstalls will take longer." -ForegroundColor Yellow
-}
-
-Write-Host "`nMaude setup complete!" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Maude setup complete!" -ForegroundColor Cyan
 Write-Host "Launch Maude from the desktop shortcut or Windows Terminal." -ForegroundColor Green
