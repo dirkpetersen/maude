@@ -196,7 +196,7 @@ Windows host
   │       ├── .claude/                           ← Claude Code config (symlinked from WSL)
   │       └── .kanna/                            ← kanna web UI data (symlinked from WSL)
   │
-  └── WSL2: Maude (Ubuntu 24.04)
+  └── WSL2: Maude (Ubuntu 26.04, or 24.04 with -Noble)
         ├── ~/Maude/           ← drvfs mount of shared folder
         │     ├── Projects/    ← coding projects (maude CLI)
         │     ├── .claude/     ← Claude Code config + skills
@@ -237,4 +237,5 @@ Maude Light could be ported to macOS using [Lima](https://github.com/lima-vm/lim
 | `teardown-wsl-maude.ps1` | Admin (PowerShell) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config |
-| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code |
+| `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code; warns on suspicious repos |
+| `maude.py` | maude user (inside WSL) | Textual TUI: project launcher, model picker, Web UI toggle; self-updates daily at noon |
