@@ -1481,6 +1481,7 @@ class MaudeApp(App):
         url = f"http://localhost:{KANNA_PORT}"
         label = Text("Web UI: ")
         label.append(url, style=f"link {url} #72c09a")
+        label.append(" (Ctrl+Click)", style="#a09090")
         self.query_one("#kanna-url", Static).update(label)
         # Verify kanna is still alive after a moment; if it died, surface
         # the log instead of leaving the user with a dead "Stop Web UI".
