@@ -157,7 +157,7 @@ launch_tui() {
 
     python3 "$MAUDE_PY"
     echo ""
-    echo -e "  Please type: ${BOLD}menu${NC} <Enter> to get back to the TUI"
+    echo -e "  Please type: ${BOLD}menu${NC} <Enter> to get back to the TUI or ${BOLD}maude help${NC} <Enter>"
     echo ""
 }
 
