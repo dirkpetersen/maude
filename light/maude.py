@@ -78,8 +78,11 @@ def maybe_self_update() -> None:
         pass
 
     target = Path(__file__).resolve()
+    # Cache-bust the URL — raw.githubusercontent.com sits behind a CDN
+    # whose stale copies have hit us before.
+    bust_url = f"{UPDATE_URL}?cache={int(time.time())}"
     try:
-        with urllib.request.urlopen(UPDATE_URL, timeout=10) as resp:
+        with urllib.request.urlopen(bust_url, timeout=10) as resp:
             new_bytes = resp.read()
         tmp = target.with_name(target.name + ".new")
         tmp.write_bytes(new_bytes)

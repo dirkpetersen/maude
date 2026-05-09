@@ -149,7 +149,7 @@ launch_tui() {
     if [[ ! -f "$MAUDE_PY" ]]; then
         echo -e "${CYAN}Downloading maude TUI...${NC}"
         mkdir -p "$(dirname "$MAUDE_PY")"
-        curl -fsSL "$MAUDE_PY_URL" -o "$MAUDE_PY" || {
+        curl -fsSL "${MAUDE_PY_URL}?cache=$(date +%s)" -o "$MAUDE_PY" || {
             echo -e "${RED}Error: could not download maude.py${NC}" >&2
             exit 1
         }
@@ -161,15 +161,15 @@ launch_tui() {
     echo ""
 }
 
-# ── Update everything: maude wrapper, Claude Code, the maude TUI, kanna
+# ── Update everything: maude CLI, Claude Code, the maude TUI, kanna ───
 update_all() {
     local ts rc=0
     ts=$(date +%s)
 
-    # Update the bash wrapper first. Linux/bash keeps the running script's
+    # Update the maude CLI first. Linux/bash keeps the running script's
     # open inode valid across rename(2), so the current invocation finishes
     # with the OLD content and the new code only takes effect next time.
-    echo -e "${BOLD}Updating the maude wrapper...${NC}"
+    echo -e "${BOLD}Updating the maude CLI...${NC}"
     local self_path tmp_path
     self_path=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$HOME/.local/bin/maude")
     tmp_path="${self_path}.new.$$"
@@ -255,7 +255,7 @@ launch_setup_git() {
     if [[ ! -f "$MAUDE_PY" ]]; then
         echo -e "${CYAN}Downloading maude TUI...${NC}"
         mkdir -p "$(dirname "$MAUDE_PY")"
-        curl -fsSL "$MAUDE_PY_URL" -o "$MAUDE_PY" || {
+        curl -fsSL "${MAUDE_PY_URL}?cache=$(date +%s)" -o "$MAUDE_PY" || {
             echo -e "${RED}Error: could not download maude.py${NC}" >&2
             exit 1
         }
