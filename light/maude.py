@@ -1414,7 +1414,7 @@ class MaudeApp(App):
             yield Button("Open Project",    id="btn-open")
             yield Button("+ New",           id="btn-new")
             yield Button("Web UI",          id="btn-web")
-            yield Button("Setup Git(hub)",  id="btn-setup-git")
+            yield Button("Setup Git(hub)",  id="btn-github")
             yield Button("Set Credentials", id="btn-creds")
             yield Button("Command Line",    id="btn-cli")
             yield Static("", id="kanna-url")
@@ -1555,7 +1555,7 @@ class MaudeApp(App):
         if saved:
             self.notify("Credentials saved.")
 
-    @on(Button.Pressed, "#btn-setup-git")
+    @on(Button.Pressed, "#btn-github")
     def btn_setup_git(self) -> None:
         self.push_screen(GitSetupWizard(), self._on_git_setup_done)
 
@@ -1658,8 +1658,7 @@ def run_wizard_only() -> int:
 
 
 if __name__ == "__main__":
-    # `--setup-git` is kept as an alias for backward compatibility.
-    if len(sys.argv) > 1 and sys.argv[1] in ("--github", "--setup-git"):
+    if len(sys.argv) > 1 and sys.argv[1] == "--github":
         sys.exit(run_wizard_only())
     maybe_self_update()
     app = MaudeApp()

@@ -135,6 +135,7 @@ delete_project() {
 # ── Launch TUI ────────────────────────────────────────────────────────
 MAUDE_PY="$HOME/.local/bin/maude.py"
 MAUDE_PY_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
+MAUDE_BIN_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude"
 
 launch_tui() {
     # Ensure textual is installed
@@ -160,10 +161,40 @@ launch_tui() {
     echo ""
 }
 
-# ── Update everything: Claude Code, the maude TUI, and kanna ─────────
+# ── Update everything: maude wrapper, Claude Code, the maude TUI, kanna
 update_all() {
     local ts rc=0
     ts=$(date +%s)
+
+    # Update the bash wrapper first. Linux/bash keeps the running script's
+    # open inode valid across rename(2), so the current invocation finishes
+    # with the OLD content and the new code only takes effect next time.
+    echo -e "${BOLD}Updating the maude wrapper...${NC}"
+    local self_path tmp_path
+    self_path=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$HOME/.local/bin/maude")
+    tmp_path="${self_path}.new.$$"
+    if curl -fsSL "${MAUDE_BIN_URL}?cache=${ts}" -o "$tmp_path"; then
+        # Sanity check: must look like a non-trivial bash script.
+        if head -n1 "$tmp_path" | grep -q '^#!/bin/bash' && [[ $(wc -c < "$tmp_path") -gt 1024 ]]; then
+            chmod +x "$tmp_path"
+            if mv "$tmp_path" "$self_path"; then
+                echo -e "${GREEN}  ✓ maude wrapper updated (effective on next 'maude' invocation)${NC}"
+            else
+                rm -f "$tmp_path"
+                echo -e "${YELLOW}  ✗ could not replace $self_path${NC}"
+                rc=1
+            fi
+        else
+            rm -f "$tmp_path"
+            echo -e "${YELLOW}  ✗ downloaded wrapper failed sanity check${NC}"
+            rc=1
+        fi
+    else
+        rm -f "$tmp_path"
+        echo -e "${YELLOW}  ✗ could not fetch maude wrapper${NC}"
+        rc=1
+    fi
+    echo ""
 
     echo -e "${BOLD}Updating Claude Code...${NC}"
     if command -v claude >/dev/null 2>&1; then
@@ -304,8 +335,7 @@ case "$1" in
         launch_web
         exit 0
         ;;
-    github|setup-git)
-        # `setup-git` kept as an alias for backward compatibility.
+    github)
         launch_setup_git
         exit 0
         ;;
