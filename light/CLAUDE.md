@@ -53,7 +53,12 @@ wsl ... bash -c "echo '$encoded' | base64 -d | bash"
 Always use `[[ ]]` not `[ ]` in bash conditionals.
 
 ### `maude.py` self-update
-The TUI checks `~/.maude-tui-last-update` and downloads a fresh copy from GitHub if the stamp is older than 24 hours (checked at/after noon local time). To disable auto-overwrite during development, `touch ~/.maude-tui-last-update` with today's date.
+On launch (and at/after noon local time), `maude.py` compares the date stored in `~/.maude-tui-last-update` against today (`YYYY-MM-DD`). If they don't match, it downloads a fresh copy from GitHub and atomically replaces itself; the new code takes effect on the *next* launch.
+
+To disable auto-overwrite during development:
+```bash
+date +%Y-%m-%d > ~/.maude-tui-last-update
+```
 
 ## WSL encoding gotcha
 `wsl.exe --list --verbose` outputs UTF-16LE with BOM. The setup script strips null bytes before parsing:
@@ -63,4 +68,19 @@ $clean = $raw -replace "`0", ""
 ```
 
 ## Credential forwarding (kanna web UI)
-`maude web` runs `claude --wdebug` to extract the active auth env vars, then parses the JSON output for `ANTHROPIC_*`, `CLAUDE_*`, and `AWS_*` keys before launching kanna as a subprocess with those vars injected.
+Kanna is launched with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so it shells out to the Maude wrapper, which sets the appropriate auth env vars (Foundry/Azure/Bedrock/direct) per invocation. If the wrapper is missing, the env var isn't set and kanna falls back to plain `claude` on PATH. Both `maude web` (CLI) and the TUI's Web UI button refuse to launch when no credentials are detected (`ANTHROPIC_*` env, `~/.aws/credentials`, or `~/.azure/clauderc`).
+
+## Git Setup Wizard (`maude setup-git`)
+A 4-step Textual wizard (`GitSetupWizard` modal) for first-run users:
+1. **GitHub identity** — username → `api.github.com/users/<name>` lookup → pre-fill name/email
+2. **SSH key** — detect or generate ed25519, paste pubkey into `https://github.com/settings/ssh/new`, verify via `ssh -T git@github.com`
+3. **GPG key + signing** — detect or generate ed25519 + cv25519, paste at `https://github.com/settings/gpg/new`, verify via clearsign round-trip
+4. **Final config** — `git config user.name/email/init.defaultBranch=main`, run `mom install -y keychain`, append keychain block to `~/.bashrc`
+
+Manual key paste flow throughout (no `gh` auth needed). Reachable from the **Setup Git** TUI bottom-bar button, the `maude setup-git` CLI command, or `python3 maude.py --setup-git` (standalone wizard mode).
+
+## Status line
+`maude-bootstrap.sh` installs `~/.claude/statusline.sh` (cwd + remaining context-window %) and merges `~/.claude/settings.json` to set `statusLine.command`. Existing user customisations in `settings.json` are preserved (the merge is a JSON load → mutate → dump, not an overwrite).
+
+## TUI default flag
+TUI auto-launches by default. Opt-out is `~/.maude-tui-disabled` (presence of this file = TUI off). The legacy `~/.maude-tui-autostart` flag is no longer consulted — clean up references when seen.

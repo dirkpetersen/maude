@@ -161,34 +161,44 @@ Key implementation details:
 
 ## Maude TUI (`maude tui`)
 
-A Textual-based full-screen TUI alternative to the CLI welcome screen. Always launched via `maude tui` (never run `maude.py` directly).
+A Textual-based full-screen TUI which is the default welcome experience for new terminal sessions. Launched by `maude-welcome.sh` on login, by `maude tui`, or in wizard-only mode via `maude setup-git` (`python3 maude.py --setup-git`).
 
 ### Layout
 
 ```
-┌─ Maude ─────────────────────────────────────────────┐
-│  ASCII logo (green, top-left)    [x] Start TUI      │
-│                                      with Maude     │
-│  Projects                            [+ New]        │
-│ ┌──────────────────────────────────────────────┐    │
-│ │ banana          Modified: Apr 10, 2026  [del]│    │
-│ │ my-app          Modified: Apr 9, 2026   [del]│    │
-│ └──────────────────────────────────────────────┘    │
-│  [Open Project]  [Web UI]  [Command Line]           │
-└─────────────────────────────────────────────────────┘
+┌─ Maude ──────────────────────────────────────────────────────────────┐
+│  ASCII logo (green)         │  Projects                              │
+│  ──────────────             │ ┌────────────────────────────────────┐ │
+│  Start TUI with Maude  [x]  │ │ banana    Modified: Apr 10, 2026   │ │
+│  ──────────────             │ │ my-app    Modified: Apr 9, 2026    │ │
+│  Tips:                      │ │ ...                                │ │
+│   Screen split  Alt+Sh+±    │ └────────────────────────────────────┘ │
+│   Paste image  Alt+V        │                                        │
+│   Voice  Win+H              │                                        │
+│  ──────────────             │                                        │
+│  Claude model               │                                        │
+│   ( ) opus-1m  ( ) opus     │                                        │
+│   ( ) sonnet-1m  ( ) sonnet │                                        │
+│   ( ) haiku                 │                                        │
+├─────────────────────────────┴────────────────────────────────────────┤
+│ [Open Project] [+ New] [Web UI] [Setup Git] [Set Credentials] [CLI]  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key behaviors
-- **Open project**: `app.suspend()` → `claude --continue` (fallback: `claude`) → resume TUI
+- **Open project**: `app.suspend()` → `claude <model> --continue` (fallback: `claude <model>`) → resume TUI; cursor is restored to the project that was just open
 - **Delete**: confirm modal → soft-delete to `Projects/.deleted/`
 - **New project**: modal dialog, spaces auto-replaced with hyphens, git init
-- **Web UI**: launches kanna in background
+- **Web UI**: launches kanna in its own process group with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so the wrapper handles auth (Foundry/Azure/Bedrock/direct). Click again to stop — `SIGTERM` → `SIGKILL` on the group plus `fuser -k 3210/tcp` as a backstop. Refuses to launch without credentials and pops `CredsEntryScreen` as a recovery path
+- **Setup Git**: opens `GitSetupWizard`, a 4-step modal for first-run users. Step 1 looks up the GitHub username via `api.github.com/users/<name>` to pre-fill name/email. Step 2 detects/generates an ed25519 SSH key + verifies via `ssh -T git@github.com`. Step 3 detects/generates a GPG key (ed25519 + cv25519 subkey) and round-trips a clearsign to verify. Step 4 sets `git config user.name/email/init.defaultBranch=main`, runs `mom install -y keychain`, and appends a keychain block to `~/.bashrc`. All key uploads are manual paste flows — no `gh` auth required
 - **Command Line**: exits TUI, returns to shell prompt
 - **"Start TUI with Maude" checkbox**: TUI auto-launches by default for every new terminal session. Unchecking the box creates `~/.maude-tui-disabled` (an *opt-out* flag); `maude-welcome.sh` skips the auto-launch when that file is present and shows the text banner instead. `maude tui` is invoked (not `exec`) so the shell survives after TUI exit
-- **Credential gate**: `CredsEntryScreen` modal blocks TUI startup if no LLM credentials are configured (checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials`, `~/.azure/clauderc`). The user can paste shell-style `export` lines; the modal parses recognised credential vars (ANTHROPIC_*/CLAUDE_*/AWS_*/AZURE_*) and writes them to `~/.azure/clauderc` (mode 0600). Also reachable from the **Set Credentials** bottom-bar button and triggered automatically when the user clicks **Web UI** without credentials.
+- **Claude model picker**: 5-button radio (`opus-1m` default, `opus`, `sonnet-1m`, `sonnet`, `haiku`). Selection persists to `~/.maude-model` and is passed to `claude <model> --continue` when opening projects
+- **Credential gate**: `CredsEntryScreen` modal blocks TUI startup if no LLM credentials are configured (checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials`, `~/.azure/clauderc`). The user can paste shell-style `export` lines; the modal parses recognised credential vars (ANTHROPIC_*/CLAUDE_*/AWS_*/AZURE_*) and writes them to `~/.azure/clauderc` (mode 0600). Also reachable from the **Set Credentials** bottom-bar button and triggered automatically when the user clicks **Web UI** without credentials
+- **Status line**: `~/.claude/statusline.sh` (installed by `maude-bootstrap.sh`) renders Claude Code's status line as `~/cwd  [NN% free]`. The bootstrap merges this into `~/.claude/settings.json` `statusLine.command` while preserving any existing user customisations
 - **Exit hint**: after quitting the TUI, prints "Please type: menu \<Enter\> to get back to the TUI"
-- **Daily update**: `maude tui` checks `~/.maude-tui-last-update` stamp; downloads fresh `maude.py` from GitHub if older than 24 h
-- **Colors**: green logo, cyan highlights, yellow accents (matches welcome screen palette)
+- **Daily update**: `maude.py` self-updates from GitHub once per day, at or after noon local time. Stamp file `~/.maude-tui-last-update` holds today's date in `YYYY-MM-DD` format; the check fires inside `maybe_self_update()` at module entry, before `app.run()`
+- **Colors**: green logo, dusty-rose accents, warm-grey toggles (overrides Textual's default blue accent on `Checkbox`/`RadioButton`)
 - **Dependencies**: `textual` Python package — installed via `pip install textual` in `maude-bootstrap.sh`
 
 ## PATH Convention
