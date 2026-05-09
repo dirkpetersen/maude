@@ -711,14 +711,19 @@ class GitSetupWizard(ModalScreen[bool]):
             self._render_final(body)
             self._set_buttons(back=True, skip=False, next_label="Finish")
 
+    @staticmethod
+    def _link(url: str) -> Text:
+        """Build a clickable URL fragment without going through the
+        markup parser (which doesn't accept unquoted colons in values)."""
+        return Text(url, style=f"link {url} #72c09a")
+
     # Step 1: GitHub identity
     def _render_identity(self, body: Container) -> None:
-        body.mount(Label(
-            "Enter your GitHub username — we'll look up your public name and email.\n"
-            "If you don't have an account yet, create one at "
-            "[link=https://github.com/signup]https://github.com/signup[/link] "
-            "(Ctrl+click)."
-        ))
+        msg = Text("Enter your GitHub username — we'll look up your public name and email.\n")
+        msg.append("If you don't have an account yet, create one at ")
+        msg.append_text(self._link("https://github.com/signup"))
+        msg.append(" (Ctrl+click).")
+        body.mount(Label(msg))
         body.mount(Input(placeholder="github-username", id="wiz-username",
                          value=self.username))
         body.mount(Label("Full name (will be used for git config user.name):"))
@@ -733,19 +738,19 @@ class GitSetupWizard(ModalScreen[bool]):
         self.ssh_key_path = existing
         if existing:
             pub = read_ssh_pubkey(existing)
-            body.mount(Label(
+            body.mount(Label(Text.from_markup(
                 f"Found existing SSH key: [bold]{existing}[/]\n"
                 "Public key (already on disk — copy this if you haven't yet "
                 "added it to GitHub):"
-            ))
+            )))
             body.mount(TextArea(pub, id="wiz-ssh-pub", read_only=True,
                                 show_line_numbers=False))
-            body.mount(Label(
-                "Paste the public key at "
-                "[link=https://github.com/settings/ssh/new]"
-                "https://github.com/settings/ssh/new[/link] "
-                "(Ctrl+click), then press [bold]Verify[/]."
+            paste_msg = Text("Paste the public key at ")
+            paste_msg.append_text(self._link("https://github.com/settings/ssh/new"))
+            paste_msg.append_text(Text.from_markup(
+                " (Ctrl+click), then press [bold]Verify[/]."
             ))
+            body.mount(Label(paste_msg))
             body.mount(Horizontal(
                 Button("Verify GitHub auth", id="wiz-ssh-verify", variant="primary"),
                 id="wiz-ssh-actions",
@@ -779,13 +784,14 @@ class GitSetupWizard(ModalScreen[bool]):
         self.gpg_key_id = existing_id
         if existing_id:
             pub = export_gpg_pubkey(existing_id)
-            body.mount(Label(
+            msg = Text.from_markup(
                 f"Found existing GPG key for [bold]{self.email}[/]: "
                 f"[cyan]{existing_id}[/]\n"
                 "Public key (paste at "
-                "[link=https://github.com/settings/gpg/new]"
-                "https://github.com/settings/gpg/new[/link] if not already added):"
-            ))
+            )
+            msg.append_text(self._link("https://github.com/settings/gpg/new"))
+            msg.append(" if not already added):")
+            body.mount(Label(msg))
             body.mount(TextArea(pub, id="wiz-gpg-pub", read_only=True,
                                 show_line_numbers=False))
             body.mount(Label("Existing passphrase (only if you set one):"))
