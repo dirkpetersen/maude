@@ -182,9 +182,18 @@ def slugify(name: str) -> str:
     return name.strip("-")
 
 
-def open_project(project_path: Path, model: str) -> None:
-    """Launch Claude Code for a project. Try --continue first, then fresh."""
+def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None:
+    """Launch Claude Code for a project.
+
+    By default tries `--continue` first (resume the previous session),
+    falling back to a fresh launch if there's nothing to continue.
+    When `fresh=True`, skip `--continue` entirely so the conversation
+    starts with no history.
+    """
     os.chdir(project_path)
+    if fresh:
+        subprocess.run(["claude", model], check=False)
+        return
     ret = subprocess.run(["claude", model, "--continue"], check=False).returncode
     if ret != 0:
         subprocess.run(["claude", model], check=False)
@@ -374,6 +383,112 @@ def verify_ssh_github(passphrase: str = "", timeout: int = 15) -> tuple[bool, st
     return False, output or "no response from GitHub"
 
 
+def ssh_key_has_passphrase(key_path: Path) -> bool:
+    """True if the key file is encrypted (passphrase required to use)."""
+    try:
+        r = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(key_path), "-P", ""],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return r.returncode != 0
+
+
+def ssh_key_in_agent(key_path: Path) -> bool:
+    """True if the running ssh-agent already has this key loaded."""
+    pub = key_path.with_suffix(".pub")
+    try:
+        key_blob = pub.read_text().strip().split()[1]
+    except (OSError, IndexError):
+        return False
+    try:
+        r = subprocess.run(
+            ["ssh-add", "-L"], capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return r.returncode == 0 and key_blob in r.stdout
+
+
+def ssh_agent_running() -> bool:
+    """True if SSH_AUTH_SOCK points at a usable agent."""
+    if not os.environ.get("SSH_AUTH_SOCK"):
+        return False
+    try:
+        r = subprocess.run(
+            ["ssh-add", "-l"], capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    # Exit codes: 0 = keys loaded, 1 = no keys, 2 = no agent.
+    return r.returncode != 2
+
+
+def ssh_add_with_passphrase(key_path: Path, passphrase: str) -> tuple[bool, str]:
+    """Add the key to ssh-agent using SSH_ASKPASS to feed `passphrase`."""
+    if not key_path.exists():
+        return False, f"key not found: {key_path}"
+    fd, askpass = tempfile.mkstemp(prefix="maude-askpass-", suffix=".sh")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("#!/bin/sh\n")
+            f.write(f"printf '%s' {shlex.quote(passphrase)}\n")
+        os.chmod(askpass, 0o700)
+        env = os.environ.copy()
+        env["SSH_ASKPASS"] = askpass
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        env.setdefault("DISPLAY", ":0")
+        r = subprocess.run(
+            ["ssh-add", str(key_path)],
+            env=env, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, timeout=10,
+        )
+        ok = r.returncode == 0
+        return ok, (r.stdout + r.stderr).strip()
+    finally:
+        try:
+            os.unlink(askpass)
+        except OSError:
+            pass
+
+
+def gh_is_authed() -> bool:
+    """True if `gh auth status` reports a logged-in user."""
+    if not shutil.which("gh"):
+        return False
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return r.returncode == 0
+
+
+def gh_upload_key(kind: str, armored: str, title: str) -> tuple[bool, str]:
+    """Upload an SSH or GPG public key via gh CLI.
+
+    `kind` is "ssh-key" or "gpg-key". Returns (ok, message). If the key
+    is already on the account, that's treated as success.
+    """
+    if not shutil.which("gh"):
+        return False, "gh is not installed"
+    cmd = ["gh", kind, "add", "-", "--title", title]
+    try:
+        r = subprocess.run(
+            cmd, input=armored, text=True, capture_output=True, timeout=20,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        return False, str(err)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 0:
+        return True, out or "uploaded"
+    if "already" in out.lower() or "duplicate" in out.lower():
+        return True, "already on GitHub"
+    return False, out or "upload failed"
+
+
 def existing_gpg_key(email: str) -> str | None:
     """Return the long key-id of a secret GPG key matching `email`, or None."""
     if not email:
@@ -481,28 +596,53 @@ def install_keychain_via_mom() -> tuple[bool, str]:
     return True, "keychain installed."
 
 
+# Start an empty ssh-agent on shell login. The Maude TUI loads the key
+# (with a passphrase prompt) on startup, so we deliberately don't pass
+# a key file here — otherwise keychain would prompt at .bashrc time,
+# before the TUI ever appears.
 KEYCHAIN_BLOCK = """
-# Maude: ssh-agent via keychain
+# Maude: ssh-agent via keychain (TUI loads the key)
 if command -v keychain >/dev/null 2>&1; then
-    if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
-        eval "$(keychain --quiet --eval --agents ssh id_ed25519)"
-    fi
+    eval "$(keychain --quiet --eval --agents ssh)"
 fi
 """
 
+# Older versions of this wizard appended a block that auto-loaded
+# id_ed25519. Detect it so we can replace it on re-run.
+KEYCHAIN_BLOCK_LEGACY_MARKER = "Maude: ssh-agent via keychain"
+
 
 def add_keychain_to_bashrc() -> bool:
-    """Append the keychain block to ~/.bashrc if not already present."""
+    """Ensure the current keychain block is present in ~/.bashrc.
+
+    Removes any earlier marker'd block first so we don't accumulate
+    duplicates and so the new (no-key) form supersedes the old one.
+    """
     rc = Path.home() / ".bashrc"
     try:
         text = rc.read_text() if rc.exists() else ""
     except OSError:
         return False
-    if "Maude: ssh-agent via keychain" in text:
+    if KEYCHAIN_BLOCK.strip() in text:
         return True
+    # Strip any prior block that started with our marker comment.
+    if KEYCHAIN_BLOCK_LEGACY_MARKER in text:
+        out_lines: list[str] = []
+        skipping = False
+        for line in text.splitlines(keepends=True):
+            if not skipping and KEYCHAIN_BLOCK_LEGACY_MARKER in line:
+                skipping = True
+                continue
+            if skipping:
+                # Stop skipping at the first blank line or the next 'fi'
+                # at column 0 — the original block ends with `fi`.
+                if line.strip() == "fi":
+                    skipping = False
+                continue
+            out_lines.append(line)
+        text = "".join(out_lines).rstrip() + "\n"
     try:
-        with rc.open("a") as f:
-            f.write(KEYCHAIN_BLOCK)
+        rc.write_text(text + KEYCHAIN_BLOCK)
         return True
     except OSError:
         return False
@@ -647,6 +787,65 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class SSHKeyUnlockScreen(ModalScreen[None]):
+    """Prompt for the SSH key passphrase and load it into ssh-agent.
+
+    Triggered at TUI startup when ~/.ssh/id_ed25519 is encrypted but the
+    running ssh-agent doesn't have it yet.
+    """
+
+    BINDINGS = [Binding("escape", "skip", show=False)]
+
+    def action_skip(self) -> None:
+        self.dismiss(None)
+
+    def compose(self) -> ComposeResult:
+        with Container(id="unlock-box"):
+            yield Label("Unlock SSH key", id="unlock-title")
+            yield Label(
+                "Your ~/.ssh/id_ed25519 is passphrase-protected. Enter the\n"
+                "passphrase to load it into ssh-agent so git push, gh, etc.\n"
+                "work without prompting later.",
+                id="unlock-help",
+            )
+            yield Input(placeholder="passphrase", id="unlock-pass", password=True)
+            yield Label("", id="unlock-status")
+            with Horizontal(id="unlock-buttons"):
+                yield Button("Unlock", variant="success", id="btn-unlock-yes")
+                yield Button("Skip",   variant="warning", id="btn-unlock-no")
+
+    def on_mount(self) -> None:
+        self.query_one("#unlock-pass", Input).focus()
+
+    def _try_unlock(self) -> None:
+        passphrase = self.query_one("#unlock-pass", Input).value
+        if not passphrase:
+            self.query_one("#unlock-status", Label).update(
+                "[bold red]Enter a passphrase first.[/]"
+            )
+            return
+        ok, msg = ssh_add_with_passphrase(SSH_KEY_PATH, passphrase)
+        if ok:
+            self.app.notify("SSH key added to agent.")
+            self.dismiss(None)
+        else:
+            self.query_one("#unlock-status", Label).update(
+                f"[bold red]{msg.splitlines()[-1] if msg else 'ssh-add failed'}[/]"
+            )
+
+    @on(Button.Pressed, "#btn-unlock-yes")
+    def on_unlock(self) -> None:
+        self._try_unlock()
+
+    @on(Input.Submitted, "#unlock-pass")
+    def on_submit(self) -> None:
+        self._try_unlock()
+
+    @on(Button.Pressed, "#btn-unlock-no")
+    def on_skip(self) -> None:
+        self.dismiss(None)
+
+
 class NewProjectScreen(ModalScreen[str | None]):
     """Prompt for a new project name."""
 
@@ -685,7 +884,10 @@ class GitSetupWizard(ModalScreen[bool]):
     Steps:
         1. GitHub identity (username → fetch name + email)
         2. SSH key (generate or detect, then paste pubkey at github.com)
-        3. GPG key + commit signing
+        3. Authenticate the gh CLI via web flow (TUI suspends).
+           When gh auth succeeds, the wizard also silently generates an
+           ed25519 GPG signing key (no passphrase) and uploads it via
+           `gh gpg-key add` — no GPG step is shown to the user.
         4. Final config + keychain
     """
 
@@ -694,7 +896,7 @@ class GitSetupWizard(ModalScreen[bool]):
     STEP_TITLES = (
         "Step 1 of 4 — GitHub Identity",
         "Step 2 of 4 — SSH Key",
-        "Step 3 of 4 — GPG Key & Signing",
+        "Step 3 of 4 — Authenticate gh CLI",
         "Step 4 of 4 — Git Config & Keychain",
     )
 
@@ -758,7 +960,7 @@ class GitSetupWizard(ModalScreen[bool]):
             self._render_ssh(body)
             self._set_buttons(back=True, skip=True, next_label="Next")
         elif self.step == 2:
-            self._render_gpg(body)
+            self._render_gh_auth(body)
             self._set_buttons(back=True, skip=True, next_label="Next")
         elif self.step == 3:
             self._render_final(body)
@@ -842,52 +1044,37 @@ class GitSetupWizard(ModalScreen[bool]):
                 id="wiz-ssh-actions",
             ))
 
-    # Step 3: GPG key + signing
-    def _render_gpg(self, body: Container) -> None:
-        if not shutil.which("gpg"):
-            body.mount(Label(
-                "[yellow]gpg is not installed.[/]\n\n"
-                "Run [bold]mom install -y gnupg[/] in another terminal, then "
-                "come back. Or click [bold]Skip[/] to leave commit signing for later."
-            ))
+    # Step 3: Authenticate the gh CLI
+    def _render_gh_auth(self, body: Container) -> None:
+        already = gh_is_authed()
+        if not shutil.which("gh"):
+            body.mount(Label(Text.from_markup(
+                "[yellow]gh CLI is not installed.[/]\n\n"
+                "Run [bold]mom install -y gh[/] in another terminal, then "
+                "come back. Or click [bold]Skip[/] to skip GitHub auth."
+            )))
             return
-        existing_id = existing_gpg_key(self.email)
-        self.gpg_key_id = existing_id
-        if existing_id:
-            pub = export_gpg_pubkey(existing_id)
-            msg = Text.from_markup(
-                f"Found existing GPG key for [bold]{self.email}[/]: "
-                f"[cyan]{existing_id}[/]\n"
-                "Public key (paste at "
-            )
-            msg.append_text(self._link("https://github.com/settings/gpg/new"))
-            msg.append(" if not already added):")
-            body.mount(Label(msg))
-            body.mount(TextArea(pub, id="wiz-gpg-pub", read_only=True,
-                                show_line_numbers=False))
-            body.mount(Label("Existing passphrase (only if you set one):"))
-            body.mount(Input(placeholder="passphrase", id="wiz-gpg-pass",
-                             password=True))
-            body.mount(Horizontal(
-                Button("Verify signing", id="wiz-gpg-verify", variant="primary"),
-                id="wiz-gpg-actions",
-            ))
+        if already:
+            body.mount(Label(Text.from_markup(
+                "[green]✓ gh CLI is already authenticated.[/]\n\n"
+                "Click [bold]Next[/] to move on. Use "
+                "[bold]Re-authenticate[/] to switch accounts."
+            )))
         else:
-            body.mount(Label(
-                "Generate an ed25519 GPG key for commit signing. "
-                "Set a passphrase (recommended) or leave blank.\n"
-                "Generation can take several seconds — be patient."
-            ))
-            body.mount(Label("Passphrase (leave blank for none):"))
-            body.mount(Input(placeholder="passphrase", id="wiz-gpg-pass",
-                             password=True))
-            body.mount(Label("Confirm passphrase:"))
-            body.mount(Input(placeholder="confirm",    id="wiz-gpg-pass2",
-                             password=True))
-            body.mount(Horizontal(
-                Button("Generate GPG key", id="wiz-gpg-gen", variant="success"),
-                id="wiz-gpg-actions",
-            ))
+            tip = Text(
+                "We'll run `gh auth login --web --skip-ssh-key`. The TUI will "
+                "suspend; gh prints a URL and a one-time code in the terminal.\n"
+                "Ctrl+click the URL to open it on the Windows side, paste the "
+                "code, and return here.\n\n"
+                "When you come back, the wizard will silently generate an "
+                "ed25519 GPG signing key (no passphrase) and upload it via gh."
+            )
+            body.mount(Label(tip))
+        body.mount(Horizontal(
+            Button("Re-authenticate" if already else "Authenticate now",
+                   id="wiz-gh-auth", variant="primary"),
+            id="wiz-gh-actions",
+        ))
 
     # Step 4: Final config + keychain
     def _render_final(self, body: Container) -> None:
@@ -925,7 +1112,7 @@ class GitSetupWizard(ModalScreen[bool]):
         elif self.step == 1:
             await self._advance_if_ssh_ready()
         elif self.step == 2:
-            await self._advance_if_gpg_ready()
+            await self._advance_if_gh_authed()
         elif self.step == 3:
             self._finish()
 
@@ -1016,42 +1203,67 @@ class GitSetupWizard(ModalScreen[bool]):
             return
         await self._advance()
 
-    # ── Step 3 actions ──────────────────────────────────────────────
+    # ── Step 3 actions: gh CLI auth + silent GPG provisioning ──────
 
-    @on(Button.Pressed, "#wiz-gpg-gen")
-    async def on_gpg_gen(self) -> None:
+    @on(Button.Pressed, "#wiz-gh-auth")
+    async def on_gh_auth(self) -> None:
+        if not shutil.which("gh"):
+            self._log("gh CLI is not installed (try `mom install -y gh`).")
+            return
+        self._log("Suspending TUI to run `gh auth login --web`…")
+        self._log("Ctrl+click the URL gh prints, paste the code in your browser,")
+        self._log("then return here.")
+        with self.app.suspend():
+            try:
+                subprocess.run(
+                    ["gh", "auth", "login",
+                     "--hostname", "github.com",
+                     "--git-protocol", "ssh",
+                     "--web", "--skip-ssh-key"],
+                    check=False,
+                )
+            except FileNotFoundError as err:
+                self._log(f"gh failed to launch: {err}")
+                return
+        if not gh_is_authed():
+            self._log("gh auth did not complete. You can try again or Skip.")
+            return
+        self._log("[green]✓ gh CLI authenticated.[/]")
+        # Now provision the GPG signing key silently. Empty passphrase.
+        await self._provision_gpg_silently()
+        # Re-render so the step shows the "already authenticated" branch.
+        await self._render_step()
+
+    async def _provision_gpg_silently(self) -> None:
         if not shutil.which("gpg"):
-            self._log("gpg is not installed; install it with `mom install -y gnupg`.")
+            self._log("gpg is not installed; skipping signing key. "
+                      "Install with `mom install -y gnupg` and re-run.")
             return
-        p1 = self.query_one("#wiz-gpg-pass",  Input).value
-        p2 = self.query_one("#wiz-gpg-pass2", Input).value
-        if p1 != p2:
-            self._log("Passphrases do not match.")
-            return
-        self.gpg_passphrase = p1
-        self._log("Generating ed25519 GPG key (this may take a few seconds)…")
-        key_id, msg = generate_gpg_key(self.full_name, self.email, p1)
-        self._log(msg)
-        if key_id:
+        existing_id = existing_gpg_key(self.email)
+        if existing_id:
+            self._log(f"Reusing existing GPG key for {self.email}: {existing_id}")
+            self.gpg_key_id = existing_id
+        else:
+            self._log("Generating ed25519 GPG signing key (no passphrase)…")
+            key_id, msg = generate_gpg_key(self.full_name, self.email, "")
+            self._log(msg)
+            if not key_id:
+                return
             self.gpg_key_id = key_id
-            await self._render_step()
-
-    @on(Button.Pressed, "#wiz-gpg-verify")
-    def on_gpg_verify(self) -> None:
-        if not self.gpg_key_id:
-            self._log("Generate a GPG key first.")
+        # Upload via gh.
+        self._log("Uploading GPG public key via gh…")
+        pub = export_gpg_pubkey(self.gpg_key_id)
+        if not pub:
+            self._log("Could not export GPG public key.")
             return
-        passphrase = ""
-        try:
-            passphrase = self.query_one("#wiz-gpg-pass", Input).value
-        except Exception:
-            pass
-        self._log(f"Test-signing with {self.gpg_key_id}…")
-        ok, msg = verify_gpg_signing(self.gpg_key_id, passphrase)
-        self._log(msg)
+        ok, msg = gh_upload_key("gpg-key", pub, "Maude (TUI)")
+        self._log(("[green]✓[/] " if ok else "[red]✗[/] ") + msg)
 
-    async def _advance_if_gpg_ready(self) -> None:
-        # GPG is optional; skipping is allowed via the Skip button.
+    async def _advance_if_gh_authed(self) -> None:
+        # gh auth is optional — Skip is always available — but if the user
+        # already authed and we never provisioned GPG, do it now.
+        if gh_is_authed() and not self.gpg_key_id:
+            await self._provision_gpg_silently()
         await self._advance()
 
     # ── Step 4: finalise ────────────────────────────────────────────
@@ -1368,6 +1580,47 @@ class MaudeApp(App):
         margin: 0 1;
     }
 
+    /* Modal: SSH key unlock */
+    SSHKeyUnlockScreen {
+        align: center middle;
+        background: #1e1e1e 90%;
+    }
+
+    #unlock-box {
+        padding: 2 3;
+        width: 70;
+        height: auto;
+        border: heavy #b87878;
+        background: #242424;
+    }
+
+    #unlock-title {
+        text-style: bold;
+        color: #d4a0a0;
+        margin-bottom: 1;
+    }
+
+    #unlock-help {
+        color: #c09898;
+        margin-bottom: 1;
+    }
+
+    #unlock-status {
+        height: 1;
+        color: #c09898;
+        margin-top: 1;
+    }
+
+    #unlock-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    #unlock-buttons Button {
+        margin: 0 1;
+    }
+
     /* Modal: Git Setup Wizard */
     GitSetupWizard {
         align: center middle;
@@ -1460,6 +1713,8 @@ class MaudeApp(App):
                 with RadioSet(id="model-select"):
                     for m in MODELS:
                         yield RadioButton(m, value=(m == self._model))
+                yield Checkbox("Clear context (no history)",
+                               value=False, id="fresh-context")
             with Vertical(id="main"):
                 yield Label("Projects", id="section-title")
                 yield DataTable(id="projects-table", cursor_type="row",
@@ -1478,6 +1733,24 @@ class MaudeApp(App):
         self._kanna_proc: subprocess.Popen | None = None
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
+        # If the user has a passphrase-protected SSH key that hasn't been
+        # added to the agent yet, prompt for it now (before any git/gh
+        # operation needs it). Defer until after the first refresh so the
+        # main UI is visible underneath.
+        self.call_after_refresh(self._maybe_prompt_ssh_unlock)
+
+    def _maybe_prompt_ssh_unlock(self) -> None:
+        if not SSH_KEY_PATH.exists():
+            return
+        if not ssh_agent_running():
+            return  # nothing to load into; keychain probably hasn't run
+        if ssh_key_in_agent(SSH_KEY_PATH):
+            return  # already loaded
+        if not ssh_key_has_passphrase(SSH_KEY_PATH):
+            # Unencrypted key — load silently with empty passphrase.
+            ssh_add_with_passphrase(SSH_KEY_PATH, "")
+            return
+        self.push_screen(SSHKeyUnlockScreen())
 
     def _refresh_table(self) -> None:
         table = self.query_one("#projects-table", DataTable)
@@ -1665,8 +1938,14 @@ class MaudeApp(App):
 
     def _launch_project_now(self, path: Path) -> None:
         name = path.name
+        # Honour the sidebar checkbox: when checked, skip --continue so
+        # Claude starts with a clean conversation.
+        try:
+            fresh = self.query_one("#fresh-context", Checkbox).value
+        except Exception:
+            fresh = False
         with self.suspend():
-            open_project(path, self._model)
+            open_project(path, self._model, fresh=fresh)
         self._refresh_table()
         self._select_project(name)
 
