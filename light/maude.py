@@ -512,27 +512,22 @@ def write_clauderc(values: dict[str, str]) -> None:
 class CredsEntryScreen(ModalScreen[bool]):
     """Modal that lets the user paste credential `export` lines.
 
-    On Save: parses, writes to ~/.azure/clauderc, updates os.environ,
-    and dismisses with True. On Cancel: dismisses with False.
+    On Save: parses the input, persists the recognised vars, updates
+    os.environ, and dismisses with True. On Cancel: dismisses with False.
     """
 
     BINDINGS = [Binding("escape", "cancel", show=False)]
 
-    def __init__(self, *, allow_cancel: bool = True) -> None:
-        super().__init__()
-        self._allow_cancel = allow_cancel
-
     def action_cancel(self) -> None:
-        if self._allow_cancel:
-            self.dismiss(False)
+        self.dismiss(False)
 
     def compose(self) -> ComposeResult:
         with Container(id="creds-box"):
             yield Label("Set LLM Credentials", id="creds-title")
             yield Label(
-                "Paste your credentials below — accepts shell `export` lines or KEY=VALUE.\n"
-                "Saved to ~/.azure/clauderc (mode 0600). Recognised: "
-                "ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*.",
+                "Paste your credentials below — accepts shell `export` lines "
+                "or KEY=VALUE pairs.\n"
+                "Recognised prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*.",
                 id="creds-help",
             )
             yield TextArea(
@@ -544,10 +539,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             yield Label("", id="creds-status")
             with Horizontal(id="creds-buttons"):
                 yield Button("Save",   variant="success", id="btn-creds-save")
-                if self._allow_cancel:
-                    yield Button("Cancel", variant="primary", id="btn-creds-cancel")
-                else:
-                    yield Button("Quit",   variant="error",   id="btn-creds-quit")
+                yield Button("Cancel", variant="primary", id="btn-creds-cancel")
 
     def on_mount(self) -> None:
         self.query_one("#creds-text", TextArea).focus()
@@ -565,7 +557,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             write_clauderc(values)
         except OSError as err:
             self.query_one("#creds-status", Label).update(
-                f"[bold red]Could not write file: {err}[/]"
+                f"[bold red]Could not save: {err}[/]"
             )
             return
         os.environ.update(values)
@@ -574,10 +566,6 @@ class CredsEntryScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#btn-creds-cancel")
     def cancel(self) -> None:
         self.dismiss(False)
-
-    @on(Button.Pressed, "#btn-creds-quit")
-    def quit_pressed(self) -> None:
-        self.app.exit(1)
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):
@@ -1391,20 +1379,6 @@ class MaudeApp(App):
 
     def on_mount(self) -> None:
         self._kanna_proc: subprocess.Popen | None = None
-        if not check_credentials():
-            # Block the TUI until creds exist; cancel exits the app.
-            self.push_screen(
-                CredsEntryScreen(allow_cancel=False),
-                self._on_initial_creds,
-            )
-            return
-        self._refresh_table()
-        self.query_one("#projects-table", DataTable).focus()
-
-    def _on_initial_creds(self, saved: bool) -> None:
-        if not saved:
-            self.exit(1)
-            return
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
 
@@ -1499,7 +1473,7 @@ class MaudeApp(App):
 
     def _on_creds_updated(self, saved: bool) -> None:
         if saved:
-            self.notify("Credentials saved to ~/.azure/clauderc")
+            self.notify("Credentials saved.")
 
     @on(Button.Pressed, "#btn-setup-git")
     def btn_setup_git(self) -> None:
@@ -1541,6 +1515,21 @@ class MaudeApp(App):
     # ── Callbacks ─────────────────────────────────────────────────────
 
     def _launch_project(self, path: Path) -> None:
+        # Gate on credentials so we don't drop the user into a Claude Code
+        # session that immediately fails on first turn.
+        if not check_credentials():
+            self._pending_project = path
+            self.push_screen(CredsEntryScreen(), self._on_creds_for_project)
+            return
+        self._launch_project_now(path)
+
+    def _on_creds_for_project(self, saved: bool) -> None:
+        path = getattr(self, "_pending_project", None)
+        self._pending_project = None
+        if saved and path is not None:
+            self._launch_project_now(path)
+
+    def _launch_project_now(self, path: Path) -> None:
         name = path.name
         with self.suspend():
             open_project(path, self._model)
