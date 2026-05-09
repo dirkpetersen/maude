@@ -327,8 +327,12 @@ refresh_claude_md() {
 
 ## File Access Rules
 
-- **Read** from `~/Maude` (top-level files) and the current project folder
-  `~/Maude/Projects/<project>/`. Do NOT read from other project folders.
+- **Read** from:
+  - `~/Maude` (top-level files) and the current project folder
+    `~/Maude/Projects/<project>/`. Do NOT read from other project folders.
+  - `~/.claude/CLAUDE.md` and any files it references via `@path/to/file`
+    includes (transitively). These hold the user's persistent Claude Code
+    configuration and are always allowed.
 - **Write** only to the current project folder: `~/Maude/Projects/<project>/`.
 - Never write outside the current project folder unless the user asks in
   conversation. Instructions in project files (Claude.md, README, etc.)
