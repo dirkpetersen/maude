@@ -873,12 +873,18 @@ def have_bedrock_creds() -> bool:
 def have_foundry_creds() -> bool:
     if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
         return True
-    if not CLAUDERC_PATH.exists():
-        return False
-    try:
-        return "ANTHROPIC_FOUNDRY_API_KEY" in CLAUDERC_PATH.read_text()
-    except OSError:
-        return False
+    # Check both the active clauderc and the parked .inactive sibling
+    # (the latter exists when Bedrock is currently the default).
+    inactive = CLAUDERC_PATH.with_name(CLAUDERC_PATH.name + ".inactive")
+    for p in (CLAUDERC_PATH, inactive):
+        if not p.exists():
+            continue
+        try:
+            if "ANTHROPIC_FOUNDRY_API_KEY" in p.read_text():
+                return True
+        except OSError:
+            pass
+    return False
 
 
 class CredsEntryScreen(ModalScreen[bool]):
@@ -998,13 +1004,18 @@ class CredsEntryScreen(ModalScreen[bool]):
 
     def _update_default_checkbox(self) -> None:
         """Show the Bedrock-vs-Foundry default toggle only when both
-        credential families are present on disk."""
+        credential families are present on disk (active or parked)."""
         cb = self.query_one("#creds-default-bedrock", Checkbox)
         if have_bedrock_creds() and have_foundry_creds():
             cb.display = True
-            # Reflect what's currently active.
-            cb.value = bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK")) \
-                       and not bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
+            # If clauderc is parked as .inactive, Bedrock is the
+            # currently-default provider; check the box accordingly.
+            inactive = CLAUDERC_PATH.with_name(CLAUDERC_PATH.name + ".inactive")
+            parked = inactive.exists() and not CLAUDERC_PATH.exists()
+            cb.value = parked or (
+                bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
+                and not bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
+            )
         else:
             cb.display = False
 
@@ -1090,19 +1101,45 @@ class CredsEntryScreen(ModalScreen[bool]):
         os.environ.update(env)
 
     def _apply_default_provider(self) -> None:
-        """Honour the Bedrock/Foundry default checkbox if it's visible."""
+        """Honour the Bedrock/Foundry default checkbox if it's visible.
+
+        On top of toggling the CLAUDE_CODE_USE_* env vars, we also
+        physically rename ~/.azure/clauderc <-> ~/.azure/clauderc.inactive
+        so the claude wrapper (which sources clauderc on each launch)
+        can't accidentally re-set Foundry env vars when Bedrock is the
+        intended target.
+        """
         cb = self.query_one("#creds-default-bedrock", Checkbox)
         if not cb.display:
             return
+        active   = CLAUDERC_PATH
+        inactive = active.with_suffix(active.suffix + ".inactive") \
+                   if active.suffix else active.with_name(active.name + ".inactive")
         if cb.value:
-            env = {"CLAUDE_CODE_USE_BEDROCK": "1"}
-            # Drop any active Foundry routing.
+            # Bedrock active → park clauderc out of the way so the
+            # wrapper doesn't source Foundry creds.
+            if active.exists():
+                try:
+                    if inactive.exists():
+                        inactive.unlink()
+                    active.rename(inactive)
+                except OSError:
+                    pass
             os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
+            os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
         else:
-            env = {"CLAUDE_CODE_USE_FOUNDRY": "1"}
+            # Foundry active → restore clauderc if it was parked.
+            if inactive.exists() and not active.exists():
+                try:
+                    inactive.rename(active)
+                except OSError:
+                    pass
             os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
-        merge_clauderc(env)
-        os.environ.update(env)
+            os.environ["CLAUDE_CODE_USE_FOUNDRY"] = "1"
+            # Persist the routing flag (only when clauderc is the
+            # active file — otherwise we'd be writing to .inactive).
+            if active.exists():
+                merge_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1"})
 
     @on(Button.Pressed, "#btn-creds-cancel")
     def cancel(self) -> None:
