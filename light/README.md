@@ -219,6 +219,69 @@ This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the l
 
 `~/Maude` is mounted from your Windows host (OneDrive, or `AppData\LocalLow` with `-NoOneDrive`). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
 
+## Troubleshooting
+
+### `maude` command prints `value too great for base (error token is "09")`
+
+Symptom (somewhere on a line near `last_s` arithmetic):
+
+```
+/home/maude/.local/bin/maude: line 147: 2026-05-09: value too great for base (error token is "09")
+Opening project: tui
+```
+
+Cause: an old version of the `maude` bash CLI is on disk with a newer `~/.maude-tui-last-update` stamp file. The old CLI used the stamp as a Unix-epoch integer; the newer TUI writes it as `YYYY-MM-DD`, and bash interprets `05` / `09` as octal, which `09` isn't.
+
+Fix — refresh the CLI directly (the running version can't `maude update` past its own arithmetic error):
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude?cache=$(date +%s)" \
+  -o ~/.local/bin/maude && chmod +x ~/.local/bin/maude
+rm -f ~/.maude-tui-last-update
+```
+
+Then `maude update` to bring everything else current.
+
+### Bash login fails with `syntax error near unexpected token 'fi'`
+
+Symptom on every new shell:
+
+```
+-bash: /home/maude/.bashrc: line 189: syntax error near unexpected token `fi'
+```
+
+Cause: an earlier version of `maude github` step 4 left an orphan `fi` in `~/.bashrc` when stripping the previous keychain block (it stopped at the first `fi` of a nested `if`/`fi` pair).
+
+Fix:
+
+```bash
+maude update
+```
+
+The current `maude update` runs `python3 ~/.local/bin/maude.py --fix-bashrc`, which scrubs the orphan `fi` and re-emits the sentinel-bracketed keychain block. Idempotent — it does nothing if your `~/.bashrc` is already clean. Open a new terminal afterwards.
+
+### TUI won't auto-launch on login
+
+The TUI auto-launches by default; if it isn't, check whether the opt-out flag exists:
+
+```bash
+ls -la ~/.maude-tui-disabled
+```
+
+Delete it (or untick the **Start TUI with Maude** sidebar checkbox) to re-enable auto-launch. Note: the legacy `~/.maude-tui-autostart` flag is no longer consulted — only `~/.maude-tui-disabled` matters now.
+
+### Web UI button doesn't start kanna
+
+Click the **Web UI** button again to confirm it's idle. The TUI runs a 1.5s post-launch check and surfaces the kanna log tail in a notification if it died — most causes:
+
+- No LLM credentials configured. Click **Set Creds** and paste `export ANTHROPIC_API_KEY=…` (or AWS / Foundry / Azure equivalents).
+- Port 3210 still held by a previous run. The TUI runs `fuser -k 3210/tcp` before each launch as a backstop, but a wedged kanna from outside the TUI may need `fuser -k 3210/tcp` manually.
+- Wrapper at `~/bin/claude` missing. The TUI sets `CLAUDE_EXECUTABLE` to that path so kanna inherits Maude's auth; if the wrapper is gone, kanna falls back to plain `claude` on PATH and may fail to authenticate.
+
+### `gh` upload of GPG key fails with `insufficient OAuth scopes`
+
+`gh auth login` needs the `write:gpg_key` scope. The wizard now requests it automatically; if you authed with an earlier version, click **Re-authenticate** in step 3 and complete the device flow again.
+
 ## How it works
 
 ```
