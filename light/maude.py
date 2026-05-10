@@ -1979,11 +1979,36 @@ class MaudeApp(App):
         self._kanna_proc: subprocess.Popen | None = None
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
+        # Sync the model RadioSet's keyboard cursor with the actually-
+        # pressed (saved) model. Textual tracks the cursor and the
+        # pressed index separately; without this they drift on first
+        # render and arrow-key navigation starts at the top of the list
+        # instead of the selected option.
+        self.call_after_refresh(self._sync_model_cursor)
         # If the user has a passphrase-protected SSH key that hasn't been
         # added to the agent yet, prompt for it now (before any git/gh
         # operation needs it). Defer until after the first refresh so the
         # main UI is visible underneath.
         self.call_after_refresh(self._maybe_prompt_ssh_unlock)
+
+    def _sync_model_cursor(self) -> None:
+        try:
+            radioset = self.query_one("#model-select", RadioSet)
+        except Exception:
+            return
+        try:
+            idx = MODELS.index(self._model)
+        except ValueError:
+            return
+        # `_selected` is the keyboard-cursor index. Move it via the
+        # public `action_move_selection` if available, otherwise fall
+        # back to the private attribute (Textual exposes both across
+        # versions).
+        try:
+            radioset._selected = idx           # type: ignore[attr-defined]
+        except Exception:
+            pass
+        radioset.refresh()
 
     def _maybe_prompt_ssh_unlock(self) -> None:
         if not SSH_KEY_PATH.exists():
