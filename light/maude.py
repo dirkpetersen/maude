@@ -157,6 +157,57 @@ def check_credentials() -> bool:
     return False
 
 
+def git_remote_origin_url(project_path: Path) -> str:
+    """Return `git config --get remote.origin.url` for the project, or ''."""
+    if not (project_path / ".git").exists():
+        return ""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(project_path), "config", "--get", "remote.origin.url"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+
+
+def is_github_remote(url: str) -> bool:
+    """True for git@github.com:… or https://github.com/… style remotes."""
+    if not url:
+        return False
+    return "github.com" in url
+
+
+def parse_github_owner_repo(url: str) -> tuple[str, str] | None:
+    """Extract (owner, repo) from a GitHub remote URL, or None.
+
+    Handles git@github.com:owner/repo(.git) and
+    https://github.com/owner/repo(.git).
+    """
+    m = re.match(r"^git@github\.com:([^/]+)/(.+?)(?:\.git)?$", url)
+    if not m:
+        m = re.match(r"^https?://github\.com/([^/]+)/(.+?)(?:\.git)?/?$", url)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def gh_user_login() -> str:
+    """Return the authed GitHub username, or empty string."""
+    if not shutil.which("gh"):
+        return ""
+    try:
+        r = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+    if r.returncode != 0:
+        return ""
+    return r.stdout.strip()
+
+
 def list_projects() -> list[dict]:
     """Return projects sorted by last-modified time, newest first."""
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -169,8 +220,15 @@ def list_projects() -> list[dict]:
                 mtime = 0.0
             modified = (datetime.fromtimestamp(mtime).strftime("%b %d, %Y")
                         if mtime else "unknown")
-            projects.append({"name": p.name, "modified": modified,
-                             "path": p, "mtime": mtime})
+            origin = git_remote_origin_url(p)
+            projects.append({
+                "name":     p.name,
+                "modified": modified,
+                "path":     p,
+                "mtime":    mtime,
+                "origin":   origin,
+                "github":   is_github_remote(origin),
+            })
     projects.sort(key=lambda d: d["mtime"], reverse=True)
     return projects
 
@@ -1837,6 +1895,196 @@ class GitSetupWizard(ModalScreen[bool]):
         self.dismiss(True)
 
 
+class PushToGithubScreen(ModalScreen[bool]):
+    """Modal that creates a GitHub repo + pushes the current project to it.
+
+    Two states:
+      - gh CLI not authed → show a hint pointing at "Setup Git(hub)" and only Cancel.
+      - gh CLI authed     → input field pre-filled with
+        `git@github.com:<login>/<project>.git`, plus Push and Cancel buttons.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, project_path: Path) -> None:
+        super().__init__()
+        self.project_path = project_path
+        self.gh_authed    = gh_is_authed()
+        self.gh_login     = gh_user_login() if self.gh_authed else ""
+        self.default_url  = (
+            f"git@github.com:{self.gh_login or 'YOUR-USER'}/"
+            f"{project_path.name}.git"
+        )
+        self._busy = False
+
+    def action_cancel(self) -> None:
+        if not self._busy:
+            self.dismiss(False)
+
+    def compose(self) -> ComposeResult:
+        with Container(id="push-box"):
+            yield Label("Push project to GitHub", id="push-title")
+            if not self.gh_authed:
+                yield Label(
+                    "gh CLI is not authenticated.\n\n"
+                    "Click [bold]Setup Git(hub)[/] in the bottom bar to "
+                    "authenticate first, then come back.",
+                    id="push-help",
+                )
+                yield Label("", id="push-status")
+                with Horizontal(id="push-buttons"):
+                    yield Button("Close", variant="primary", id="btn-push-cancel")
+                return
+            existing = git_remote_origin_url(self.project_path)
+            if existing:
+                yield Label(Text.from_markup(
+                    f"This project already has a remote: [cyan]{existing}[/]\n"
+                    "Pushing again will [bold]git push -u origin HEAD[/]."
+                ), id="push-help")
+            else:
+                yield Label(
+                    f"Create a new GitHub repo for "
+                    f"[bold]{self.project_path.name}[/] and push HEAD.",
+                    id="push-help",
+                )
+            yield Label("Repository URL:")
+            yield Input(value=self.default_url, id="push-url")
+            yield Checkbox("Public repo (unchecked = private)",
+                           id="push-public", value=False)
+            yield Label("", id="push-status")
+            with Horizontal(id="push-buttons"):
+                yield Button("Push",   variant="success", id="btn-push-go")
+                yield Button("Cancel", variant="primary", id="btn-push-cancel")
+
+    def on_mount(self) -> None:
+        if self.gh_authed:
+            try:
+                self.query_one("#push-url", Input).focus()
+            except Exception:
+                pass
+
+    def _set_status(self, text: str) -> None:
+        try:
+            self.query_one("#push-status", Label).update(text)
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#btn-push-cancel")
+    def cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#btn-push-go")
+    def go(self) -> None:
+        if self._busy:
+            return
+        url = self.query_one("#push-url", Input).value.strip()
+        owner_repo = parse_github_owner_repo(url)
+        if not owner_repo:
+            self._set_status(
+                "[bold red]URL must be git@github.com:owner/repo.git[/]"
+            )
+            return
+        owner, repo = owner_repo
+        public = False
+        try:
+            public = self.query_one("#push-public", Checkbox).value
+        except Exception:
+            pass
+        visibility = "public" if public else "private"
+        self._busy = True
+        for sel in ("#btn-push-go", "#btn-push-cancel", "#push-url"):
+            try:
+                self.query_one(sel).disabled = True
+            except Exception:
+                pass
+        self._set_status("Pushing… (creating repo if needed)")
+        self.run_worker(
+            lambda: self._push_worker(owner, repo, url, visibility),
+            exclusive=True, thread=True,
+        )
+
+    def _push_worker(self, owner: str, repo: str,
+                     url: str, visibility: str) -> None:
+        ok, msg = self._push_now(owner, repo, url, visibility)
+        self.app.call_from_thread(self._push_done, ok, msg)
+
+    def _push_now(self, owner: str, repo: str,
+                  url: str, visibility: str) -> tuple[bool, str]:
+        cwd = str(self.project_path)
+        # Make sure the project has at least one commit, otherwise gh
+        # repo create --push has nothing to send.
+        log = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if log.returncode != 0:
+            # No commits yet — try to make an initial one from existing files.
+            subprocess.run(["git", "-C", cwd, "add", "-A"], capture_output=True)
+            commit = subprocess.run(
+                ["git", "-C", cwd, "commit", "-m", "Initial commit",
+                 "--allow-empty"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if commit.returncode != 0:
+                return False, (commit.stderr or commit.stdout).strip() or \
+                              "could not create initial commit"
+
+        # Does the remote already exist on GitHub?
+        check = subprocess.run(
+            ["gh", "repo", "view", f"{owner}/{repo}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if check.returncode != 0:
+            create = subprocess.run(
+                ["gh", "repo", "create", f"{owner}/{repo}",
+                 f"--{visibility}", "--source", cwd, "--remote", "origin",
+                 "--push"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if create.returncode != 0:
+                return False, (create.stderr or create.stdout).strip() or \
+                              "gh repo create failed"
+            return True, f"Created {owner}/{repo} and pushed HEAD."
+        # Repo exists. Make sure origin is wired up, then push.
+        existing = git_remote_origin_url(self.project_path)
+        if not existing:
+            r = subprocess.run(
+                ["git", "-C", cwd, "remote", "add", "origin", url],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode != 0:
+                return False, (r.stderr or r.stdout).strip()
+        elif existing != url:
+            r = subprocess.run(
+                ["git", "-C", cwd, "remote", "set-url", "origin", url],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode != 0:
+                return False, (r.stderr or r.stdout).strip()
+        push = subprocess.run(
+            ["git", "-C", cwd, "push", "-u", "origin", "HEAD"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if push.returncode != 0:
+            return False, (push.stderr or push.stdout).strip()
+        return True, f"Pushed to {owner}/{repo}."
+
+    def _push_done(self, ok: bool, msg: str) -> None:
+        self._busy = False
+        if ok:
+            self.app.notify(msg)
+            self.dismiss(True)
+            return
+        # Re-enable controls for retry.
+        for sel in ("#btn-push-go", "#btn-push-cancel", "#push-url"):
+            try:
+                self.query_one(sel).disabled = False
+            except Exception:
+                pass
+        last = (msg.splitlines()[-1] if msg else "push failed").strip()
+        self._set_status(f"[bold red]{last}[/]")
+
+
 # ── Main app ───────────────────────────────────────────────────────────────
 
 class MaudeApp(App):
@@ -2200,6 +2448,62 @@ class MaudeApp(App):
         margin: 0 1;
     }
 
+    /* Modal: Push to GitHub */
+    PushToGithubScreen {
+        align: center middle;
+        background: #1e1e1e 90%;
+    }
+
+    #push-box {
+        padding: 2 3;
+        width: 90;
+        height: 22;
+        border: heavy #b87878;
+        background: #242424;
+    }
+
+    #push-title {
+        text-style: bold;
+        color: #d4a0a0;
+        margin-bottom: 1;
+    }
+
+    #push-help {
+        color: #c09898;
+        margin-bottom: 1;
+    }
+
+    #push-box Label {
+        color: #c09898;
+        margin-top: 0;
+        margin-bottom: 0;
+    }
+
+    #push-box Input {
+        margin-bottom: 1;
+    }
+
+    #push-public {
+        margin-top: 0;
+        margin-bottom: 1;
+    }
+
+    #push-status {
+        height: 1;
+        color: #c09898;
+        margin-top: 1;
+    }
+
+    #push-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    #push-buttons Button {
+        margin: 0 1;
+    }
+
     /* Modal: Git Setup Wizard */
     GitSetupWizard {
         align: center middle;
@@ -2302,6 +2606,7 @@ class MaudeApp(App):
             yield Button("Open Project",    id="btn-open")
             yield Button("+ New",           id="btn-new")
             yield Button("Web UI",          id="btn-web")
+            yield Button("To Github",       id="btn-togithub")
             yield Button("Setup Git(hub)",  id="btn-github")
             yield Button("Set Creds",       id="btn-creds")
             yield Button("Command Line",    id="btn-cli")
@@ -2359,11 +2664,12 @@ class MaudeApp(App):
     def _refresh_table(self) -> None:
         table = self.query_one("#projects-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("  Project", "Last modified")
+        table.add_columns("  Project", "Last modified", "GH")
         for proj in list_projects():
             table.add_row(
                 f"  {proj['name']}",
                 proj["modified"],
+                "GH" if proj["github"] else "",
                 key=proj["name"],
             )
 
@@ -2495,6 +2801,18 @@ class MaudeApp(App):
             self.notify("Git setup complete.")
         else:
             self.notify("Git setup cancelled.")
+
+    @on(Button.Pressed, "#btn-togithub")
+    def btn_togithub(self) -> None:
+        path = self._selected_project()
+        if path is None:
+            self.notify("Select a project first.", severity="warning")
+            return
+        self.push_screen(PushToGithubScreen(path), self._on_push_done)
+
+    def _on_push_done(self, pushed: bool) -> None:
+        if pushed:
+            self._refresh_table()
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
