@@ -976,6 +976,28 @@ New-Item -ItemType Directory -Force -Path $kannaDir    | Out-Null
 New-Item -ItemType Directory -Force -Path $projectsDir | Out-Null
 Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
 
+# Scrub any inherited Low Mandatory Integrity Level from the host folder
+# (and parents under %LOCALAPPDATA%\Maude\). This is necessary when a user
+# migrates data from AppData\LocalLow — the low-IL label rides along with
+# the moved files, and Explorer then refuses to honour desktop.ini, so
+# the custom folder icon never renders. Set Medium recursively on:
+#   * %LOCALAPPDATA%\Maude\Data         (inheritance source for Data\Maude)
+#   * the host folder itself
+# Both are no-ops on clean installs (the label simply isn't there).
+# Skipped for OneDrive paths, which are managed by OneDrive's own ACLs.
+if ($HostFolder -like "$env:LOCALAPPDATA\Maude\*") {
+    $localData = Join-Path $env:LOCALAPPDATA "Maude\Data"
+    foreach ($p in @($localData, $HostFolder)) {
+        if (Test-Path -LiteralPath $p) {
+            $il = (& icacls.exe "$p" 2>&1) -join "`n"
+            if ($il -match 'Low Mandatory Level') {
+                Write-Host "Stripping inherited low-integrity label from $p..." -ForegroundColor Gray
+                & icacls.exe "$p" /setintegritylevel "(OI)(CI)Medium" /T 2>&1 | Out-Null
+            }
+        }
+    }
+}
+
 $iconSrc = Join-Path $ScriptDir "maude.png"
 if (Test-Path -LiteralPath $iconSrc) {
     try {
