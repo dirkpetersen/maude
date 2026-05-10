@@ -911,6 +911,7 @@ class GitSetupWizard(ModalScreen[bool]):
         self.ssh_passphrase = ""
         self.gpg_key_id: str | None = None
         self.gpg_passphrase = ""
+        self.gpg_uploaded = False
         self._dismissed = False
 
     # ── Top-level layout ────────────────────────────────────────────
@@ -1234,8 +1235,13 @@ class GitSetupWizard(ModalScreen[bool]):
         # so we keep the TUI up, feed Enter on stdin ourselves, and let
         # the user Ctrl+click the URL straight from the wizard log.
         self.query_one("#wiz-gh-auth", Button).disabled = True
-        self._log("Running `gh auth login --web`. Ctrl+click the URL it prints,")
-        self._log("paste the one-time code in your browser, then wait here.")
+        self._log("─────────────── How this works ───────────────")
+        self._log("1. gh prints a one-time code below (e.g. ABCD-1234)")
+        self._log("2. On your Windows host, open this URL (Ctrl+click):")
+        self._log("     https://github.com/login/device")
+        self._log("3. Paste the code, then click 'Authorize GitHub CLI'")
+        self._log("4. Come back here — gh detects the auth automatically")
+        self._log("─────────────────────────────────────────────")
         self.run_worker(self._gh_auth_worker, exclusive=True, thread=True)
 
     def _gh_auth_worker(self) -> None:
@@ -1256,13 +1262,27 @@ class GitSetupWizard(ModalScreen[bool]):
                 moved = True
             except OSError:
                 pass
+        # Output we don't want cluttering the log: xdg-open / wslview etc.
+        # exhausting their list of "browser not found" candidates.
+        noise_substrings = (
+            "xdg-open:",
+            "x-www-browser",
+            "www-browser",
+            "firefox", "iceweasel", "seamonkey", "mozilla",
+            "epiphany", "konqueror", "chromium", "google-chrome",
+            "links2", "elinks", "links", "lynx", "w3m",
+            "no method available for opening",
+        )
         try:
             try:
                 proc = subprocess.Popen(
                     ["gh", "auth", "login",
                      "--hostname", "github.com",
                      "--git-protocol", "ssh",
-                     "--web"],
+                     "--web",
+                     # Request the scope needed to upload a GPG signing
+                     # key after auth completes.
+                     "--scopes", "write:gpg_key"],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -1286,8 +1306,11 @@ class GitSetupWizard(ModalScreen[bool]):
             if proc.stdout:
                 for line in iter(proc.stdout.readline, ""):
                     line = line.rstrip()
-                    if line:
-                        self.app.call_from_thread(self._log, line)
+                    if not line:
+                        continue
+                    if any(s in line for s in noise_substrings):
+                        continue
+                    self.app.call_from_thread(self._log, line)
             rc = proc.wait()
         finally:
             if moved:
@@ -1320,29 +1343,38 @@ class GitSetupWizard(ModalScreen[bool]):
             self._log("gpg is not installed; skipping signing key. "
                       "Install with `mom install -y gnupg` and re-run.")
             return
-        existing_id = existing_gpg_key(self.email)
-        if existing_id:
-            self._log(f"Reusing existing GPG key for {self.email}: {existing_id}")
-            self.gpg_key_id = existing_id
-        else:
-            self._log("Generating ed25519 GPG signing key (no passphrase)…")
-            key_id, msg = generate_gpg_key(self.full_name, self.email, "")
-            self._log(msg)
-            if not key_id:
-                return
-            self.gpg_key_id = key_id
+        if not self.gpg_key_id:
+            existing_id = existing_gpg_key(self.email)
+            if existing_id:
+                self._log(f"Reusing existing GPG key for {self.email}: {existing_id}")
+                self.gpg_key_id = existing_id
+            else:
+                self._log("Generating ed25519 GPG signing key (no passphrase)…")
+                key_id, msg = generate_gpg_key(self.full_name, self.email, "")
+                self._log(msg)
+                if not key_id:
+                    return
+                self.gpg_key_id = key_id
         self._log("Uploading GPG public key via gh…")
         pub = export_gpg_pubkey(self.gpg_key_id)
         if not pub:
             self._log("Could not export GPG public key.")
             return
         ok, msg = gh_upload_key("gpg-key", pub, "Maude (TUI)")
-        self._log(("[green]✓[/] " if ok else "[red]✗[/] ") + msg)
+        if ok:
+            self._log("✓ " + msg)
+            self.gpg_uploaded = True
+        else:
+            self._log("✗ " + msg)
+            if "scope" in msg.lower() or "scopes" in msg.lower():
+                self._log("Click 'Re-authenticate' above — the wizard now")
+                self._log("requests write:gpg_key, which will let the upload succeed.")
 
     async def _advance_if_gh_authed(self) -> None:
-        # gh auth is optional — Skip is always available — but if the user
-        # already authed and we never provisioned GPG, do it now.
-        if gh_is_authed() and not self.gpg_key_id:
+        # If authed, ensure the GPG key is generated AND uploaded. Both
+        # paths are idempotent, so it's safe to call again after a
+        # re-auth that granted the missing scope.
+        if gh_is_authed() and (not self.gpg_key_id or not self.gpg_uploaded):
             self._provision_gpg_now()
         await self._advance()
 
@@ -1720,7 +1752,7 @@ class MaudeApp(App):
     #wiz-box {
         padding: 1 2;
         width: 100;
-        height: 42;
+        height: 44;
         border: heavy #b87878;
         background: #242424;
     }
@@ -1753,7 +1785,7 @@ class MaudeApp(App):
     }
 
     #wiz-log {
-        height: 10;
+        height: 16;
         border: solid #6a5058;
         background: #1e1e1e;
         color: #a09090;
