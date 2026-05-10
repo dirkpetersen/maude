@@ -2107,6 +2107,72 @@ class PushToGithubScreen(ModalScreen[bool]):
         self._set_status(f"[bold red]{last}[/]")
 
 
+class DetachFromGithubScreen(ModalScreen[bool]):
+    """Confirm and remove the local `origin` remote so this project
+    stops pushing to GitHub. Does NOT delete the GitHub-side repo;
+    that has to be done manually on github.com."""
+
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, project_path: Path) -> None:
+        super().__init__()
+        self.project_path = project_path
+        self.origin_url   = git_remote_origin_url(project_path)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def compose(self) -> ComposeResult:
+        with Container(id="detach-box"):
+            yield Label("Stop pushing to GitHub?", id="detach-title")
+            yield Label(Text.from_markup(
+                f"This project's git remote points at:\n"
+                f"  [cyan]{self.origin_url}[/]\n\n"
+                "Confirming will remove the local [bold]origin[/] remote so "
+                "future pushes won't reach GitHub.\n\n"
+                "[bold yellow]The GitHub-side repository is NOT deleted by "
+                "this action.[/]\n"
+                "It becomes [bold]orphaned[/] — you have to delete it "
+                "yourself at:\n"
+                "  https://github.com/<owner>/<repo>/settings → 'Delete this "
+                "repository'."
+            ), id="detach-help")
+            yield Label("", id="detach-status")
+            with Horizontal(id="detach-buttons"):
+                yield Button("Stop pushing", variant="error",   id="btn-detach-go")
+                yield Button("Cancel",       variant="primary", id="btn-detach-cancel")
+
+    @on(Button.Pressed, "#btn-detach-cancel")
+    def cancel(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#btn-detach-go")
+    def go(self) -> None:
+        cwd = str(self.project_path)
+        try:
+            r = subprocess.run(
+                ["git", "-C", cwd, "remote", "remove", "origin"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+            self.query_one("#detach-status", Label).update(
+                f"[bold red]{err}[/]"
+            )
+            return
+        if r.returncode != 0 and "No such remote" not in r.stderr:
+            last = (r.stderr or r.stdout).strip().splitlines()[-1]
+            self.query_one("#detach-status", Label).update(
+                f"[bold red]{last}[/]"
+            )
+            return
+        self.app.notify(
+            "origin removed. The GitHub repo is orphaned — delete it "
+            "manually on github.com.",
+            timeout=10,
+        )
+        self.dismiss(True)
+
+
 # ── Main app ───────────────────────────────────────────────────────────────
 
 class MaudeApp(App):
@@ -2526,6 +2592,47 @@ class MaudeApp(App):
         margin: 0 1;
     }
 
+    /* Modal: Detach from GitHub */
+    DetachFromGithubScreen {
+        align: center middle;
+        background: #1e1e1e 90%;
+    }
+
+    #detach-box {
+        padding: 2 3;
+        width: 86;
+        height: auto;
+        border: heavy #c07070;
+        background: #2a1818;
+    }
+
+    #detach-title {
+        text-style: bold;
+        color: #ff8080;
+        margin-bottom: 1;
+    }
+
+    #detach-help {
+        color: #d8b0b0;
+        margin-bottom: 1;
+    }
+
+    #detach-status {
+        height: 1;
+        color: #c09898;
+        margin-top: 1;
+    }
+
+    #detach-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    #detach-buttons Button {
+        margin: 0 1;
+    }
+
     /* Modal: Git Setup Wizard */
     GitSetupWizard {
         align: center middle;
@@ -2830,10 +2937,20 @@ class MaudeApp(App):
         if path is None:
             self.notify("Select a project first.", severity="warning")
             return
-        self.push_screen(PushToGithubScreen(path), self._on_push_done)
+        # If the project is already on GitHub, second click means "stop
+        # pushing here". Otherwise it's the create/push flow.
+        origin = git_remote_origin_url(path)
+        if is_github_remote(origin):
+            self.push_screen(DetachFromGithubScreen(path), self._on_detach_done)
+        else:
+            self.push_screen(PushToGithubScreen(path), self._on_push_done)
 
     def _on_push_done(self, pushed: bool) -> None:
         if pushed:
+            self._refresh_table()
+
+    def _on_detach_done(self, detached: bool) -> None:
+        if detached:
             self._refresh_table()
 
     @on(Button.Pressed, "#btn-cli")
