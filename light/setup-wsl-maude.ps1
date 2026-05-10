@@ -23,7 +23,7 @@
         - wsl --export the template, wsl --import it as Maude
         - Run root-bootstrap.sh inside Maude (user creation, /etc/wsl.conf,
           fstab mount, mom, PATH, sandbox isolation)
-        - Create the Maude shared folder (OneDrive or AppData\LocalLow),
+        - Create the Maude shared folder (OneDrive or %LOCALAPPDATA%\Maude\Data\Maude),
           set its custom icon, pin to Quick Access
         - Run maude-bootstrap.sh inside Maude (dev-station, kanna, skills,
           Claude Code config, maude launcher)
@@ -52,9 +52,9 @@
         .\setup-wsl-maude.ps1 -Admin
 
         # 2. From a NON-elevated PowerShell:
-        .\setup-wsl-maude.ps1                # Ubuntu 26.04, AppData\LocalLow
+        .\setup-wsl-maude.ps1                # Ubuntu 26.04, local data folder
         .\setup-wsl-maude.ps1 -OneDrive      # Shared folder in OneDrive
-        .\setup-wsl-maude.ps1 -NoOneDrive    # Force AppData\LocalLow
+        .\setup-wsl-maude.ps1 -NoOneDrive    # Force local %LOCALAPPDATA%\Maude\Data\Maude
 
     Subsequent reinstalls: just the user-phase command. No admin needed.
 
@@ -74,7 +74,7 @@
 param(
     [string]$DistroName          = "Maude",
     [string]$DefaultUser         = "maude",
-    [string]$InstallDir          = "$env:LOCALAPPDATA\Maude",
+    [string]$InstallDir          = "$env:LOCALAPPDATA\Maude\OS",
     [switch]$OneDrive,
     [switch]$NoOneDrive,
     [switch]$Noble,
@@ -192,7 +192,7 @@ function Show-OneDriveSharingWarning {
     Write-Host "    * Or visit https://onedrive.com -> 'Shared by me'"
     Write-Host ""
     Write-Host "  Press Ctrl+C in 8 seconds to abort, then re-run with" -ForegroundColor Yellow
-    Write-Host "  -NoOneDrive to use AppData\LocalLow instead." -ForegroundColor Yellow
+    Write-Host "  -NoOneDrive to use the local %LOCALAPPDATA%\Maude\Data folder instead." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "============================================================" -ForegroundColor Yellow
     Start-Sleep -Seconds 8
@@ -536,13 +536,13 @@ if ($Admin) {
                 exit 1
             }
             # Defender exclusions for the import path (admin-only)
-            $defenderExclusions = @($rootfsFile, (Join-Path $env:LOCALAPPDATA "Maude-Template"))
+            $defenderExclusions = @($rootfsFile, (Join-Path $env:LOCALAPPDATA "Maude\Template"))
             foreach ($excl in $defenderExclusions) {
                 Add-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
             }
             wsl --terminate $templateDistro 2>&1 | Out-Null
             wsl --unregister $templateDistro 2>&1 | Out-Null
-            $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
+            $tplDir = Join-Path $env:LOCALAPPDATA "Maude\Template"
             if (Test-Path -LiteralPath $tplDir) {
                 Start-Sleep -Seconds 2
                 Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -668,9 +668,11 @@ if ($Admin) {
     if ($NoDefenderExclusion) {
         Write-Host "Skipped (-NoDefenderExclusion)." -ForegroundColor Yellow
     } else {
+        # Exclude only the OS distro and template paths — never Data\, which
+        # holds user-created project files that AV should still scan.
         $exclusionPaths = @(
-            (Join-Path $env:LOCALAPPDATA "Maude")
-            (Join-Path $env:LOCALAPPDATA "Maude-Template")
+            (Join-Path $env:LOCALAPPDATA "Maude\OS")
+            (Join-Path $env:LOCALAPPDATA "Maude\Template")
         )
         $defender = Get-DefenderState
         switch ($defender.State) {
@@ -787,6 +789,34 @@ $DistroName is already installed. To reinstall, run teardown first:
     exit 0
 }
 
+# ── Detect legacy install layout and refuse safely ──
+# Old layout: %LOCALAPPDATA%\Maude was directly the WSL distro install dir
+# (containing ext4.vhdx). New layout uses that path as a parent for OS\,
+# Template\, and Data\. If we see an ext4.vhdx at the old top-level path,
+# the user has a pre-restructure install and we must not write into it.
+$legacyVhdx = Join-Path $env:LOCALAPPDATA "Maude\ext4.vhdx"
+if (Test-Path -LiteralPath $legacyVhdx) {
+    Write-Host @"
+
+ERROR: Detected a pre-restructure Maude install at:
+    $env:LOCALAPPDATA\Maude\ext4.vhdx
+
+Maude now expects this layout under %LOCALAPPDATA%\Maude\:
+    OS\        - WSL Maude distro
+    Template\  - Ubuntu template distro
+    Data\Maude - your project files (icon-bearing)
+
+Run teardown first (it'll remove the old distro dir but won't touch any
+Data\ folder you may have already created):
+
+    curl.exe -sLo `$env:TEMP\teardown-wsl-maude.ps1 $GH_RAW/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
+
+Then re-run this script.
+
+"@ -ForegroundColor Red
+    exit 1
+}
+
 # ── Step 1 (user): Export template + Import as Maude ──
 Write-Host "`n[1/5] Importing $DistroName from '$templateDistro'..." -ForegroundColor Green
 $rootfsTar = "$env:TEMP\ubuntu-$($ubuntuVersion -replace '\.','')_rootfs.tar"
@@ -811,35 +841,54 @@ Remove-Item -LiteralPath $rootfsTar -ErrorAction SilentlyContinue
 Write-Host "$DistroName imported." -ForegroundColor Gray
 
 # ── Determine host folder location ──
-$localLowFolder = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
+# New layout (default): %LOCALAPPDATA%\Maude\Data\Maude
+#   - Sits under medium-IL %LOCALAPPDATA%, so the desktop.ini icon mechanism
+#     actually works (LocalLow's low-IL ACLs broke +S on the parent folder).
+#   - Co-located with the OS\ and Template\ siblings under %LOCALAPPDATA%\Maude\.
+# OneDrive: <OneDrive>\Maude (flat, OneDrive only ever holds user data).
+$localFolder = Join-Path $env:LOCALAPPDATA "Maude\Data\Maude"
+
+# Detect the legacy LocalLow layout. We don't migrate or delete — the user
+# may have moved their data manually. Just inform.
+$legacyLocalLow = Join-Path $env:USERPROFILE "AppData\LocalLow\Maude"
+if (Test-Path -LiteralPath (Join-Path $legacyLocalLow "Projects")) {
+    Write-Host ""
+    Write-Host "Note: a legacy Maude folder was detected at:" -ForegroundColor Yellow
+    Write-Host "  $legacyLocalLow" -ForegroundColor Yellow
+    Write-Host "Maude no longer uses LocalLow. The new location is:" -ForegroundColor Yellow
+    Write-Host "  $localFolder" -ForegroundColor Yellow
+    Write-Host "Move any data you still need from the old folder; this script" -ForegroundColor Yellow
+    Write-Host "will NOT touch the old location." -ForegroundColor Yellow
+    Write-Host ""
+}
 
 if ($NoOneDrive) {
-    $HostFolder = $localLowFolder
-    $HostFolderSource = "LocalLow (-NoOneDrive)"
+    $HostFolder = $localFolder
+    $HostFolderSource = "Local (-NoOneDrive)"
 } elseif ($OneDrive) {
     $odCandidates = Find-OneDriveMaudeFolder
     if ($odCandidates.Count -gt 0) {
         $HostFolder = $odCandidates[0].Path
         $HostFolderSource = "$($odCandidates[0].Source) (-OneDrive)"
     } else {
-        Write-Host "WARNING: -OneDrive specified but no OneDrive folder found. Using LocalLow." -ForegroundColor Yellow
-        $HostFolder = $localLowFolder
-        $HostFolderSource = "LocalLow (OneDrive not found)"
+        Write-Host "WARNING: -OneDrive specified but no OneDrive folder found. Falling back to Local." -ForegroundColor Yellow
+        $HostFolder = $localFolder
+        $HostFolderSource = "Local (OneDrive not found)"
     }
 } else {
-    $localLowExists = Test-Path -LiteralPath (Join-Path $localLowFolder "Projects")
+    $localExists = Test-Path -LiteralPath (Join-Path $localFolder "Projects")
     $odCandidates = Find-OneDriveMaudeFolder
     $odExisting = $odCandidates | Where-Object { Test-Path -LiteralPath (Join-Path $_.Path "Projects") } | Select-Object -First 1
 
-    if ($localLowExists) {
-        $HostFolder = $localLowFolder
-        $HostFolderSource = "LocalLow (existing)"
+    if ($localExists) {
+        $HostFolder = $localFolder
+        $HostFolderSource = "Local (existing)"
     } elseif ($odExisting) {
         $HostFolder = $odExisting.Path
         $HostFolderSource = "$($odExisting.Source) (existing)"
     } else {
-        $HostFolder = $localLowFolder
-        $HostFolderSource = "LocalLow"
+        $HostFolder = $localFolder
+        $HostFolderSource = "Local"
     }
 }
 
@@ -870,8 +919,19 @@ if (Test-Path -LiteralPath $iconSrc) {
         "[.ShellClassInfo]`r`nIconResource=$icoPath,0" | Set-Content -LiteralPath $desktopIni -Encoding Unicode
         attrib +h +s "$desktopIni"
         attrib +h +s "$icoPath"
-        attrib +s "$HostFolder"
-        Write-Host "Folder icon set." -ForegroundColor Gray
+        # Set ReadOnly + System on the parent folder so Explorer reads desktop.ini.
+        # +R is the Microsoft-documented method and survives non-default ACLs
+        # better than +S alone (the previous LocalLow location only had +S and
+        # the attribute never stuck on a low-integrity folder).
+        attrib +r +s "$HostFolder"
+        # Verify the attribute landed; warn if not.
+        $hostAttr = (Get-Item -LiteralPath $HostFolder -Force).Attributes.ToString()
+        if ($hostAttr -notmatch 'ReadOnly') {
+            Write-Host "WARNING: ReadOnly attribute did not stick on $HostFolder; icon may not appear." -ForegroundColor Yellow
+            Write-Host "(folder attributes: $hostAttr)" -ForegroundColor Yellow
+        } else {
+            Write-Host "Folder icon set." -ForegroundColor Gray
+        }
     } catch {
         Write-Host "Could not set folder icon: $_" -ForegroundColor Yellow
     }

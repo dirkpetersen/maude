@@ -39,10 +39,16 @@
 
 param(
     [string]$DistroName      = "Maude",
-    [string]$InstallDir      = "$env:LOCALAPPDATA\Maude",
+    [string]$InstallDir      = "$env:LOCALAPPDATA\Maude\OS",
     [switch]$IncludeTemplate,
     [switch]$Admin
 )
+
+# Hard rule: the user's project data lives at %LOCALAPPDATA%\Maude\Data
+# and must NEVER be removed by teardown. We delete only the OS\ and
+# Template\ siblings explicitly. The Maude\ parent itself is left alone
+# for the same reason — it's the parent of Data\.
+$DataFolder = Join-Path $env:LOCALAPPDATA "Maude\Data"
 
 Write-Host "=== Maude WSL Teardown ===" -ForegroundColor Cyan
 
@@ -186,7 +192,19 @@ if (Test-WslDistro $DistroName) {
 
 # ── Step 3 (user): Remove the install directory ──
 Write-Host "`n[3/4] Removing install directory..." -ForegroundColor Green
-if (Test-Path -LiteralPath $InstallDir) {
+
+# Safety guard: NEVER delete a path that is %LOCALAPPDATA%\Maude itself
+# (parent of Data\) or that contains the Data\ subtree. The Data\ folder
+# holds user project work and must survive any teardown operation.
+$resolvedInstall = $InstallDir.TrimEnd('\').TrimEnd('/')
+$resolvedLocalRoot = (Join-Path $env:LOCALAPPDATA "Maude").TrimEnd('\').TrimEnd('/')
+$dataParent = $DataFolder.TrimEnd('\').TrimEnd('/')
+if ($resolvedInstall -ieq $resolvedLocalRoot) {
+    Write-Host "REFUSING to remove $InstallDir — this is the parent of Data\ and would delete user files." -ForegroundColor Red
+    Write-Host "  (the safe install dir is $env:LOCALAPPDATA\Maude\OS)" -ForegroundColor Yellow
+} elseif ((Test-Path -LiteralPath $dataParent) -and ($dataParent -like "$resolvedInstall*")) {
+    Write-Host "REFUSING to remove $InstallDir — it contains the Data\ folder with user files." -ForegroundColor Red
+} elseif (Test-Path -LiteralPath $InstallDir) {
     Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $InstallDir) {
         # Retry after a brief pause (WSL may need a moment to release locks)
@@ -222,8 +240,8 @@ if ($IncludeTemplate) {
             }
         }
     }
-    # Also remove the template install directory
-    $tplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
+    # Also remove the template install directory (new layout)
+    $tplDir = Join-Path $env:LOCALAPPDATA "Maude\Template"
     if (Test-Path -LiteralPath $tplDir) {
         Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $tplDir) {
@@ -232,6 +250,16 @@ if ($IncludeTemplate) {
         }
         if (-not (Test-Path -LiteralPath $tplDir)) {
             Write-Host "Removed $tplDir" -ForegroundColor Gray
+        }
+    }
+    # Also clean up the legacy template location if a pre-restructure
+    # install left one behind. Belt-and-braces; safe because this exact
+    # path is never user data.
+    $legacyTplDir = Join-Path $env:LOCALAPPDATA "Maude-Template"
+    if (Test-Path -LiteralPath $legacyTplDir) {
+        Remove-Item -LiteralPath $legacyTplDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $legacyTplDir)) {
+            Write-Host "Removed legacy $legacyTplDir" -ForegroundColor Gray
         }
     }
 } else {
@@ -249,7 +277,11 @@ if ($IncludeTemplate) {
 # phase; remove them on full uninstall.
 if ($Admin) {
     Write-Host "`n[admin] Removing Defender exclusion..." -ForegroundColor Green
+    # Both new-layout paths and legacy paths from previous installs.
     $exclusionPaths = @(
+        (Join-Path $env:LOCALAPPDATA "Maude\OS")
+        (Join-Path $env:LOCALAPPDATA "Maude\Template")
+        # Legacy paths from previous installer versions:
         (Join-Path $env:LOCALAPPDATA "Maude")
         (Join-Path $env:LOCALAPPDATA "Maude-Template")
     )
@@ -258,7 +290,7 @@ if ($Admin) {
             Remove-MpPreference -ExclusionPath $excl -ErrorAction Stop
             Write-Host "  Removed exclusion: $excl" -ForegroundColor Gray
         } catch {
-            Write-Host "  Could not remove $($excl): $($_.Exception.Message)" -ForegroundColor Gray
+            # Silent: the exclusion likely wasn't there, which is fine.
         }
     }
 } else {
@@ -267,8 +299,11 @@ if ($Admin) {
     $hasMaudeExclusion = $false
     try {
         $prefs = Get-MpPreference -ErrorAction Stop
-        $maudePath = Join-Path $env:LOCALAPPDATA "Maude"
-        if ($prefs.ExclusionPath -and ($prefs.ExclusionPath -contains $maudePath)) {
+        $newOsPath = Join-Path $env:LOCALAPPDATA "Maude\OS"
+        $legacyPath = Join-Path $env:LOCALAPPDATA "Maude"
+        if ($prefs.ExclusionPath -and (
+              ($prefs.ExclusionPath -contains $newOsPath) -or
+              ($prefs.ExclusionPath -contains $legacyPath))) {
             $hasMaudeExclusion = $true
         }
     } catch {

@@ -2,7 +2,7 @@
 
 A secure WSL2 sandbox for agentic AI coding. By default, WSL instances mount the entire Windows file system, giving both the user and any AI agent unrestricted access to OneDrive, Documents, and everything else on disk. Maude changes that.
 
-Maude creates a single `Maude` subfolder inside OneDrive (or `AppData\LocalLow` if OneDrive is not available) and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
+Maude creates a single `Maude` subfolder inside OneDrive (or `%LOCALAPPDATA%\Maude\Data\Maude` if OneDrive is not available or `-NoOneDrive` is used) and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
 
 Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder on OneDrive, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
 
@@ -59,9 +59,9 @@ This is also the command for every future reinstall — no admin needed.
 
 | Flag | Phase | Effect |
 |------|-------|--------|
-| *(default)* | user | `AppData\LocalLow\Maude` (new install) or the previous location (reinstall) |
+| *(default)* | user | `%LOCALAPPDATA%\Maude\Data\Maude` (new install) or the previous location (reinstall) |
 | `-OneDrive` | user | Shared folder in OneDrive (Business > Personal > generic) |
-| `-NoOneDrive` | user | Force `AppData\LocalLow\Maude` |
+| `-NoOneDrive` | user | Force `%LOCALAPPDATA%\Maude\Data\Maude` |
 | `-Noble` | both | Use Ubuntu 24.04 instead of the default 26.04 |
 | `-NoDefenderExclusion` | admin | Don't add the Windows Defender exclusion (use only if your security policy forbids it; reinstalls may then hit Defender locks and need to be re-run with `-Admin`) |
 | `-Release <tag>` | both | Pin to a tagged release and verify SHA-256 of every downloaded file against `light/checksums.txt` from that tag (see below) |
@@ -225,7 +225,7 @@ This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the l
 
 ### Shared folder
 
-`~/Maude` is mounted from your Windows host (OneDrive, or `AppData\LocalLow` with `-NoOneDrive`). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
+`~/Maude` is mounted from your Windows host (OneDrive, or `%LOCALAPPDATA%\Maude\Data\Maude` with `-NoOneDrive`). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
 
 ## Troubleshooting
 
@@ -295,14 +295,22 @@ Click the **Web UI** button again to confirm it's idle. The TUI runs a 1.5s post
 ```
 Windows host
   │
-  ├── C:\Users\you\OneDrive\...\Maude\          ← shared folder (OneDrive)
-  │   OR  AppData\LocalLow\Maude\              ← with -NoOneDrive
-  │       ├── Projects/                          ← coding projects (directly used by WSL)
-  │       ├── .claude/                           ← Claude Code config (symlinked from WSL)
-  │       └── .kanna/                            ← kanna web UI data (symlinked from WSL)
+  ├── %LOCALAPPDATA%\Maude\
+  │     ├── OS\                                  ← WSL Maude distro (ext4.vhdx)
+  │     ├── Template\                            ← Ubuntu template distro
+  │     └── Data\
+  │           └── Maude\                         ← shared folder (default, has icon)
+  │                 ├── Projects/                ← coding projects (directly used by WSL)
+  │                 ├── .claude/                 ← Claude Code config (symlinked from WSL)
+  │                 └── .kanna/                  ← kanna web UI data (symlinked from WSL)
+  │
+  ├── C:\Users\you\OneDrive\...\Maude\          ← alternative shared folder location
+  │       ├── Projects/                          ←   (with -OneDrive flag)
+  │       ├── .claude/
+  │       └── .kanna/
   │
   └── WSL2: Maude (Ubuntu 26.04, or 24.04 with -Noble)
-        ├── ~/Maude/           ← drvfs mount of shared folder
+        ├── ~/Maude/           ← drvfs mount of the shared folder
         │     ├── Projects/    ← coding projects (maude CLI)
         │     ├── .claude/     ← Claude Code config + skills
         │     └── .kanna/      ← kanna web UI data
@@ -314,6 +322,8 @@ Windows host
   Automount: disabled (no /mnt/c, /mnt/d, etc.)
   Only mount: ~/Maude via /etc/fstab drvfs entry
 ```
+
+**Why this layout?** `%LOCALAPPDATA%\Maude\Data\Maude` lives under medium-integrity-level `%LOCALAPPDATA%`, where Explorer reliably honours the `desktop.ini` custom-icon mechanism. The earlier `AppData\LocalLow` location was a Low-Integrity-Level folder that quietly rejected the `+S`/`+R` attribute change needed for icons. Teardown only removes `OS\` and `Template\` — the `Data\` subtree is preserved across teardown/reinstall.
 
 ## Future: macOS Support
 
