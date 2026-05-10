@@ -2011,6 +2011,17 @@ class PushToGithubScreen(ModalScreen[bool]):
     def _push_now(self, owner: str, repo: str,
                   url: str, visibility: str) -> tuple[bool, str]:
         cwd = str(self.project_path)
+        # If the project has no README.md (any case), seed one with the
+        # repo name as the H1 so GitHub has something to render.
+        readme_present = any(
+            (self.project_path / name).exists()
+            for name in ("README.md", "readme.md", "Readme.md", "README.MD")
+        )
+        if not readme_present:
+            try:
+                (self.project_path / "README.md").write_text(f"# {repo}\n")
+            except OSError:
+                pass  # not fatal — push will still work without it
         # Make sure the project has at least one commit, otherwise gh
         # repo create --push has nothing to send.
         log = subprocess.run(
@@ -2028,6 +2039,17 @@ class PushToGithubScreen(ModalScreen[bool]):
             if commit.returncode != 0:
                 return False, (commit.stderr or commit.stdout).strip() or \
                               "could not create initial commit"
+        elif not readme_present:
+            # Project already has commits but no README — stage and
+            # commit the new file so the push includes it.
+            subprocess.run(
+                ["git", "-C", cwd, "add", "README.md"],
+                capture_output=True, text=True, timeout=5,
+            )
+            subprocess.run(
+                ["git", "-C", cwd, "commit", "-m", "Add README.md"],
+                capture_output=True, text=True, timeout=15,
+            )
 
         # Does the remote already exist on GitHub?
         check = subprocess.run(
