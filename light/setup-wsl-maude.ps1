@@ -976,16 +976,18 @@ New-Item -ItemType Directory -Force -Path $kannaDir    | Out-Null
 New-Item -ItemType Directory -Force -Path $projectsDir | Out-Null
 Write-Host "Host folder: $HostFolder" -ForegroundColor Gray
 
-# Scrub any inherited Low Mandatory Integrity Level from the host folder
-# (and parents under %LOCALAPPDATA%\Maude\). This is necessary when a user
-# migrates data from AppData\LocalLow — the low-IL label rides along with
-# the moved files, and Explorer then refuses to honour desktop.ini, so
-# the custom folder icon never renders. Set Medium recursively on:
-#   * %LOCALAPPDATA%\Maude\Data         (inheritance source for Data\Maude)
-#   * the host folder itself
-# Both are no-ops on clean installs (the label simply isn't there).
-# Skipped for OneDrive paths, which are managed by OneDrive's own ACLs.
-if ($HostFolder -like "$env:LOCALAPPDATA\Maude\*") {
+# One-time scrub of any inherited Low Mandatory Integrity Level from the
+# host folder (and parents under %LOCALAPPDATA%\Maude\). Necessary when a
+# user migrates data from AppData\LocalLow — the low-IL label rides along
+# with the moved files, and Explorer then refuses to honour desktop.ini,
+# so the custom folder icon never renders.
+#
+# Gated by a marker file so this runs only once per machine. Delete the
+# marker to re-trigger (e.g., after migrating more data from a low-IL
+# location). The marker lives outside Data\ so teardown -IncludeTemplate
+# preserves it.
+$ilMarker = Join-Path $env:LOCALAPPDATA "Maude\.il-fixed"
+if (($HostFolder -like "$env:LOCALAPPDATA\Maude\*") -and (-not (Test-Path -LiteralPath $ilMarker))) {
     $localData = Join-Path $env:LOCALAPPDATA "Maude\Data"
     foreach ($p in @($localData, $HostFolder)) {
         if (Test-Path -LiteralPath $p) {
@@ -996,6 +998,8 @@ if ($HostFolder -like "$env:LOCALAPPDATA\Maude\*") {
             }
         }
     }
+    # Mark done so future reinstalls skip the icacls probe entirely.
+    New-Item -ItemType File -Path $ilMarker -Force | Out-Null
 }
 
 $iconSrc = Join-Path $ScriptDir "maude.png"
