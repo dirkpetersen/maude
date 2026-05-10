@@ -98,6 +98,7 @@ packages:
   - fail2ban
   - sudo
   - libpam-runtime
+  - dbus-user-session       # per-user systemd dependency (user@.service is masked in root-bootstrap.sh)
 
   # --- Editors ---
   - vim
