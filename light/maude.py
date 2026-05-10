@@ -696,6 +696,49 @@ def _strip_orphan_fi_before_keychain(text: str) -> str:
     return "".join(out)
 
 
+def _normalise_keychain_pipeline(text: str) -> str:
+    """Strip our blocks and the orphan-fi artefact in the right order.
+
+    Orphan-fi cleanup runs *first* — while every keychain marker is
+    still in place — because the stripper anchors the orphan against
+    the marker it sits above. If we stripped a sentinel block first,
+    the orphan would no longer have anything to anchor on and would
+    survive. Same logic for the legacy stripper.
+    """
+    text = _strip_orphan_fi_before_keychain(text)
+    text = _strip_sentinel_block(text)
+    text = _strip_legacy_keychain_block(text)
+    return text
+
+
+def fix_bashrc_orphan_fi() -> tuple[bool, str]:
+    """Standalone repair: remove the orphan fi from a previous buggy
+    wizard run. Re-emits the current sentinel block only if one (any
+    form) was already present, so we never plant a keychain block on
+    a system that didn't have one.
+    """
+    rc = Path.home() / ".bashrc"
+    try:
+        text = rc.read_text() if rc.exists() else ""
+    except OSError as err:
+        return False, f"could not read ~/.bashrc: {err}"
+
+    had_block = (KEYCHAIN_BEGIN in text) or (KEYCHAIN_LEGACY_MARKER in text)
+    new_text = _normalise_keychain_pipeline(text)
+    if had_block:
+        if not new_text.endswith("\n"):
+            new_text += "\n"
+        new_text += KEYCHAIN_BLOCK.lstrip("\n")
+
+    if new_text == text:
+        return False, "~/.bashrc is already clean."
+    try:
+        rc.write_text(new_text)
+        return True, "~/.bashrc fixed (orphan fi removed, block normalised)."
+    except OSError as err:
+        return False, f"could not write ~/.bashrc: {err}"
+
+
 def add_keychain_to_bashrc() -> bool:
     """Idempotently install the sentinel-bracketed keychain block.
 
@@ -709,13 +752,7 @@ def add_keychain_to_bashrc() -> bool:
     except OSError:
         return False
 
-    # Order matters: orphan-fi cleanup runs *before* the legacy block
-    # stripper, otherwise the legacy stripper has already removed the
-    # marker the orphan was attached to and it goes unnoticed.
-    new_text = text
-    new_text = _strip_sentinel_block(new_text)
-    new_text = _strip_orphan_fi_before_keychain(new_text)
-    new_text = _strip_legacy_keychain_block(new_text)
+    new_text = _normalise_keychain_pipeline(text)
     if not new_text.endswith("\n"):
         new_text += "\n"
     new_text += KEYCHAIN_BLOCK.lstrip("\n")
@@ -2202,6 +2239,12 @@ def run_wizard_only() -> int:
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--github":
         sys.exit(run_wizard_only())
+    if len(sys.argv) > 1 and sys.argv[1] == "--fix-bashrc":
+        # Used by `maude update` to repair the orphan-fi syntax error
+        # left in ~/.bashrc by an older buggy keychain stripper.
+        changed, msg = fix_bashrc_orphan_fi()
+        print(msg)
+        sys.exit(0 if (changed or "already clean" in msg) else 1)
     maybe_self_update()
     app = MaudeApp()
     app.run()

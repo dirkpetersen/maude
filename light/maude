@@ -218,6 +218,16 @@ update_all() {
     fi
     echo ""
 
+    # Repair the orphan-fi artefact in ~/.bashrc left by an older buggy
+    # `maude github` step 4. Uses the now-refreshed maude.py.
+    echo -e "${BOLD}Checking ~/.bashrc for stale keychain artefacts...${NC}"
+    if [[ -f "$MAUDE_PY" ]]; then
+        python3 "$MAUDE_PY" --fix-bashrc || rc=1
+    else
+        echo -e "${YELLOW}  maude.py not on disk; skipping${NC}"
+    fi
+    echo ""
+
     echo -e "${BOLD}Updating kanna-code...${NC}"
     if command -v bun >/dev/null 2>&1; then
         # `bun install -g <pkg>` always fetches the latest version.
