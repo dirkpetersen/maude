@@ -1909,7 +1909,7 @@ class MaudeApp(App):
     }
 
     #wiz-log {
-        height: 12;
+        height: 10;
         border: solid #6a5058;
         background: #1e1e1e;
         color: #a09090;
