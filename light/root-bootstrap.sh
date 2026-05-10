@@ -200,12 +200,14 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && command -v keychain >/dev/null 2>
     for _k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
         [[ -f "$_k" ]] && { _maude_key="$_k"; break; }
     done
+    # Step 1: attach to (or start) keychain's persistent ssh-agent without
+    # loading any key. Sets SSH_AUTH_SOCK in our env; never prompts.
+    eval "$(keychain --quiet --noask --eval --agents ssh)" 2>/dev/null || true
     if [[ -n "$_maude_key" ]]; then
-        # Friendlier prompt than ssh-add's bare default.
-        # keychain reuses an existing agent if one is already running,
-        # so the passphrase is asked only on the first login per WSL session.
-        if ! keychain --quick --noask --quiet --agents ssh --eval >/dev/null 2>&1 \
-              || ! ssh-add -l 2>/dev/null | grep -q .; then
+        # Step 2: is our key already loaded? Compare fingerprints.
+        _maude_fp=$(ssh-keygen -lf "$_maude_key" 2>/dev/null | awk '{print $2}')
+        if [[ -n "$_maude_fp" ]] && ! ssh-add -l 2>/dev/null | grep -qF "$_maude_fp"; then
+            # Not loaded → show a friendly banner before keychain prompts.
             G=$'\033[1;32m'; C=$'\033[1;36m'; B=$'\033[1;37m'; D=$'\033[2m'; N=$'\033[0m'
             printf '\n'
             printf '  %s🔑 Unlock your GitHub SSH key%s\n' "$G" "$N"
@@ -214,10 +216,9 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && command -v keychain >/dev/null 2>
             printf '  to load %s%s%s into ssh-agent for this session.\n' "$B" "$_maude_key" "$N"
             printf '  %s(Press Enter on a blank line to skip — you can unlock later from the TUI.)%s\n' "$D" "$N"
             printf '\n'
+            eval "$(keychain --quiet --eval --agents ssh "$_maude_key")" 2>/dev/null || true
         fi
-        eval "$(keychain --quiet --eval --agents ssh "$_maude_key")" 2>/dev/null || true
-    else
-        eval "$(keychain --quiet --eval --agents ssh)" 2>/dev/null || true
+        unset _maude_fp
     fi
     unset _maude_key _k
 fi
