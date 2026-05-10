@@ -34,9 +34,13 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "Installing kanna-code..."
 bun install -g kanna-code
-# Symlink kanna into ~/.local/bin so it's on PATH
-# (Bun's ~/.bun/bin may be stripped by maude-path.sh)
-if [[ -x "$HOME/.bun/bin/kanna" ]] && [[ ! -e "$HOME/.local/bin/kanna" ]]; then
+# Symlink bun + kanna into ~/.local/bin so they're on PATH
+# (Bun's ~/.bun/bin is stripped by maude-path.sh; kanna's shebang resolves
+# `bun` via env, so `bun` itself must be reachable too)
+if [[ -x "$HOME/.bun/bin/bun" ]]; then
+    ln -sfn "$HOME/.bun/bin/bun" "$HOME/.local/bin/bun"
+fi
+if [[ -x "$HOME/.bun/bin/kanna" ]]; then
     ln -sfn "$HOME/.bun/bin/kanna" "$HOME/.local/bin/kanna"
     echo "kanna symlinked to ~/.local/bin/"
 fi
