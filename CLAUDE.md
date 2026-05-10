@@ -173,7 +173,7 @@ A Textual-based full-screen TUI which is the default welcome experience for new 
 │  ──────────────             │ │ my-app    Modified: Apr 9, 2026    │ │
 │  Tips:                      │ │ ...                                │ │
 │   Screen split  Alt+Sh+±    │ └────────────────────────────────────┘ │
-│   Paste image  Alt+V        │                                        │
+│   Share image  drop file    │                                        │
 │   Voice  Win+H              │                                        │
 │  ──────────────             │                                        │
 │  Claude model               │                                        │

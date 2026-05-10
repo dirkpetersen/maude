@@ -2283,7 +2283,7 @@ class MaudeApp(App):
                 yield Label("Tips", id="tips-title")
                 yield Static(
                     "Screen split:  Alt+Shift+Plus | Minus\n"
-                    "Paste image:   Alt+V (in Claude Code)\n"
+                    "Share image:   drop into ~/Maude\n"
                     "Voice dictate: Win+H (Windows mic)",
                     id="tips",
                 )
