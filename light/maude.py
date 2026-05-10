@@ -483,6 +483,33 @@ def ssh_agent_running() -> bool:
     return r.returncode != 2
 
 
+def ensure_ssh_agent() -> bool:
+    """Start an ssh-agent if none is running and import SSH_AUTH_SOCK /
+    SSH_AGENT_PID into os.environ so subsequent ssh-add / git push
+    can use it. No-op if an agent is already reachable. Returns True
+    on success."""
+    if ssh_agent_running():
+        return True
+    if not shutil.which("ssh-agent"):
+        return False
+    try:
+        r = subprocess.run(
+            ["ssh-agent", "-s"], capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    if r.returncode != 0:
+        return False
+    # ssh-agent -s prints lines like:
+    #   SSH_AUTH_SOCK=/tmp/...; export SSH_AUTH_SOCK;
+    #   SSH_AGENT_PID=12345; export SSH_AGENT_PID;
+    for line in r.stdout.splitlines():
+        m = re.match(r"^([A-Z_]+)=([^;]+);", line)
+        if m:
+            os.environ[m.group(1)] = m.group(2)
+    return ssh_agent_running()
+
+
 def ssh_add_with_passphrase(key_path: Path, passphrase: str) -> tuple[bool, str]:
     """Add the key to ssh-agent using SSH_ASKPASS to feed `passphrase`."""
     if not key_path.exists():
@@ -2011,6 +2038,27 @@ class PushToGithubScreen(ModalScreen[bool]):
     def _push_now(self, owner: str, repo: str,
                   url: str, visibility: str) -> tuple[bool, str]:
         cwd = str(self.project_path)
+        # Guard against the SSH-key passphrase trap. If the user has an
+        # encrypted SSH key but no agent has it loaded, both
+        # `gh repo create --push` and `git push` will block forever
+        # waiting for a passphrase prompt that no one can type. We
+        # short-circuit with a clear error so the caller can pop the
+        # unlock modal instead.
+        if (SSH_KEY_PATH.exists()
+                and (not ssh_agent_running()
+                     or not ssh_key_in_agent(SSH_KEY_PATH))
+                and ssh_key_has_passphrase(SSH_KEY_PATH)):
+            return False, ("ssh key needs to be unlocked first — "
+                           "exit the TUI and run `menu` again, or "
+                           "click Setup Git(hub) to load the key.")
+        # Force ssh into batch mode for *this* push so a misconfigured
+        # state errors out fast (5–10s) instead of blocking on a
+        # passphrase prompt for 60+s.
+        push_env = {
+            **os.environ,
+            "GIT_SSH_COMMAND": "ssh -o BatchMode=yes "
+                               "-o StrictHostKeyChecking=accept-new",
+        }
         # If the project has no README.md (any case), seed one with the
         # repo name as the H1 so GitHub has something to render.
         readme_present = any(
@@ -2061,7 +2109,7 @@ class PushToGithubScreen(ModalScreen[bool]):
                 ["gh", "repo", "create", f"{owner}/{repo}",
                  f"--{visibility}", "--source", cwd, "--remote", "origin",
                  "--push"],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=180, env=push_env,
             )
             if create.returncode != 0:
                 return False, (create.stderr or create.stdout).strip() or \
@@ -2085,7 +2133,7 @@ class PushToGithubScreen(ModalScreen[bool]):
                 return False, (r.stderr or r.stdout).strip()
         push = subprocess.run(
             ["git", "-C", cwd, "push", "-u", "origin", "HEAD"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=180, env=push_env,
         )
         if push.returncode != 0:
             return False, (push.stderr or push.stdout).strip()
@@ -2103,6 +2151,13 @@ class PushToGithubScreen(ModalScreen[bool]):
                 self.query_one(sel).disabled = False
             except Exception:
                 pass
+        # If the failure was the SSH-key-not-loaded case, auto-pop the
+        # unlock modal so the user can fix it without leaving the wizard.
+        if "ssh key needs to be unlocked" in msg.lower():
+            self._set_status("[yellow]SSH key not loaded — unlock first.[/]")
+            ensure_ssh_agent()
+            self.app.push_screen(SSHKeyUnlockScreen())
+            return
         last = (msg.splitlines()[-1] if msg else "push failed").strip()
         self._set_status(f"[bold red]{last}[/]")
 
@@ -2780,8 +2835,14 @@ class MaudeApp(App):
     def _maybe_prompt_ssh_unlock(self) -> None:
         if not SSH_KEY_PATH.exists():
             return
-        if not ssh_agent_running():
-            return  # nothing to load into; keychain probably hasn't run
+        # Start an agent if one isn't already exposed in the env. On a
+        # fresh terminal `keychain` may not have run yet (the .bashrc
+        # block executes before `maude tui`, but the wizard's keychain
+        # block was just appended and won't take effect until the next
+        # login). Spinning up our own ssh-agent is cheap and keeps git
+        # push from blocking on a passphrase prompt.
+        if not ensure_ssh_agent():
+            return
         if ssh_key_in_agent(SSH_KEY_PATH):
             return  # already loaded
         if not ssh_key_has_passphrase(SSH_KEY_PATH):
@@ -2928,6 +2989,9 @@ class MaudeApp(App):
     def _on_git_setup_done(self, completed: bool) -> None:
         if completed:
             self.notify("Git setup complete.")
+            # Brand-new key — the agent is empty in the current process.
+            # Prompt now so subsequent `git push` in this session works.
+            self.call_after_refresh(self._maybe_prompt_ssh_unlock)
         else:
             self.notify("Git setup cancelled.")
 
