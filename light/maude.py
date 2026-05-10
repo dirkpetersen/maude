@@ -596,53 +596,134 @@ def install_keychain_via_mom() -> tuple[bool, str]:
     return True, "keychain installed."
 
 
-# Start an empty ssh-agent on shell login. The Maude TUI loads the key
-# (with a passphrase prompt) on startup, so we deliberately don't pass
-# a key file here — otherwise keychain would prompt at .bashrc time,
-# before the TUI ever appears.
-KEYCHAIN_BLOCK = """
+# Sentinel-bracketed block so re-running the wizard can find and replace
+# the exact same range without parsing bash. We start an empty ssh-agent
+# on shell login; the Maude TUI loads the key (with a passphrase prompt)
+# on startup, so we deliberately don't pass a key file here — otherwise
+# keychain would prompt at .bashrc time, before the TUI ever appears.
+KEYCHAIN_BEGIN = "# >>> Maude keychain BEGIN"
+KEYCHAIN_END   = "# >>> Maude keychain END"
+KEYCHAIN_BLOCK = f"""
+{KEYCHAIN_BEGIN}
 # Maude: ssh-agent via keychain (TUI loads the key)
 if command -v keychain >/dev/null 2>&1; then
     eval "$(keychain --quiet --eval --agents ssh)"
 fi
+{KEYCHAIN_END}
 """
 
-# Older versions of this wizard appended a block that auto-loaded
-# id_ed25519. Detect it so we can replace it on re-run.
-KEYCHAIN_BLOCK_LEGACY_MARKER = "Maude: ssh-agent via keychain"
+# Marker line emitted by older versions of this wizard, before sentinels.
+KEYCHAIN_LEGACY_MARKER = "Maude: ssh-agent via keychain"
+
+
+def _strip_sentinel_block(text: str) -> str:
+    """Remove our `# >>> Maude keychain BEGIN … END` block if present."""
+    if KEYCHAIN_BEGIN not in text:
+        return text
+    out: list[str] = []
+    inside = False
+    for line in text.splitlines(keepends=True):
+        if not inside and KEYCHAIN_BEGIN in line:
+            inside = True
+            continue
+        if inside:
+            if KEYCHAIN_END in line:
+                inside = False
+            continue
+        out.append(line)
+    return "".join(out)
+
+
+def _strip_legacy_keychain_block(text: str) -> str:
+    """Remove the older unmarked block.
+
+    The legacy block looked like:
+        # Maude: ssh-agent via keychain
+        if command -v keychain ...; then
+            if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
+                eval "$(keychain ... id_ed25519)"
+            fi
+        fi
+    Two nested `if`s, two `fi`s. The earlier stripper exited on the
+    first `fi`, leaving the outer one orphaned and breaking bash. We
+    track if/fi depth so we close cleanly even with nested blocks.
+    """
+    if KEYCHAIN_LEGACY_MARKER not in text:
+        return text
+    out: list[str] = []
+    skipping = False
+    depth = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if not skipping and KEYCHAIN_LEGACY_MARKER in line:
+            skipping = True
+            depth = 0
+            continue
+        if skipping:
+            if stripped.startswith("if "):
+                depth += 1
+            elif stripped == "fi":
+                depth -= 1
+                if depth <= 0:
+                    skipping = False
+                    continue   # also drop this closing fi
+            continue
+        out.append(line)
+    return "".join(out)
+
+
+def _strip_orphan_fi_before_keychain(text: str) -> str:
+    """Remove a stray `fi` line that sits right before a Maude keychain
+    block. This is the artefact left behind by the older buggy stripper
+    that didn't count nesting; we clean it up on the way through."""
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if lines[i].strip() == "fi":
+            j = i + 1
+            while j < n and lines[j].strip() == "":
+                j += 1
+            if j < n and (KEYCHAIN_BEGIN in lines[j]
+                          or KEYCHAIN_LEGACY_MARKER in lines[j]):
+                # Skip this orphan fi (and absorb the leading whitespace
+                # if any).
+                i += 1
+                continue
+        out.append(lines[i])
+        i += 1
+    return "".join(out)
 
 
 def add_keychain_to_bashrc() -> bool:
-    """Ensure the current keychain block is present in ~/.bashrc.
+    """Idempotently install the sentinel-bracketed keychain block.
 
-    Removes any earlier marker'd block first so we don't accumulate
-    duplicates and so the new (no-key) form supersedes the old one.
+    Strips any existing sentinel block and any unmarked legacy block,
+    cleans up the orphan-`fi` artefact left by an earlier buggy
+    stripper, then appends the current block.
     """
     rc = Path.home() / ".bashrc"
     try:
         text = rc.read_text() if rc.exists() else ""
     except OSError:
         return False
-    if KEYCHAIN_BLOCK.strip() in text:
+
+    # Order matters: orphan-fi cleanup runs *before* the legacy block
+    # stripper, otherwise the legacy stripper has already removed the
+    # marker the orphan was attached to and it goes unnoticed.
+    new_text = text
+    new_text = _strip_sentinel_block(new_text)
+    new_text = _strip_orphan_fi_before_keychain(new_text)
+    new_text = _strip_legacy_keychain_block(new_text)
+    if not new_text.endswith("\n"):
+        new_text += "\n"
+    new_text += KEYCHAIN_BLOCK.lstrip("\n")
+
+    if new_text == text:
         return True
-    # Strip any prior block that started with our marker comment.
-    if KEYCHAIN_BLOCK_LEGACY_MARKER in text:
-        out_lines: list[str] = []
-        skipping = False
-        for line in text.splitlines(keepends=True):
-            if not skipping and KEYCHAIN_BLOCK_LEGACY_MARKER in line:
-                skipping = True
-                continue
-            if skipping:
-                # Stop skipping at the first blank line or the next 'fi'
-                # at column 0 — the original block ends with `fi`.
-                if line.strip() == "fi":
-                    skipping = False
-                continue
-            out_lines.append(line)
-        text = "".join(out_lines).rstrip() + "\n"
     try:
-        rc.write_text(text + KEYCHAIN_BLOCK)
+        rc.write_text(new_text)
         return True
     except OSError:
         return False
@@ -944,7 +1025,13 @@ class GitSetupWizard(ModalScreen[bool]):
         self.query_one("#wiz-next",  Button).label = next_label
 
     def _log(self, msg: str) -> None:
-        self.query_one("#wiz-log", Log).write_line(msg)
+        log = self.query_one("#wiz-log", Log)
+        log.write_line(msg)
+        # auto_scroll=True on the Log already calls scroll_end after each
+        # write_line, but doing it explicitly here is belt-and-suspenders
+        # for the case where writes come from a worker thread and the
+        # widget hasn't measured yet.
+        log.scroll_end(animate=False)
 
     async def _render_step(self) -> None:
         # IMPORTANT: remove_children() returns an AwaitRemove and only
@@ -1785,7 +1872,7 @@ class MaudeApp(App):
     }
 
     #wiz-log {
-        height: 16;
+        height: 7;
         border: solid #6a5058;
         background: #1e1e1e;
         color: #a09090;
