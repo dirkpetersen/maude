@@ -2059,7 +2059,7 @@ class MaudeApp(App):
     #creds-box {
         padding: 2 3;
         width: 90;
-        height: 30;
+        height: 38;
         border: heavy #b87878;
         background: #242424;
     }
