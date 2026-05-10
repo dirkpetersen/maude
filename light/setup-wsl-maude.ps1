@@ -623,29 +623,100 @@ if ($Admin) {
         Write-Host "'$templateDistro' built with packages." -ForegroundColor Gray
     }
 
-    # ── Step 4 (admin): Permanent Defender exclusion for Maude install path ──
-    # User-phase imports of large rootfs tarballs can hit Defender real-time
-    # scanning lock-ups on AV-aggressive corporate machines. A permanent
-    # exclusion for the Maude install location avoids that without needing
-    # admin during reinstall.
+    # ── Step 4 (admin): Defender exclusion (best-effort) ──
+    # During first-time install, the Path B fallback (Canonical rootfs
+    # download) can hit Defender real-time scanning lock-ups; an exclusion
+    # avoids that. The user phase uses `wsl --import` from a local tarball,
+    # which AV scanning rarely blocks — so a missing exclusion here is NOT
+    # fatal to reinstalls. We probe Defender's status first and tailor the
+    # message accordingly:
+    #
+    #   * Defender active (AMRunningMode=Normal) → add exclusion
+    #   * Defender passive / disabled (third-party AV is the active engine)
+    #     → skip cleanly with an informational note (the user can't change
+    #       this from a per-machine PowerShell)
+    #   * Defender service unavailable (0x800106ba etc.) → skip with a
+    #     clear note, not a scary warning
     Write-Host "`n[4/4] Configuring Windows Defender exclusion..." -ForegroundColor Green
+
+    function Get-DefenderState {
+        # Returns one of: 'active', 'passive', 'unavailable', 'tamper-protected', 'unknown'
+        # Plus an optional detail message.
+        try {
+            $status = Get-MpComputerStatus -ErrorAction Stop
+        } catch {
+            return [PSCustomObject]@{ State = 'unavailable'; Detail = "Defender service not reachable ($($_.Exception.Message))" }
+        }
+        $mode = if ($status.PSObject.Properties['AMRunningMode']) { $status.AMRunningMode } else { '' }
+        $av   = if ($status.PSObject.Properties['AntivirusEnabled']) { $status.AntivirusEnabled } else { $true }
+        $rt   = if ($status.PSObject.Properties['RealTimeProtectionEnabled']) { $status.RealTimeProtectionEnabled } else { $true }
+        $tp   = if ($status.PSObject.Properties['IsTamperProtected']) { $status.IsTamperProtected } else { $false }
+        if ($mode -and $mode -ne 'Normal') {
+            return [PSCustomObject]@{ State = 'passive'; Detail = "Defender is in '$mode' mode (third-party AV is the active engine)" }
+        }
+        if (-not $av -or -not $rt) {
+            return [PSCustomObject]@{ State = 'passive'; Detail = "Defender is disabled (third-party AV likely active)" }
+        }
+        if ($tp) {
+            # Tamper-protected machines may still accept exclusions if the policy
+            # allows them; we'll let Add-MpPreference attempt and fall back.
+            return [PSCustomObject]@{ State = 'active'; Detail = 'Tamper Protection is enabled; exclusion may be policy-blocked' }
+        }
+        return [PSCustomObject]@{ State = 'active'; Detail = '' }
+    }
+
     if ($NoDefenderExclusion) {
-        Write-Host "Skipped (-NoDefenderExclusion). Reinstalls may need to be re-run with -Admin if Defender locks the import." -ForegroundColor Yellow
+        Write-Host "Skipped (-NoDefenderExclusion)." -ForegroundColor Yellow
     } else {
         $exclusionPaths = @(
             (Join-Path $env:LOCALAPPDATA "Maude")
             (Join-Path $env:LOCALAPPDATA "Maude-Template")
         )
-        try {
-            foreach ($excl in $exclusionPaths) {
-                Add-MpPreference -ExclusionPath $excl -ErrorAction Stop
+        $defender = Get-DefenderState
+        switch ($defender.State) {
+            'active' {
+                if ($defender.Detail) { Write-Host "Note: $($defender.Detail)" -ForegroundColor Gray }
+                $allOk = $true
+                $errMsg = $null
+                foreach ($excl in $exclusionPaths) {
+                    try {
+                        Add-MpPreference -ExclusionPath $excl -ErrorAction Stop
+                    } catch {
+                        $allOk = $false
+                        $errMsg = $_.Exception.Message
+                        break
+                    }
+                }
+                if ($allOk) {
+                    Write-Host "Added Defender exclusions:" -ForegroundColor Gray
+                    foreach ($excl in $exclusionPaths) { Write-Host "  $excl" -ForegroundColor Gray }
+                    Write-Host "(remove with: Remove-MpPreference -ExclusionPath <path>)" -ForegroundColor Gray
+                } else {
+                    # Common on managed machines: Tamper Protection or MDM policy
+                    # blocks the call (e.g., 0x800106ba RPC failure).
+                    Write-Host "Could not add Defender exclusion: $errMsg" -ForegroundColor Yellow
+                    Write-Host "This is expected on managed machines with Tamper Protection or MDM-controlled" -ForegroundColor Gray
+                    Write-Host "AV policy. The user phase doesn't typically need the exclusion (it imports" -ForegroundColor Gray
+                    Write-Host "from a local tarball, which AV rarely blocks). If reinstalls do fail, ask" -ForegroundColor Gray
+                    Write-Host "your IT/AV admin to add an exclusion for these paths:" -ForegroundColor Gray
+                    foreach ($excl in $exclusionPaths) { Write-Host "  $excl" -ForegroundColor Gray }
+                }
             }
-            Write-Host "Added Defender exclusions:" -ForegroundColor Gray
-            foreach ($excl in $exclusionPaths) { Write-Host "  $excl" -ForegroundColor Gray }
-            Write-Host "(remove with: Remove-MpPreference -ExclusionPath <path>)" -ForegroundColor Gray
-        } catch {
-            Write-Host "Could not add Defender exclusion: $_" -ForegroundColor Yellow
-            Write-Host "User-phase reinstalls may fail; re-run with -Admin if so." -ForegroundColor Yellow
+            'passive' {
+                Write-Host "Skipped: $($defender.Detail)." -ForegroundColor Gray
+                Write-Host "Defender exclusions don't apply when Defender is in passive mode. Your" -ForegroundColor Gray
+                Write-Host "active AV (CrowdStrike, SentinelOne, Defender ATP, etc.) controls scanning." -ForegroundColor Gray
+                Write-Host "If reinstalls fail with file-lock errors, ask your IT/AV admin to add an" -ForegroundColor Gray
+                Write-Host "exclusion for these paths:" -ForegroundColor Gray
+                foreach ($excl in $exclusionPaths) { Write-Host "  $excl" -ForegroundColor Gray }
+            }
+            'unavailable' {
+                Write-Host "Skipped: $($defender.Detail)." -ForegroundColor Gray
+                Write-Host "(Common on Windows Server SKUs or when Defender service is stopped.)" -ForegroundColor Gray
+            }
+            default {
+                Write-Host "Skipped: could not determine Defender state." -ForegroundColor Gray
+            }
         }
     }
 

@@ -124,14 +124,22 @@ The installer checks free space on C: at startup and prints it in gigabytes:
 
 ## Uninstall
 
+The default teardown runs as your normal user — **no admin/UAC needed**. From any PowerShell:
+
 ```powershell
 curl.exe -sLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\teardown-wsl-maude.ps1
 ```
 
-This removes the Maude distro, Windows Terminal profile, and desktop shortcut. The template is kept for fast reinstalls. To remove everything including the template:
+This removes the Maude distro, Windows Terminal profile, desktop shortcut, and Quick Access pin. The Ubuntu template is kept for fast reinstalls. To remove the template too:
 
 ```powershell
-curl.exe -sLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\teardown-wsl-maude.ps1 -IncludeTemplate
+... teardown-wsl-maude.ps1 -IncludeTemplate
+```
+
+For full machine cleanup (also removes the Windows Defender exclusion the admin phase added — requires elevation):
+
+```powershell
+... teardown-wsl-maude.ps1 -Admin -IncludeTemplate
 ```
 
 ## Usage
