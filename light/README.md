@@ -26,24 +26,9 @@ or a simple CLI
 
 ## Install
 
-Maude has two phases:
+The hard prerequisite for Maude is WSL2 itself. Enabling the WSL Windows feature is the only step that genuinely needs admin — everything else (downloading Ubuntu, building the template, importing the Maude distro, setting up the shared folder, configuring Windows Terminal) is per-user state and runs without elevation.
 
-- **Admin phase** (`-Admin`) — first-time machine setup. Installs WSL2 and Windows Terminal (if missing) and builds the Ubuntu template with all packages baked in. **Runs once per machine** (or when refreshing to a new Ubuntu version).
-- **User phase** (no flag, no admin) — runs on every install **and reinstall**. Imports the Ubuntu template as the `Maude` distro, runs both bootstraps, sets up the shared folder, Windows Terminal profile, and desktop shortcut.
-
-Once the admin phase has run on a machine, **all reinstalls are admin-free** — no UAC prompt, no elevation. Just one user-phase command.
-
-### First-time install (admin phase, ~5 minutes)
-
-Open **PowerShell as Administrator** (right-click → "Run as Administrator") and run:
-
-```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Admin
-```
-
-This installs WSL2, installs Windows Terminal, and builds the Ubuntu template (with all 90+ packages pre-installed). It also adds a Windows Defender exclusion for the Maude install path so future reinstalls aren't blocked by AV scanning. When it finishes, **close the elevated window**.
-
-### Install / Reinstall (user phase, ~30 seconds)
+### If WSL2 is already installed (most modern Windows 10/11)
 
 Open a **non-elevated** PowerShell and run:
 
@@ -51,7 +36,23 @@ Open a **non-elevated** PowerShell and run:
 curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
 
-This is also the command for every future reinstall — no admin needed.
+The first run takes ~3–5 minutes (downloading Ubuntu and baking in packages — the template build). Future reinstalls reuse the template and complete in ~30 seconds.
+
+> **Tip:** to check if WSL is installed, run `wsl --status` in any PowerShell. If you see version info, you're good. If you see "Windows Subsystem for Linux has no installed distributions" or no command, you need the admin step below.
+
+### If WSL2 is NOT installed yet (rare, admin once)
+
+Open **PowerShell as Administrator** (right-click → "Run as Administrator") and run the admin phase:
+
+```powershell
+curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Admin
+```
+
+This installs WSL2, installs Windows Terminal, builds the Ubuntu template, and adds a Windows Defender exclusion for the Maude install path. When it finishes, **close the elevated window** and run the non-elevated user-phase command above to finish setup.
+
+### Reinstall
+
+Just the non-elevated user-phase command — no admin, no UAC.
 
 > **Note:** Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`. Piping via `iex` may be blocked by antivirus on corporate machines; the file-based approach above works reliably everywhere.
 
@@ -63,7 +64,8 @@ This is also the command for every future reinstall — no admin needed.
 | `-OneDrive` | user | Shared folder in OneDrive (Business > Personal > generic) |
 | `-NoOneDrive` | user | Force `%LOCALAPPDATA%\Maude\Data\Maude` |
 | `-Noble` | both | Use Ubuntu 24.04 instead of the default 26.04 |
-| `-NoDefenderExclusion` | admin | Don't add the Windows Defender exclusion (use only if your security policy forbids it; reinstalls may then hit Defender locks and need to be re-run with `-Admin`) |
+| `-Admin` | admin | First-time install on a machine where WSL2 isn't yet installed. Required only for the WSL Windows-feature install + Windows Terminal install + Defender exclusion. Once those are present, all subsequent installs run unelevated. |
+| `-NoDefenderExclusion` | admin | Don't add the Windows Defender exclusion (use only if your security policy forbids it; user-phase template builds may then hit AV locks) |
 | `-Release <tag>` | both | Pin to a tagged release and verify SHA-256 of every downloaded file against `light/checksums.txt` from that tag (see below) |
 
 Flags can be combined, e.g. `-OneDrive -Noble`.
@@ -78,11 +80,8 @@ To upgrade from Ubuntu 24.04 to 26.04, or to pick up upstream package changes ba
 # 1. Tear down (with -IncludeTemplate to remove the existing template)
 ... teardown-wsl-maude.ps1 -IncludeTemplate
 
-# 2. Admin phase rebuilds the template
-... setup-wsl-maude.ps1 -Admin -Noble       # (or omit -Noble for 26.04)
-
-# 3. User phase imports as Maude
-... setup-wsl-maude.ps1
+# 2. User phase rebuilds the template AND imports it as Maude (no admin)
+... setup-wsl-maude.ps1 -Noble       # (or omit -Noble for 26.04)
 ```
 
 ### Verified install (recommended for production)
@@ -90,10 +89,10 @@ To upgrade from Ubuntu 24.04 to 26.04, or to pick up upstream package changes ba
 `-Release main` (the default) downloads the latest scripts from `main` without checksum verification. For production, pin to a tagged release:
 
 ```powershell
-# Admin phase
+# Add -Admin only if WSL2 itself isn't installed yet:
 ... setup-wsl-maude.ps1 -Admin -Release v0.4.0
 
-# User phase
+# Otherwise just the user phase:
 ... setup-wsl-maude.ps1 -Release v0.4.0
 ```
 
@@ -101,18 +100,19 @@ When `-Release` is anything other than `main`, the script downloads `light/check
 
 ### What each phase does
 
-**Admin phase** (rare):
-1. Install WSL2 and the VM Platform Windows feature (if missing)
+**Admin phase** (only when WSL2 isn't yet installed):
+1. Install WSL2 and the VM Platform Windows feature
 2. Install Windows Terminal (if missing)
 3. Build the Ubuntu template: download Ubuntu, bake in all packages from `packages/ubuntu-packages.yaml`
 4. Add a permanent Windows Defender exclusion for the Maude install path
 
-**User phase** (every install/reinstall):
-1. `wsl --export` the template, `wsl --import` it as `Maude`
-2. Run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen)
-3. Create the `Maude` shared folder and pin it to Quick Access
-4. Run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher)
-5. Configure the Windows Terminal profile and desktop shortcut
+**User phase** (default; every install/reinstall, no admin):
+1. If the Ubuntu template doesn't exist yet, build it (Store install or Canonical download — per-user, no admin)
+2. `wsl --export` the template, `wsl --import` it as `Maude`
+3. Run root-level setup (user creation, sandbox isolation, mom, PATH, welcome screen)
+4. Create the `Maude` shared folder and pin it to Quick Access
+5. Run user-level setup (dev-station, Bun, kanna-code, Claude Code skills, maude launcher)
+6. Configure the Windows Terminal profile and desktop shortcut
 
 ### Disk space
 

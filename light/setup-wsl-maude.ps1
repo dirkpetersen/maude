@@ -4,22 +4,25 @@
     Sets up a WSL2 Ubuntu dev environment named "Maude".
 
 .DESCRIPTION
-    Two-phase installer optimised for the common case of frequent
-    reinstalls without admin elevation:
+    Two-phase installer where the admin phase is only needed when WSL
+    itself (a Windows feature) needs installing or upgrading. On any
+    machine where WSL is already present, the user phase can do the
+    entire install — including building the Ubuntu template — without
+    elevation.
 
-      Admin phase (-Admin, RARELY run — first-time machine setup):
+      Admin phase (-Admin):
         - Install WSL2 (and the VM Platform Windows feature) if missing
         - Install Windows Terminal if missing
-        - Build the Ubuntu template distro: download Ubuntu, bake in all
-          packages from packages/ubuntu-packages.yaml. The template is
-          a one-time, slow (~3-5 min) build that's reused on every
-          subsequent reinstall.
+        - Build the Ubuntu template distro (skipped if it already exists)
         - (Optional, default on) Add a permanent Windows Defender
           exclusion for the Maude install path so user-phase imports
           aren't blocked by AV scanning. Disable with -NoDefenderExclusion.
+        Run this on a fresh machine, or any time WSL/WT is missing.
 
-      User phase (no flag, runs on EVERY install AND reinstall):
-        - Verify WSL + Ubuntu template are present (else: "run -Admin first")
+      User phase (no flag, no admin):
+        - Verify WSL is present (else: "run -Admin once")
+        - If the Ubuntu template is missing, build it here (per-user
+          operation — Store install or Canonical download)
         - wsl --export the template, wsl --import it as Maude
         - Run root-bootstrap.sh inside Maude (user creation, /etc/wsl.conf,
           fstab mount, mom, PATH, sandbox isolation)
@@ -29,10 +32,12 @@
           Claude Code config, maude launcher)
         - Configure the Windows Terminal profile and desktop shortcut
 
-    Why split this way? Reinstalling Maude (re-importing from the
-    template) is the common operation; building the template from
-    scratch is rare. Putting all the rare admin-required work in the
-    admin phase means reinstalls are admin-free — no UAC prompt at all.
+    Why split this way? Building the template via Store install or
+    Canonical-download `wsl --import` is per-user state (HKCU\...\Lxss),
+    so it doesn't strictly need admin. The only hard admin step is
+    enabling the WSL Windows feature itself. By moving the template
+    build into the user phase, machines that already have WSL installed
+    can do the entire Maude setup with zero UAC prompts.
 
     Security note: with root-bootstrap.sh running unelevated in the user
     phase, the WSL-interop privilege-escalation TOCTOU vector that the
@@ -45,7 +50,7 @@
     /home/maude/Maude via drvfs + /etc/fstab.
 
 .NOTES
-    First-time install on a machine:
+    Machine WITHOUT WSL installed yet (rare, requires admin once):
 
         # 1. From an elevated PowerShell (one-time, ~5 min):
         Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -53,14 +58,20 @@
 
         # 2. From a NON-elevated PowerShell:
         .\setup-wsl-maude.ps1                # Ubuntu 26.04, local data folder
+
+    Machine WITH WSL already installed (most users):
+
+        # Just run the user phase — it'll build the template if missing:
+        .\setup-wsl-maude.ps1                # Ubuntu 26.04, local data folder
         .\setup-wsl-maude.ps1 -OneDrive      # Shared folder in OneDrive
         .\setup-wsl-maude.ps1 -NoOneDrive    # Force local %LOCALAPPDATA%\Maude\Data\Maude
 
-    Subsequent reinstalls: just the user-phase command. No admin needed.
+    Subsequent reinstalls (template already built): just the user-phase
+    command. Completes in ~30 seconds, no admin.
 
     Refresh template (e.g., new Ubuntu version):
         .\teardown-wsl-maude.ps1 -IncludeTemplate
-        .\setup-wsl-maude.ps1 -Admin -Noble  # then user-phase command
+        .\setup-wsl-maude.ps1 -Noble         # rebuilds template, no admin
 
     Verified install (recommended in production):
         .\setup-wsl-maude.ps1 -Admin -Release v0.4.0
@@ -221,6 +232,200 @@ function Find-InstalledTemplate {
     if (Test-WslDistro $preferred) { return $preferred }
     if (Test-WslDistro $alt)       { return $alt }
     return $null
+}
+
+# ── Build-Template: download Ubuntu, install packages, leave it stopped ──
+# Used by both the admin phase (first-time machine setup) and the user
+# phase (when WSL+WT are already present and the template is missing).
+# Add-MpPreference and Stop-Service LxssManager are admin-only fallbacks;
+# they are skipped silently when $IsElevated is $false. The Path A Store
+# install and Path B Canonical-download paths are both per-user and work
+# unelevated.
+function Build-Template {
+    param(
+        [Parameter(Mandatory)][string]$TemplateName,
+        [Parameter(Mandatory)][bool]$IsNoble,
+        [Parameter(Mandatory)][string]$UbuntuVersion,
+        [Parameter(Mandatory)][string]$UbuntuLabel,
+        [Parameter(Mandatory)][string]$ScriptDir,
+        [Parameter(Mandatory)][bool]$IsElevated
+    )
+
+    if (Test-WslDistro $TemplateName) {
+        Write-Host "'$TemplateName' already exists; nothing to build." -ForegroundColor Gray
+        return $true
+    }
+
+    # Parse package list from packages/ubuntu-packages.yaml
+    $packagesYaml = Join-Path $ScriptDir "..\packages\ubuntu-packages.yaml"
+    $packageList = ""
+    if (Test-Path -LiteralPath $packagesYaml) {
+        $packages = @(
+            (Get-Content -LiteralPath $packagesYaml) |
+                Where-Object { $_ -match '^\s+-\s+\S' } |
+                ForEach-Object { ($_ -replace '^\s+-\s+', '' -replace '\s*#.*$', '').Trim() } |
+                Where-Object { $_ -ne "" }
+        )
+        $packageList = ($packages -join "`n") -replace "`r", ""
+        Write-Host "  $($packages.Count) packages from ubuntu-packages.yaml"
+    }
+
+    # Detect --name support by parsing wsl --help output.
+    $wslHelp = (wsl --help 2>&1) -replace "`0", "" -join "`n"
+    $hasNameFlag = $wslHelp -match '--name'
+    Write-Host "WSL --name flag: $(if ($hasNameFlag) {'supported'} else {'not supported'})" -ForegroundColor Gray
+
+    $installed = $false
+
+    if ($hasNameFlag) {
+        # ── Path A: Modern WSL with --name (Store install) ──
+        $onlineList = (wsl --list --online 2>&1) -join "`n"
+        $candidates = @()
+        if ($onlineList -match "Ubuntu-$UbuntuVersion") { $candidates += "Ubuntu-$UbuntuVersion" }
+        if ($IsNoble) {
+            if ($onlineList -match 'Ubuntu\b') { $candidates += "Ubuntu" }
+            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$UbuntuVersion", "Ubuntu") }
+        }
+        if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$UbuntuVersion") }
+
+        foreach ($distro in $candidates) {
+            Write-Host "Trying Store install: '$distro' as '$TemplateName'..." -ForegroundColor Gray
+            $out = (wsl --install -d $distro --name $TemplateName --no-launch 2>&1) -replace "`0","" -join "`n"
+            if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+            if ($out -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
+                Write-Host "Hyper-V/VM Platform not available, skipping Store install." -ForegroundColor Yellow
+                wsl --terminate $TemplateName 2>&1 | Out-Null
+                wsl --unregister $TemplateName 2>&1 | Out-Null
+                break
+            }
+            wsl --unregister $TemplateName 2>&1 | Out-Null
+            wsl --install -d $distro --name $TemplateName --no-launch 2>$null
+            if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+            Write-Host "'$distro' not available via Store, trying next..." -ForegroundColor Yellow
+        }
+    }
+
+    # ── Path B: Download from Canonical + wsl --import ──
+    if (-not $installed) {
+        if ($hasNameFlag) {
+            Write-Host "Store install failed. Downloading from Canonical..." -ForegroundColor Yellow
+        } else {
+            Write-Host "Downloading $UbuntuLabel WSL image from Canonical..." -ForegroundColor Yellow
+        }
+        if ($IsNoble) {
+            $rootfsUrl = "https://releases.ubuntu.com/noble/ubuntu-24.04.4-wsl-amd64.wsl"
+        } else {
+            $rootfsUrl = "https://releases.ubuntu.com/resolute/ubuntu-26.04-wsl-amd64.wsl"
+        }
+        $rootfsFile = Join-Path $env:TEMP "ubuntu-$UbuntuVersion-wsl-amd64.wsl"
+        Write-Host "Downloading ~375 MB (this may take a few minutes)..."
+        curl.exe -L -o $rootfsFile "$rootfsUrl"
+        if (-not (Test-Path -LiteralPath $rootfsFile) -or (Get-Item -LiteralPath $rootfsFile).Length -lt 100MB) {
+            Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
+            return $false
+        }
+
+        # Defender exclusions during the import (admin-only; best-effort).
+        # When unelevated, skip — the import usually succeeds anyway because
+        # Defender real-time scanning only sometimes locks the rootfs file.
+        $defenderExclusions = @($rootfsFile, (Join-Path $env:LOCALAPPDATA "Maude\Template"))
+        if ($IsElevated) {
+            foreach ($excl in $defenderExclusions) {
+                Add-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
+            }
+        }
+
+        wsl --terminate $TemplateName 2>&1 | Out-Null
+        wsl --unregister $TemplateName 2>&1 | Out-Null
+        $tplDir = Join-Path $env:LOCALAPPDATA "Maude\Template"
+        if (Test-Path -LiteralPath $tplDir) {
+            Start-Sleep -Seconds 2
+            Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        # File-lock fallback: stopping LxssManager requires admin. When
+        # unelevated, just skip the service-restart and let Remove-Item fail
+        # gracefully if files are still locked.
+        if ((Test-Path -LiteralPath $tplDir) -and $IsElevated) {
+            Write-Host "Files locked. Restarting WSL service to release locks..." -ForegroundColor Yellow
+            Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+            Start-Service LxssManager -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+        } elseif (Test-Path -LiteralPath $tplDir) {
+            Write-Host "Some template files are locked. If the import fails, re-run with -Admin." -ForegroundColor Yellow
+        }
+        New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+
+        $wslVersion = 2
+        Write-Host "Importing as '$TemplateName' (WSL $wslVersion)..."
+        wsl --import $TemplateName $tplDir $rootfsFile --version $wslVersion
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WSL2 import failed. Trying WSL1 (no virtualization needed)..." -ForegroundColor Yellow
+            wsl --unregister $TemplateName 2>&1 | Out-Null
+            if (Test-Path -LiteralPath $tplDir) {
+                Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+            $wslVersion = 1
+            wsl --import $TemplateName $tplDir $rootfsFile --version $wslVersion
+        }
+        Remove-Item -LiteralPath $rootfsFile -ErrorAction SilentlyContinue
+        if ($IsElevated) {
+            foreach ($excl in $defenderExclusions) {
+                Remove-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
+            }
+        }
+        if (-not (Test-WslDistro $TemplateName)) {
+            Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
+            if (-not $IsElevated) {
+                Write-Host "If Defender locked the import, re-run with -Admin once to add a permanent exclusion." -ForegroundColor Yellow
+            }
+            Write-Host "If on a VM, ensure nested virtualization is enabled for WSL2," -ForegroundColor Yellow
+            Write-Host "or check that WSL1 is supported on this system." -ForegroundColor Yellow
+            return $false
+        }
+        Write-Host "'$TemplateName' imported as WSL$wslVersion." -ForegroundColor Gray
+    }
+
+    # Verify WSL is operational (catches post-upgrade reboot needed)
+    wsl -d $TemplateName -- echo ok 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
+        Write-Host "After rebooting, re-run this script." -ForegroundColor Yellow
+        return $false
+    }
+
+    # Bake packages into the template.
+    Write-Host "Installing packages into template (this takes a few minutes)..."
+    if ($packageList) {
+        $installLines = @(
+            'export DEBIAN_FRONTEND=noninteractive',
+            'export TERM=dumb',
+            "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d",
+            'chmod +x /usr/sbin/policy-rc.d',
+            'apt-get update -q',
+            'apt-get install -y unzip software-properties-common',
+            'add-apt-repository -y universe',
+            'apt-get update -q',
+            "PKGS=`$(cat | tr -d '\r'); apt-get install -y --no-install-recommends `$PKGS || for p in `$PKGS; do apt-get install -y --no-install-recommends `$p 2>/dev/null; done",
+            'rm -f /usr/sbin/policy-rc.d',
+            'apt-get clean'
+        )
+        $installScriptLF = $installLines -join "`n"
+        $installScriptB64 = [Convert]::ToBase64String(
+            [System.Text.Encoding]::UTF8.GetBytes($installScriptLF)
+        )
+        wsl -d $TemplateName -u root -- bash -c "echo $installScriptB64 | base64 -d > /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
+        $packageList | wsl -d $TemplateName -u root -- bash /tmp/install-pkgs.sh
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: Some packages may have failed to install." -ForegroundColor Yellow
+        }
+    }
+    # Stop the template so its ext4.vhdx is consistent for export later.
+    wsl --terminate $TemplateName 2>&1 | Out-Null
+    Write-Host "'$TemplateName' built with packages." -ForegroundColor Gray
+    return $true
 }
 
 # ── Elevation gating ────────────────────────────────────────────────
@@ -461,167 +666,10 @@ if ($Admin) {
 
     # ── Step 3 (admin): Build the Ubuntu template ──
     Write-Host "`n[3/4] Building '$templateDistro'..." -ForegroundColor Green
-
-    if (Test-WslDistro $templateDistro) {
-        Write-Host "'$templateDistro' already exists; nothing to build." -ForegroundColor Gray
-        Write-Host "(To rebuild, run teardown-wsl-maude.ps1 -IncludeTemplate first.)" -ForegroundColor Gray
-    } else {
-        # Parse package list from packages/ubuntu-packages.yaml
-        $packagesYaml = Join-Path $ScriptDir "..\packages\ubuntu-packages.yaml"
-        $packageList = ""
-        if (Test-Path -LiteralPath $packagesYaml) {
-            $packages = @(
-                (Get-Content -LiteralPath $packagesYaml) |
-                    Where-Object { $_ -match '^\s+-\s+\S' } |
-                    ForEach-Object { ($_ -replace '^\s+-\s+', '' -replace '\s*#.*$', '').Trim() } |
-                    Where-Object { $_ -ne "" }
-            )
-            $packageList = ($packages -join "`n") -replace "`r", ""
-            Write-Host "  $($packages.Count) packages from ubuntu-packages.yaml"
-        }
-
-        # Detect --name support by parsing wsl --help output.
-        $wslHelp = (wsl --help 2>&1) -replace "`0", "" -join "`n"
-        $hasNameFlag = $wslHelp -match '--name'
-        Write-Host "WSL --name flag: $(if ($hasNameFlag) {'supported'} else {'not supported'})" -ForegroundColor Gray
-
-        $installed = $false
-
-        if ($hasNameFlag) {
-            # ── Path A: Modern WSL with --name (Store install) ──
-            $onlineList = (wsl --list --online 2>&1) -join "`n"
-            $candidates = @()
-            if ($onlineList -match "Ubuntu-$ubuntuVersion") { $candidates += "Ubuntu-$ubuntuVersion" }
-            if ($Noble) {
-                if ($onlineList -match 'Ubuntu\b') { $candidates += "Ubuntu" }
-                if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion", "Ubuntu") }
-            }
-            if ($candidates.Count -eq 0) { $candidates = @("Ubuntu-$ubuntuVersion") }
-
-            foreach ($distro in $candidates) {
-                Write-Host "Trying Store install: '$distro' as '$templateDistro'..." -ForegroundColor Gray
-                $out = (wsl --install -d $distro --name $templateDistro --no-launch 2>&1) -replace "`0","" -join "`n"
-                if ($LASTEXITCODE -eq 0) { $installed = $true; break }
-                if ($out -match 'HCS_E_HYPERV_NOT_INSTALLED|WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED') {
-                    Write-Host "Hyper-V/VM Platform not available, skipping Store install." -ForegroundColor Yellow
-                    wsl --terminate $templateDistro 2>&1 | Out-Null
-                    wsl --unregister $templateDistro 2>&1 | Out-Null
-                    break
-                }
-                # Ghost entry? Clear and retry once
-                wsl --unregister $templateDistro 2>&1 | Out-Null
-                wsl --install -d $distro --name $templateDistro --no-launch 2>$null
-                if ($LASTEXITCODE -eq 0) { $installed = $true; break }
-                Write-Host "'$distro' not available via Store, trying next..." -ForegroundColor Yellow
-            }
-        }
-
-        # ── Path B: Download from Canonical + wsl --import ──
-        if (-not $installed) {
-            if ($hasNameFlag) {
-                Write-Host "Store install failed. Downloading from Canonical..." -ForegroundColor Yellow
-            } else {
-                Write-Host "Downloading $ubuntuLabel WSL image from Canonical..." -ForegroundColor Yellow
-            }
-            if ($Noble) {
-                $rootfsUrl = "https://releases.ubuntu.com/noble/ubuntu-24.04.4-wsl-amd64.wsl"
-            } else {
-                $rootfsUrl = "https://releases.ubuntu.com/resolute/ubuntu-26.04-wsl-amd64.wsl"
-            }
-            $rootfsFile = Join-Path $env:TEMP "ubuntu-$ubuntuVersion-wsl-amd64.wsl"
-            Write-Host "Downloading ~375 MB (this may take a few minutes)..."
-            curl.exe -L -o $rootfsFile "$rootfsUrl"
-            if (-not (Test-Path -LiteralPath $rootfsFile) -or (Get-Item -LiteralPath $rootfsFile).Length -lt 100MB) {
-                Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
-                exit 1
-            }
-            # Defender exclusions for the import path (admin-only)
-            $defenderExclusions = @($rootfsFile, (Join-Path $env:LOCALAPPDATA "Maude\Template"))
-            foreach ($excl in $defenderExclusions) {
-                Add-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
-            }
-            wsl --terminate $templateDistro 2>&1 | Out-Null
-            wsl --unregister $templateDistro 2>&1 | Out-Null
-            $tplDir = Join-Path $env:LOCALAPPDATA "Maude\Template"
-            if (Test-Path -LiteralPath $tplDir) {
-                Start-Sleep -Seconds 2
-                Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            if (Test-Path -LiteralPath $tplDir) {
-                Write-Host "Files locked. Restarting WSL service to release locks..." -ForegroundColor Yellow
-                Stop-Service LxssManager -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 3
-                Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
-                Start-Service LxssManager -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 3
-            }
-            New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
-
-            $wslVersion = 2
-            Write-Host "Importing as '$templateDistro' (WSL $wslVersion)..."
-            wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "WSL2 import failed. Trying WSL1 (no virtualization needed)..." -ForegroundColor Yellow
-                wsl --unregister $templateDistro 2>&1 | Out-Null
-                if (Test-Path -LiteralPath $tplDir) {
-                    Remove-Item -LiteralPath $tplDir -Recurse -Force -ErrorAction SilentlyContinue
-                }
-                New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
-                $wslVersion = 1
-                wsl --import $templateDistro $tplDir $rootfsFile --version $wslVersion
-            }
-            Remove-Item -LiteralPath $rootfsFile -ErrorAction SilentlyContinue
-            foreach ($excl in $defenderExclusions) {
-                Remove-MpPreference -ExclusionPath $excl -ErrorAction SilentlyContinue
-            }
-            if (-not (Test-WslDistro $templateDistro)) {
-                Write-Host "ERROR: wsl --import failed." -ForegroundColor Red
-                Write-Host "If on a VM, ensure nested virtualization is enabled for WSL2," -ForegroundColor Yellow
-                Write-Host "or check that WSL1 is supported on this system." -ForegroundColor Yellow
-                exit 1
-            }
-            Write-Host "'$templateDistro' imported as WSL$wslVersion." -ForegroundColor Gray
-        }
-
-        # Verify WSL is operational (catches post-upgrade reboot needed)
-        wsl -d $templateDistro -- echo ok 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "`nWSL was just installed/upgraded and needs a reboot before continuing." -ForegroundColor Yellow
-            Write-Host "After rebooting, re-run this script with -Admin." -ForegroundColor Yellow
-            Read-Host "Press Enter to exit"
-            exit
-        }
-
-        # Bake packages into the template.
-        Write-Host "Installing packages into template (this takes a few minutes)..."
-        if ($packageList) {
-            $installLines = @(
-                'export DEBIAN_FRONTEND=noninteractive',
-                'export TERM=dumb',
-                "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d",
-                'chmod +x /usr/sbin/policy-rc.d',
-                'apt-get update -q',
-                'apt-get install -y unzip software-properties-common',
-                'add-apt-repository -y universe',
-                'apt-get update -q',
-                "PKGS=`$(cat | tr -d '\r'); apt-get install -y --no-install-recommends `$PKGS || for p in `$PKGS; do apt-get install -y --no-install-recommends `$p 2>/dev/null; done",
-                'rm -f /usr/sbin/policy-rc.d',
-                'apt-get clean'
-            )
-            $installScriptLF = $installLines -join "`n"
-            $installScriptB64 = [Convert]::ToBase64String(
-                [System.Text.Encoding]::UTF8.GetBytes($installScriptLF)
-            )
-            wsl -d $templateDistro -u root -- bash -c "echo $installScriptB64 | base64 -d > /tmp/install-pkgs.sh && chmod +x /tmp/install-pkgs.sh"
-            $packageList | wsl -d $templateDistro -u root -- bash /tmp/install-pkgs.sh
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "WARNING: Some packages may have failed to install." -ForegroundColor Yellow
-            }
-        }
-        # Stop the template so its ext4.vhdx is consistent for export later.
-        wsl --terminate $templateDistro 2>&1 | Out-Null
-        Write-Host "'$templateDistro' built with packages." -ForegroundColor Gray
-    }
+    $ok = Build-Template -TemplateName $templateDistro -IsNoble:$Noble `
+        -UbuntuVersion $ubuntuVersion -UbuntuLabel $ubuntuLabel `
+        -ScriptDir $ScriptDir -IsElevated:$true
+    if (-not $ok) { exit 1 }
 
     # ── Step 4 (admin): Defender exclusion (best-effort) ──
     # During first-time install, the Path B fallback (Canonical rootfs
@@ -745,34 +793,55 @@ Write-Host "=== Maude Setup: User Phase ===" -ForegroundColor Cyan
 Write-Host "(Distro import, host folder, bootstrap, WT profile, shortcut)" -ForegroundColor DarkGray
 
 # ── Verify WSL is operational ──
+# WSL itself requires admin to install (it enables Windows features), so
+# this is the one hard prerequisite that user-phase setup cannot satisfy
+# on its own. If WSL is already present, the rest of the install runs
+# fine without admin.
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
     Write-Host @"
 
 ERROR: WSL is not installed.
 
-Run the admin phase first (in an ELEVATED PowerShell):
+WSL itself needs admin to install (it enables a Windows feature). Run the
+admin phase once from an ELEVATED PowerShell:
 
     curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
+
+After that, all future installs and reinstalls work without admin.
 
 "@ -ForegroundColor Red
     exit 1
 }
 
-# ── Verify the Ubuntu template exists (built by the admin phase) ──
+# ── Find or build the Ubuntu template ──
+# WSL itself needed admin to install (Windows feature), but everything that
+# follows — building the template via Store install or Canonical download,
+# importing it as a distro, running root-bootstrap inside it — is per-user
+# state. So if WSL is already present, we can build the template here in
+# the user phase without elevation. The Defender-exclusion and
+# LxssManager-restart fallbacks inside Build-Template are skipped silently
+# when unelevated; on managed machines they're often unavailable anyway.
 $installedTemplate = Find-InstalledTemplate -preferNoble:$Noble
 if (-not $installedTemplate) {
-    Write-Host @"
+    Write-Host ""
+    Write-Host "No Ubuntu template found. Building '$templateDistro' now..." -ForegroundColor Cyan
+    Write-Host "(This is a one-time setup that takes a few minutes; future reinstalls" -ForegroundColor Gray
+    Write-Host "will reuse the template and complete in seconds.)" -ForegroundColor Gray
+    $ok = Build-Template -TemplateName $templateDistro -IsNoble:$Noble `
+        -UbuntuVersion $ubuntuVersion -UbuntuLabel $ubuntuLabel `
+        -ScriptDir $ScriptDir -IsElevated:$isElevated
+    if (-not $ok) {
+        Write-Host @"
 
-ERROR: No Ubuntu template found.
-
-The admin phase has not been run yet. From an ELEVATED PowerShell:
+If the failure looks AV-related, run the admin phase once to add a
+permanent Defender exclusion and (if needed) install Windows Terminal:
 
     curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
 
-Then re-run this user-phase command.
-
-"@ -ForegroundColor Red
-    exit 1
+"@ -ForegroundColor Yellow
+        exit 1
+    }
+    $installedTemplate = $templateDistro
 }
 Write-Host "Using template: $installedTemplate" -ForegroundColor Gray
 $templateDistro = $installedTemplate
