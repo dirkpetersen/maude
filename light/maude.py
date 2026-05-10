@@ -1034,6 +1034,10 @@ class CredsEntryScreen(ModalScreen[bool]):
 
     def _save_paste(self) -> None:
         text = self.query_one("#creds-text", TextArea).text
+        # Empty textarea on the Paste tab is fine — the user may only
+        # want to flip the routing checkbox at the bottom. Don't error.
+        if not text.strip():
+            return
         values = parse_creds_text(text)
         if not values:
             self._set_status("[bold red]No recognised credential lines found.[/]")
@@ -1045,6 +1049,10 @@ class CredsEntryScreen(ModalScreen[bool]):
         ak = self.query_one("#creds-aws-key", Input).value.strip()
         sk = self.query_one("#creds-aws-secret", Input).value.strip()
         rg = self.query_one("#creds-aws-region", Input).value.strip() or "us-west-2"
+        # If both auth fields are empty, the user is here just to flip
+        # the routing checkbox — don't error, fall through to apply.
+        if not ak and not sk:
+            return
         if not ak or not sk:
             self._set_status(
                 "[bold red]Access key id and secret are required.[/]"
@@ -1065,6 +1073,9 @@ class CredsEntryScreen(ModalScreen[bool]):
     def _save_foundry(self) -> None:
         url = self.query_one("#creds-foundry-url", Input).value.strip()
         key = self.query_one("#creds-foundry-key", Input).value.strip()
+        # Same as Bedrock: empty form just means "flip routing only".
+        if not url and not key:
+            return
         if not url or not key:
             self._set_status(
                 "[bold red]Both URL and API key are required.[/]"
