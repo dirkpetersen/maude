@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Active implementation**: `light/` — Maude Light (Windows WSL2 only). This is the only production-ready target today; start here for any user-facing work. The full-appliance code (`scripts/`, `Dockerfile`, `packer/`) is the foundation for the long-term roadmap: macOS support, Linux VM-hosted sandboxes, and Proxmox appliances — but those targets are not yet production. See [`light/CLAUDE.md`](light/CLAUDE.md) for self-contained guidance when working inside `light/`.
+
 ## Project Overview
 
 **maude** -- A ready-to-run sandbox appliance for agentic coding, deployable as a VM (VMware/KVM), WSL image, Proxmox appliance, or Docker container. It integrates three upstream projects to create a multi-user Ubuntu environment where users get browser-based terminal access and can rapidly deploy web apps.
