@@ -442,7 +442,7 @@ def ssh_add_with_passphrase(key_path: Path, passphrase: str) -> tuple[bool, str]
         r = subprocess.run(
             ["ssh-add", str(key_path)],
             env=env, capture_output=True, text=True,
-            stdin=subprocess.DEVNULL, timeout=10,
+            stdin=subprocess.DEVNULL, timeout=30,
         )
         ok = r.returncode == 0
         return ok, (r.stdout + r.stderr).strip()
@@ -942,14 +942,45 @@ class SSHKeyUnlockScreen(ModalScreen[None]):
                 "[bold red]Enter a passphrase first.[/]"
             )
             return
+        # Disable inputs and show a "working" message — ssh-add can take
+        # a few seconds, especially if the agent has to be (re)started.
+        # Run it in a worker thread so the UI stays responsive.
+        for sel in ("#unlock-pass", "#btn-unlock-yes", "#btn-unlock-no"):
+            try:
+                self.query_one(sel).disabled = True
+            except Exception:
+                pass
+        self.query_one("#unlock-status", Label).update("Adding key to agent…")
+        self.run_worker(
+            lambda: self._unlock_worker(passphrase),
+            exclusive=True, thread=True,
+        )
+
+    def _unlock_worker(self, passphrase: str) -> None:
         ok, msg = ssh_add_with_passphrase(SSH_KEY_PATH, passphrase)
+        # Hop back to the UI thread to update widgets / dismiss.
+        self.app.call_from_thread(self._unlock_done, ok, msg)
+
+    def _unlock_done(self, ok: bool, msg: str) -> None:
         if ok:
             self.app.notify("SSH key added to agent.")
             self.dismiss(None)
-        else:
-            self.query_one("#unlock-status", Label).update(
-                f"[bold red]{msg.splitlines()[-1] if msg else 'ssh-add failed'}[/]"
-            )
+            return
+        # Re-enable controls so the user can retry.
+        for sel in ("#unlock-pass", "#btn-unlock-yes", "#btn-unlock-no"):
+            try:
+                self.query_one(sel).disabled = False
+            except Exception:
+                pass
+        last = (msg.splitlines()[-1] if msg else "ssh-add failed").strip()
+        self.query_one("#unlock-status", Label).update(
+            f"[bold red]{last}[/]"
+        )
+        # Re-focus the passphrase field for retry.
+        try:
+            self.query_one("#unlock-pass", Input).focus()
+        except Exception:
+            pass
 
     @on(Button.Pressed, "#btn-unlock-yes")
     def on_unlock(self) -> None:
