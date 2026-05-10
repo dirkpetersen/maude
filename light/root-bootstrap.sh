@@ -190,6 +190,38 @@ if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then
         -o "$HOME/Maude/DANGER-ZONE.txt" 2>/dev/null || true
 fi
 
+# ── Bootstrap keychain before the TUI launches ───────────────────────
+# If the user ran `maude github` and set a passphrase on their SSH key,
+# keychain keeps ssh-agent alive across shell logins so the passphrase
+# is entered once per WSL session, not every TUI launch. We do this BEFORE
+# `maude tui` so the TUI inherits a persistent SSH_AUTH_SOCK.
+if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && command -v keychain >/dev/null 2>&1; then
+    _maude_key=""
+    for _k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
+        [[ -f "$_k" ]] && { _maude_key="$_k"; break; }
+    done
+    if [[ -n "$_maude_key" ]]; then
+        # Friendlier prompt than ssh-add's bare default.
+        # keychain reuses an existing agent if one is already running,
+        # so the passphrase is asked only on the first login per WSL session.
+        if ! keychain --quick --noask --quiet --agents ssh --eval >/dev/null 2>&1 \
+              || ! ssh-add -l 2>/dev/null | grep -q .; then
+            G=$'\033[1;32m'; C=$'\033[1;36m'; B=$'\033[1;37m'; D=$'\033[2m'; N=$'\033[0m'
+            printf '\n'
+            printf '  %s🔑 Unlock your GitHub SSH key%s\n' "$G" "$N"
+            printf '  %s%s%s\n' "$D" "────────────────────────────────────────────" "$N"
+            printf '  Enter the passphrase you set in %smaude github%s\n' "$C" "$N"
+            printf '  to load %s%s%s into ssh-agent for this session.\n' "$B" "$_maude_key" "$N"
+            printf '  %s(Press Enter on a blank line to skip — you can unlock later from the TUI.)%s\n' "$D" "$N"
+            printf '\n'
+        fi
+        eval "$(keychain --quiet --eval --agents ssh "$_maude_key")" 2>/dev/null || true
+    else
+        eval "$(keychain --quiet --eval --agents ssh)" 2>/dev/null || true
+    fi
+    unset _maude_key _k
+fi
+
 # Auto-start the TUI by default; users can opt out with ~/.maude-tui-disabled.
 # Guard with MAUDE_WELCOMED so we don't re-launch when .bashrc re-sources
 # this script (it is already sourced via /etc/profile.d on login shells).
