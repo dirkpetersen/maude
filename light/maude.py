@@ -2664,12 +2664,12 @@ class MaudeApp(App):
     def _refresh_table(self) -> None:
         table = self.query_one("#projects-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("  Project", "Last modified", "GH")
+        table.add_columns("  Project", "Last modified", "GitHub")
         for proj in list_projects():
             table.add_row(
                 f"  {proj['name']}",
                 proj["modified"],
-                "GH" if proj["github"] else "",
+                "yes" if proj["github"] else "",
                 key=proj["name"],
             )
 
