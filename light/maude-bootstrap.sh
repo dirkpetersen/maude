@@ -21,7 +21,9 @@ set -e
 
 # ── Install textual (Maude TUI dependency) ───────────────────────────
 echo "Installing textual..."
-pip install --quiet --break-system-packages textual
+# Pin <8 — Textual 8.2.x has a 'text-area--gutter' regression that
+# crashes the Set Creds modal. Drop the cap when fixed upstream.
+pip install --quiet --break-system-packages 'textual<8'
 
 # ── Install Bun + kanna-code ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then

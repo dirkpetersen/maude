@@ -137,12 +137,30 @@ MAUDE_PY="$HOME/.local/bin/maude.py"
 MAUDE_PY_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
 MAUDE_BIN_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude"
 
-launch_tui() {
-    # Ensure textual is installed
+# Ensure a known-good textual is installed (≥6, <8). Textual 8.2.x has
+# a 'text-area--gutter' regression that crashes the Set Creds modal;
+# we cap to <8 until that's fixed upstream.
+ensure_textual() {
     if ! python3 -c "import textual" 2>/dev/null; then
         echo -e "${CYAN}Installing textual...${NC}"
-        pip install --quiet textual
+        pip install --quiet --break-system-packages 'textual<8' || \
+            pip install --quiet 'textual<8'
+        return
     fi
+    # Already installed — downgrade if the version is broken.
+    local ver
+    ver=$(python3 -c 'import textual,sys; sys.stdout.write(textual.__version__)' 2>/dev/null)
+    case "$ver" in
+        8.*|9.*|1[0-9].*)
+            echo -e "${YELLOW}Downgrading textual ($ver → <8) to avoid a known crash...${NC}"
+            pip install --quiet --break-system-packages 'textual<8' || \
+                pip install --quiet 'textual<8'
+            ;;
+    esac
+}
+
+launch_tui() {
+    ensure_textual
 
     # First-time bootstrap: fetch maude.py if it isn't on disk yet.
     # Daily refresh is handled inside maude.py itself (fires after noon).
@@ -228,6 +246,10 @@ update_all() {
     fi
     echo ""
 
+    echo -e "${BOLD}Checking textual version (auto-downgrades 8.x to <8)...${NC}"
+    ensure_textual
+    echo ""
+
     echo -e "${BOLD}Updating kanna-code...${NC}"
     if command -v bun >/dev/null 2>&1; then
         # `bun install -g <pkg>` always fetches the latest version.
@@ -257,11 +279,7 @@ update_all() {
 
 # ── Launch the Git Setup Wizard (standalone) ─────────────────────────
 launch_setup_git() {
-    # Reuse launch_tui's bootstrap logic just for textual + maude.py.
-    if ! python3 -c "import textual" 2>/dev/null; then
-        echo -e "${CYAN}Installing textual...${NC}"
-        pip install --quiet textual
-    fi
+    ensure_textual
     if [[ ! -f "$MAUDE_PY" ]]; then
         echo -e "${CYAN}Downloading maude TUI...${NC}"
         mkdir -p "$(dirname "$MAUDE_PY")"
