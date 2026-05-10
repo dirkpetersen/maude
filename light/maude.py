@@ -768,7 +768,9 @@ def add_keychain_to_bashrc() -> bool:
 
 # ── Modal screens ──────────────────────────────────────────────────────────
 
-CLAUDERC_PATH = Path.home() / ".azure" / "clauderc"
+CLAUDERC_PATH    = Path.home() / ".azure" / "clauderc"
+AWS_CREDS_PATH   = Path.home() / ".aws"   / "credentials"
+AWS_CONFIG_PATH  = Path.home() / ".aws"   / "config"
 
 # Recognised credential-related env vars, for parsing pasted exports.
 CRED_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "OPENAI_")
@@ -816,14 +818,95 @@ def write_clauderc(values: dict[str, str]) -> None:
         pass
 
 
-class CredsEntryScreen(ModalScreen[bool]):
-    """Modal that lets the user paste credential `export` lines.
+def merge_clauderc(values: dict[str, str]) -> None:
+    """Merge `values` into ~/.azure/clauderc, preserving any existing
+    exports that aren't in `values`. Values from `values` win on collision.
+    """
+    existing: dict[str, str] = {}
+    if CLAUDERC_PATH.exists():
+        try:
+            for raw in CLAUDERC_PATH.read_text().splitlines():
+                line = raw.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):].lstrip()
+                m = CRED_KEY_RE.match(line)
+                if m:
+                    k, v = m.group(1), m.group(2).strip()
+                    if (v.startswith('"') and v.endswith('"')) or \
+                       (v.startswith("'") and v.endswith("'")):
+                        v = v[1:-1]
+                    existing[k] = v
+        except OSError:
+            pass
+    existing.update(values)
+    write_clauderc(existing)
 
-    On Save: parses the input, persists the recognised vars, updates
-    os.environ, and dismisses with True. On Cancel: dismisses with False.
+
+def write_aws_credentials(access_key: str, secret_key: str, region: str) -> None:
+    """Persist AWS creds to ~/.aws/credentials and ~/.aws/config so that
+    boto3 / claude-wrapper / kanna can pick them up.
+
+    Uses the [bedrock] profile to match the convention in the maude
+    welcome banner (which suggests `aws --profile bedrock configure`).
+    """
+    AWS_CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    AWS_CREDS_PATH.write_text(
+        f"[bedrock]\n"
+        f"aws_access_key_id = {access_key}\n"
+        f"aws_secret_access_key = {secret_key}\n"
+    )
+    AWS_CONFIG_PATH.write_text(
+        f"[profile bedrock]\n"
+        f"region = {region}\n"
+    )
+    try:
+        AWS_CREDS_PATH.chmod(0o600)
+        AWS_CONFIG_PATH.chmod(0o600)
+    except OSError:
+        pass
+
+
+def have_bedrock_creds() -> bool:
+    return AWS_CREDS_PATH.exists() and AWS_CREDS_PATH.stat().st_size > 0
+
+
+def have_foundry_creds() -> bool:
+    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
+        return True
+    if not CLAUDERC_PATH.exists():
+        return False
+    try:
+        return "ANTHROPIC_FOUNDRY_API_KEY" in CLAUDERC_PATH.read_text()
+    except OSError:
+        return False
+
+
+class CredsEntryScreen(ModalScreen[bool]):
+    """Modal for setting LLM credentials.
+
+    Three input modes selectable via tabs at the top:
+      • Paste exports — original `export FOO=bar` paste flow
+      • AWS Bedrock  — three named fields (access key / secret / region)
+      • Azure Foundry — base URL + API key
+    All modes save to ~/.azure/clauderc (merged) so existing creds
+    survive across modes; AWS Bedrock additionally writes
+    ~/.aws/credentials + ~/.aws/config under the [bedrock] profile.
+
+    When *both* Bedrock and Foundry creds exist on disk, a checkbox
+    appears at the bottom: "Default to AWS Bedrock". Unchecked routes
+    Claude to Foundry (CLAUDE_CODE_USE_FOUNDRY=1); checked routes it
+    to Bedrock (CLAUDE_CODE_USE_BEDROCK=1).
     """
 
     BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    MODE_PASTE   = "paste"
+    MODE_BEDROCK = "bedrock"
+    MODE_FOUNDRY = "foundry"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mode = self.MODE_PASTE
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -831,48 +914,194 @@ class CredsEntryScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Container(id="creds-box"):
             yield Label("Set LLM Credentials", id="creds-title")
-            yield Label(
-                "Paste your credentials below — accepts shell `export` lines "
-                "or KEY=VALUE pairs.\n"
-                "Recognised prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*.",
-                id="creds-help",
-            )
-            yield TextArea(
-                "",
-                id="creds-text",
-                language=None,
-                show_line_numbers=False,
-            )
+            with Horizontal(id="creds-tabs"):
+                yield Button("Paste exports", id="btn-creds-mode-paste",
+                             variant="primary")
+                yield Button("AWS Bedrock",   id="btn-creds-mode-bedrock",
+                             variant="default")
+                yield Button("Azure Foundry", id="btn-creds-mode-foundry",
+                             variant="default")
+            yield Container(id="creds-body")
             yield Label("", id="creds-status")
+            yield Checkbox("Default to AWS Bedrock (uncheck → Foundry)",
+                           id="creds-default-bedrock", value=False)
             with Horizontal(id="creds-buttons"):
                 yield Button("Save",   variant="success", id="btn-creds-save")
                 yield Button("Cancel", variant="primary", id="btn-creds-cancel")
 
-    def on_mount(self) -> None:
-        self.query_one("#creds-text", TextArea).focus()
+    async def on_mount(self) -> None:
+        await self._render_body()
+        self._update_default_checkbox()
+
+    # ── Mode switcher ──────────────────────────────────────────────────
+
+    @on(Button.Pressed, "#btn-creds-mode-paste")
+    async def mode_paste(self) -> None:
+        await self._switch_mode(self.MODE_PASTE)
+
+    @on(Button.Pressed, "#btn-creds-mode-bedrock")
+    async def mode_bedrock(self) -> None:
+        await self._switch_mode(self.MODE_BEDROCK)
+
+    @on(Button.Pressed, "#btn-creds-mode-foundry")
+    async def mode_foundry(self) -> None:
+        await self._switch_mode(self.MODE_FOUNDRY)
+
+    async def _switch_mode(self, mode: str) -> None:
+        self.mode = mode
+        for btn_id, btn_mode in (
+            ("#btn-creds-mode-paste",   self.MODE_PASTE),
+            ("#btn-creds-mode-bedrock", self.MODE_BEDROCK),
+            ("#btn-creds-mode-foundry", self.MODE_FOUNDRY),
+        ):
+            btn = self.query_one(btn_id, Button)
+            btn.variant = "primary" if mode == btn_mode else "default"
+        await self._render_body()
+
+    async def _render_body(self) -> None:
+        body = self.query_one("#creds-body", Container)
+        await body.remove_children()
+        if self.mode == self.MODE_PASTE:
+            body.mount(Label(
+                "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
+                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*."
+            ))
+            body.mount(TextArea("", id="creds-text",
+                                language=None, show_line_numbers=False))
+            self.call_after_refresh(
+                lambda: self.query_one("#creds-text", TextArea).focus()
+            )
+        elif self.mode == self.MODE_BEDROCK:
+            body.mount(Label("AWS Bedrock — region defaults to us-west-2."))
+            body.mount(Label("AWS_ACCESS_KEY_ID:"))
+            body.mount(Input(placeholder="AKIA…", id="creds-aws-key"))
+            body.mount(Label("AWS_SECRET_ACCESS_KEY:"))
+            body.mount(Input(placeholder="secret", id="creds-aws-secret",
+                             password=True))
+            body.mount(Label("AWS_REGION:"))
+            body.mount(Input(value="us-west-2", id="creds-aws-region"))
+            self.call_after_refresh(
+                lambda: self.query_one("#creds-aws-key", Input).focus()
+            )
+        else:  # MODE_FOUNDRY
+            body.mount(Label("Azure AI Foundry — Anthropic-compatible endpoint."))
+            body.mount(Label("ANTHROPIC_FOUNDRY_BASE_URL:"))
+            body.mount(Input(
+                placeholder="https://<resource>.services.ai.azure.com/anthropic",
+                id="creds-foundry-url"))
+            body.mount(Label("ANTHROPIC_FOUNDRY_API_KEY:"))
+            body.mount(Input(placeholder="api key",
+                             id="creds-foundry-key", password=True))
+            self.call_after_refresh(
+                lambda: self.query_one("#creds-foundry-url", Input).focus()
+            )
+
+    def _update_default_checkbox(self) -> None:
+        """Show the Bedrock-vs-Foundry default toggle only when both
+        credential families are present on disk."""
+        cb = self.query_one("#creds-default-bedrock", Checkbox)
+        if have_bedrock_creds() and have_foundry_creds():
+            cb.display = True
+            # Reflect what's currently active.
+            cb.value = bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK")) \
+                       and not bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
+        else:
+            cb.display = False
+
+    # ── Save ───────────────────────────────────────────────────────────
+
+    def _set_status(self, text: str) -> None:
+        self.query_one("#creds-status", Label).update(text)
 
     @on(Button.Pressed, "#btn-creds-save")
     def save(self) -> None:
+        try:
+            if self.mode == self.MODE_PASTE:
+                self._save_paste()
+            elif self.mode == self.MODE_BEDROCK:
+                self._save_bedrock()
+            else:
+                self._save_foundry()
+        except _CredsValidation:
+            # The handler already populated the status label.
+            return
+        except OSError as err:
+            self._set_status(f"[bold red]Could not save: {err}[/]")
+            return
+        # Apply the routing checkbox if it's visible.
+        self._apply_default_provider()
+        self.dismiss(True)
+
+    def _save_paste(self) -> None:
         text = self.query_one("#creds-text", TextArea).text
         values = parse_creds_text(text)
         if not values:
-            self.query_one("#creds-status", Label).update(
-                "[bold red]No recognised credential lines found.[/]"
-            )
-            return
-        try:
-            write_clauderc(values)
-        except OSError as err:
-            self.query_one("#creds-status", Label).update(
-                f"[bold red]Could not save: {err}[/]"
-            )
-            return
+            self._set_status("[bold red]No recognised credential lines found.[/]")
+            raise _CredsValidation()
+        merge_clauderc(values)
         os.environ.update(values)
-        self.dismiss(True)
+
+    def _save_bedrock(self) -> None:
+        ak = self.query_one("#creds-aws-key", Input).value.strip()
+        sk = self.query_one("#creds-aws-secret", Input).value.strip()
+        rg = self.query_one("#creds-aws-region", Input).value.strip() or "us-west-2"
+        if not ak or not sk:
+            self._set_status(
+                "[bold red]Access key id and secret are required.[/]"
+            )
+            raise _CredsValidation()
+        write_aws_credentials(ak, sk, rg)
+        # Also stash in clauderc so non-AWS consumers see env vars.
+        env = {
+            "AWS_ACCESS_KEY_ID":     ak,
+            "AWS_SECRET_ACCESS_KEY": sk,
+            "AWS_REGION":            rg,
+            "AWS_PROFILE":           "bedrock",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+        }
+        merge_clauderc(env)
+        os.environ.update(env)
+
+    def _save_foundry(self) -> None:
+        url = self.query_one("#creds-foundry-url", Input).value.strip()
+        key = self.query_one("#creds-foundry-key", Input).value.strip()
+        if not url or not key:
+            self._set_status(
+                "[bold red]Both URL and API key are required.[/]"
+            )
+            raise _CredsValidation()
+        env = {
+            "ANTHROPIC_FOUNDRY_BASE_URL": url,
+            "ANTHROPIC_FOUNDRY_API_KEY":  key,
+            "CLAUDE_CODE_USE_FOUNDRY":    "1",
+        }
+        merge_clauderc(env)
+        os.environ.update(env)
+
+    def _apply_default_provider(self) -> None:
+        """Honour the Bedrock/Foundry default checkbox if it's visible."""
+        cb = self.query_one("#creds-default-bedrock", Checkbox)
+        if not cb.display:
+            return
+        if cb.value:
+            env = {"CLAUDE_CODE_USE_BEDROCK": "1"}
+            # Drop any active Foundry routing.
+            os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
+        else:
+            env = {"CLAUDE_CODE_USE_FOUNDRY": "1"}
+            os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
+        merge_clauderc(env)
+        os.environ.update(env)
 
     @on(Button.Pressed, "#btn-creds-cancel")
     def cancel(self) -> None:
         self.dismiss(False)
+
+
+class _CredsValidation(Exception):
+    """Raised internally when a Save sub-handler has already set the
+    status label and wants the outer Save to bail without dismissing."""
+    pass
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):
@@ -1819,7 +2048,7 @@ class MaudeApp(App):
     #creds-box {
         padding: 2 3;
         width: 90;
-        height: 24;
+        height: 30;
         border: heavy #b87878;
         background: #242424;
     }
@@ -1830,13 +2059,33 @@ class MaudeApp(App):
         margin-bottom: 1;
     }
 
-    #creds-help {
-        color: #c09898;
+    #creds-tabs {
+        height: auto;
+        align: left middle;
         margin-bottom: 1;
     }
 
-    #creds-text {
-        height: 12;
+    #creds-tabs Button {
+        margin-right: 1;
+    }
+
+    #creds-body {
+        height: 1fr;
+        overflow-y: auto;
+    }
+
+    #creds-body Label {
+        color: #c09898;
+        margin-top: 0;
+        margin-bottom: 0;
+    }
+
+    #creds-body Input {
+        margin-bottom: 1;
+    }
+
+    #creds-body TextArea {
+        height: 10;
         border: solid #6a5058;
         background: #1e1e1e;
     }
@@ -1845,6 +2094,11 @@ class MaudeApp(App):
         height: 1;
         color: #c09898;
         margin-top: 1;
+    }
+
+    #creds-default-bedrock {
+        margin-top: 0;
+        margin-bottom: 0;
     }
 
     #creds-buttons {
