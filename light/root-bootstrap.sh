@@ -99,13 +99,15 @@ WSLEOF
 # Ensure login starts in the user's home directory (imported distros may default to /)
 usermod -d "/home/$USERNAME" "$USERNAME" 2>/dev/null || true
 
-# ── Mask per-user systemd manager ────────────────────────────────────
-# We use system systemd (boot.systemd=true) for package post-installs and
-# future system services, but we don't use any --user units. Without
-# dbus-user-session installed, WSL emits "Failed to start the systemd
-# user session" on every cold start. Masking user@.service silences it
-# with no functional loss.
-systemctl mask user@.service >/dev/null 2>&1 || true
+# ── Per-user systemd manager ─────────────────────────────────────────
+# wsl.exe runs `systemctl start user@<uid>.service` on every shell launch
+# when systemd=true is set in /etc/wsl.conf. If the unit fails for any
+# reason (missing dbus-user-session, or the unit is masked), wsl.exe
+# prints "Failed to start the systemd user session" on every cold start.
+# dbus-user-session is in packages/ubuntu-packages.yaml so the unit
+# should start cleanly. Defensively unmask in case a previous bootstrap
+# ran with an older version that masked it.
+systemctl unmask user@.service >/dev/null 2>&1 || true
 
 # ── Sandbox mount: host folder → /home/<user>/Maude via drvfs ────────
 if [[ -n "$HOST_FOLDER" ]]; then
