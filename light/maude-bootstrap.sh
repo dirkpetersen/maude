@@ -25,6 +25,39 @@ echo "Installing textual..."
 # crashes the Set Creds modal. Drop the cap when fixed upstream.
 pip install --quiet --break-system-packages 'textual<8'
 
+# ── Symlink runtime tools into ~/.local/bin ───────────────────────────
+# bun/kanna live in ~/.bun/bin (stripped by maude-path.sh).
+# node/npm/npx live in ~/.nvm/versions/node/<ver>/bin (NVM only patches
+# ~/.bashrc, so child processes spawned by the TUI or kanna miss them).
+# Symlinking into ~/.local/bin makes them reachable by any process.
+ensure_tool_symlinks() {
+    local bin="$HOME/.local/bin"
+    mkdir -p "$bin"
+
+    # Bun + kanna
+    [[ -x "$HOME/.bun/bin/bun"   ]] && ln -sfn "$HOME/.bun/bin/bun"   "$bin/bun"
+    [[ -x "$HOME/.bun/bin/kanna" ]] && ln -sfn "$HOME/.bun/bin/kanna" "$bin/kanna"
+
+    # Node via NVM: prefer default alias, fall back to latest installed version
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    local node_bin=""
+    if [[ -d "$nvm_dir/versions/node" ]]; then
+        local ver
+        ver=$(cat "$nvm_dir/alias/default" 2>/dev/null | tr -d '[:space:]')
+        if [[ -n "$ver" && -d "$nvm_dir/versions/node/$ver/bin" ]]; then
+            node_bin="$nvm_dir/versions/node/$ver/bin"
+        else
+            node_bin=$(ls -td "$nvm_dir/versions/node"/*/bin 2>/dev/null | head -1)
+        fi
+    fi
+    if [[ -n "$node_bin" ]]; then
+        for _t in node npm npx; do
+            [[ -x "$node_bin/$_t" ]] && ln -sfn "$node_bin/$_t" "$bin/$_t"
+        done
+        unset _t
+    fi
+}
+
 # ── Install Bun + kanna-code ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then
     echo "Installing Bun..."
@@ -34,16 +67,8 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "Installing kanna-code..."
 bun install -g kanna-code
-# Symlink bun + kanna into ~/.local/bin so they're on PATH
-# (Bun's ~/.bun/bin is stripped by maude-path.sh; kanna's shebang resolves
-# `bun` via env, so `bun` itself must be reachable too)
-if [[ -x "$HOME/.bun/bin/bun" ]]; then
-    ln -sfn "$HOME/.bun/bin/bun" "$HOME/.local/bin/bun"
-fi
-if [[ -x "$HOME/.bun/bin/kanna" ]]; then
-    ln -sfn "$HOME/.bun/bin/kanna" "$HOME/.local/bin/kanna"
-    echo "kanna symlinked to ~/.local/bin/"
-fi
+ensure_tool_symlinks
+echo "Tool symlinks updated in ~/.local/bin"
 
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
 # The drvfs mount is now active (WSL was restarted between step 5 and 6).
