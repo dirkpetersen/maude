@@ -575,6 +575,10 @@ WSL distro is removed. `~/.claude` is also a symlink to `~/Maude/.claude`.
 
 Use `mom install -y <package>` to install system packages -- no sudo needed.
 Always use `-y` for unattended installs.
+
+If you need to install Python packages, always check the local package manager
+first (`mom search <package>` or `mom install -y python3-<package>`). Only use
+`pip install` if no adequate version is available via mom.
 MAUDEEOF
     if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
         cat > "$HOME/.claude/CLAUDE.md" << 'CLAUDEEOF'
