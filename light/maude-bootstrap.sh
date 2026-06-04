@@ -114,35 +114,45 @@ fi
 cat > "$HOME/.claude/statusline.sh" << 'STATUSLINEEOF'
 #!/bin/bash
 # Claude Code status line: "~/path/to/cwd  [NN% free]"
-# Shows cwd with $HOME → ~ and appends remaining context-window percentage.
-# Context window is picked per model: 1M for any "[1m]"/"1m" variant, else 200k.
+# Shows cwd with $HOME → ~ and the remaining context-window percentage.
+#
+# Claude Code (v2.x+) passes a context_window object with remaining_percentage
+# directly — use that so our number matches Claude's own indicator exactly.
+# Falls back to manual token math for older versions that lack the field.
 
 set -u
 
 input=$(cat)
 cwd=$(printf '%s' "$input" | jq -r '.cwd // ""')
-tp=$(printf '%s'  "$input" | jq -r '.transcript_path // empty')
-model=$(printf '%s' "$input" | jq -r '((.model.id // "") + " " + (.model.display_name // "")) | ascii_downcase')
-
-case "$model" in
-    *1m*) ctx_total=1000000 ;;   # Opus 4.7 1M, Sonnet 4.6 1M
-    *)    ctx_total=200000  ;;   # Opus 4.7, Sonnet 4.6, Haiku 4.5 (all 200k)
-esac
-
 display_cwd="${cwd/#$HOME/"~"}"
 
 pct_str=""
-if [[ -n "$tp" && -r "$tp" ]]; then
-    used=$(tac "$tp" 2>/dev/null \
-        | grep -m1 '"usage"' \
-        | jq -r '.message.usage
-                 | ((.input_tokens // 0)
-                  + (.cache_read_input_tokens // 0)
-                  + (.cache_creation_input_tokens // 0))' 2>/dev/null)
-    if [[ "$used" =~ ^[0-9]+$ ]]; then
-        pct=$(( 100 - used * 100 / ctx_total ))
-        (( pct < 0 )) && pct=0
-        pct_str="  [${pct}% free]"
+
+# Prefer the authoritative field Claude Code provides.
+remaining=$(printf '%s' "$input" | jq -r '.context_window.remaining_percentage // empty' 2>/dev/null)
+if [[ "$remaining" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    pct=$(printf '%.0f' "$remaining")
+    pct_str="  [${pct}% free]"
+else
+    # Fallback: manual calculation from transcript for older Claude Code versions.
+    tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
+    model=$(printf '%s' "$input" | jq -r '((.model.id // "") + " " + (.model.display_name // "")) | ascii_downcase')
+    case "$model" in
+        *1m*) ctx_total=1000000 ;;
+        *)    ctx_total=200000  ;;
+    esac
+    if [[ -n "$tp" && -r "$tp" ]]; then
+        used=$(tac "$tp" 2>/dev/null \
+            | grep -m1 '"usage"' \
+            | jq -r '.message.usage
+                     | ((.input_tokens // 0)
+                      + (.cache_read_input_tokens // 0)
+                      + (.cache_creation_input_tokens // 0))' 2>/dev/null)
+        if [[ "$used" =~ ^[0-9]+$ ]]; then
+            pct=$(( 100 - used * 100 / ctx_total ))
+            (( pct < 0 )) && pct=0
+            pct_str="  [${pct}% free]"
+        fi
     fi
 fi
 
