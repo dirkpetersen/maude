@@ -179,26 +179,27 @@ fi
 
 # ── Copy Anthropic skills into ~/.claude/skills ──────────────────────
 # Must run AFTER the ~/.claude symlink is created above.
-# Clone repo to a temp dir, copy skill folders, then remove the clone.
-SKILLS_DIR="$HOME/.claude/skills"
-mkdir -p "$SKILLS_DIR"
-SKILLS_TMP=$(mktemp -d)
-echo "Cloning Anthropic skills repo..."
-if git clone --depth 1 https://github.com/anthropics/skills.git "$SKILLS_TMP" 2>/dev/null; then
-    for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
-        if [[ -d "$SKILLS_TMP/skills/$skill" ]]; then
-            # Remove old symlink if present so cp can create a real directory
-            [[ -L "$SKILLS_DIR/$skill" ]] && rm -f "$SKILLS_DIR/$skill"
-            cp -af "$SKILLS_TMP/skills/$skill" "$SKILLS_DIR/"
-            echo "  Copied skill: $skill"
-        else
-            echo "  WARNING: skill '$skill' not found in repo"
-        fi
-    done
-else
-    echo "WARNING: could not clone skills repo — skipping"
-fi
-rm -rf "$SKILLS_TMP"
+update_skills() {
+    local skills_dir="$HOME/.claude/skills"
+    mkdir -p "$skills_dir"
+    local tmp; tmp=$(mktemp -d)
+    echo "Cloning Anthropic skills repo..."
+    if git clone --depth 1 https://github.com/anthropics/skills.git "$tmp" 2>/dev/null; then
+        for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
+            if [[ -d "$tmp/skills/$skill" ]]; then
+                [[ -L "$skills_dir/$skill" ]] && rm -f "$skills_dir/$skill"
+                cp -af "$tmp/skills/$skill" "$skills_dir/"
+                echo "  Copied skill: $skill"
+            else
+                echo "  WARNING: skill '$skill' not found in repo"
+            fi
+        done
+    else
+        echo "WARNING: could not clone skills repo — skipping"
+    fi
+    rm -rf "$tmp"
+}
+update_skills
 
 # ── Claude Code: project instructions ────────────────────────────────
 # MAUDE.md is always overwritten with latest sandbox rules.

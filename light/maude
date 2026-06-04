@@ -294,9 +294,59 @@ update_all() {
         rc=1
     fi
 
-    echo -e "${BOLD}Refreshing tool symlinks (bun, kanna, node, npm, npx)...${NC}"
+    echo -e "${BOLD}Refreshing tool symlinks (bun, kanna, node, npm, npx, python, pip)...${NC}"
     ensure_tool_symlinks
     echo -e "${GREEN}  ✓ ~/.local/bin symlinks updated${NC}"
+    echo ""
+
+    echo -e "${BOLD}Upgrading Ubuntu packages (mom upgrade -y)...${NC}"
+    if command -v mom >/dev/null 2>&1; then
+        # mom upgrade is only supported in v0.2.19+
+        local mom_ver; mom_ver=$(mom --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        local mom_ok=0
+        if [[ -n "$mom_ver" ]]; then
+            IFS='.' read -r _ma _mi _pa <<< "$mom_ver"
+            # require >= 0.2.19
+            if (( _ma > 0 || ( _ma == 0 && _mi > 2 ) || ( _ma == 0 && _mi == 2 && _pa >= 19 ) )); then
+                mom_ok=1
+            fi
+            unset _ma _mi _pa
+        fi
+        if [[ $mom_ok -eq 1 ]]; then
+            if mom upgrade -y; then
+                echo -e "${GREEN}  ✓ Ubuntu packages upgraded${NC}"
+            else
+                echo -e "${YELLOW}  ✗ mom upgrade failed${NC}"
+                rc=1
+            fi
+        else
+            echo -e "${YELLOW}  mom ${mom_ver:-unknown} is older than v0.2.19 — skipping (run: mom install -y mom-inst to upgrade mom itself)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  mom is not installed; skipping${NC}"
+        rc=1
+    fi
+    echo ""
+
+    echo -e "${BOLD}Updating Anthropic skills...${NC}"
+    local skills_dir="$HOME/.claude/skills"
+    mkdir -p "$skills_dir"
+    local skills_tmp; skills_tmp=$(mktemp -d)
+    if git clone --quiet --depth 1 https://github.com/anthropics/skills.git "$skills_tmp" 2>/dev/null; then
+        local updated=0
+        for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
+            if [[ -d "$skills_tmp/skills/$skill" ]]; then
+                [[ -L "$skills_dir/$skill" ]] && rm -f "$skills_dir/$skill"
+                cp -af "$skills_tmp/skills/$skill" "$skills_dir/"
+                updated=$((updated+1))
+            fi
+        done
+        echo -e "${GREEN}  ✓ $updated skills updated${NC}"
+    else
+        echo -e "${YELLOW}  ✗ could not clone skills repo — skipping${NC}"
+        rc=1
+    fi
+    rm -rf "$skills_tmp"
     echo ""
 
     if [[ $rc -eq 0 ]]; then
