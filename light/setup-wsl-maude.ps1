@@ -961,7 +961,7 @@ if ($NoOneDrive) {
     }
 }
 
-if ($HostFolderSource -match 'OneDrive') {
+if ($OneDrive -and $HostFolderSource -match 'OneDrive') {
     Show-OneDriveSharingWarning -Path $HostFolder
 }
 
