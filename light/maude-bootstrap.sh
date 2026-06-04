@@ -246,8 +246,10 @@ Use `mom install -y <package>` to install system packages -- no sudo needed.
 Always use `-y` for unattended installs.
 
 If you need to install Python packages, always check the local package manager
-first (`mom search <package>` or `mom install -y python3-<package>`). Only use
-`pip install` if no adequate version is available via mom.
+first (`apt-cache search <package>` on Debian/Ubuntu or `dnf search <package>`
+on RHEL/Rocky — both work without sudo). If an adequate version is available,
+install it with `mom install -y python3-<package>`. Only use `pip install` if
+no adequate version is available via mom.
 MAUDEEOF
 echo "Claude Code: MAUDE.md created."
 
