@@ -61,12 +61,21 @@ fi
 if ! dpkg -s mom-inst >/dev/null 2>&1; then
     _arch=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
     _ver="0.2.19"
-    echo "Installing mom-inst package v${_ver} (${_arch})..."
+    # Detect Ubuntu version to pick the right .deb asset (2204, 2404, 2604).
+    # Fall back to 2404 for anything unrecognised.
+    _ubuntu_ver=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID}" | tr -d '.')
+    case "$_ubuntu_ver" in
+        2204) _os_tag="ubuntu-2204" ;;
+        2604) _os_tag="ubuntu-2604" ;;
+        *)    _os_tag="ubuntu-2404" ;;
+    esac
+    echo "Installing mom-inst package v${_ver} (${_os_tag}, ${_arch})..."
     curl -fsSL \
-        "https://github.com/dirkpetersen/mom/releases/download/v${_ver}/mom-inst_${_ver}_ubuntu-2404_${_arch}.deb" \
+        "https://github.com/dirkpetersen/mom/releases/download/v${_ver}/mom-inst_${_ver}_${_os_tag}_${_arch}.deb" \
         -o /tmp/mom-inst.deb
     dpkg -i /tmp/mom-inst.deb
     rm -f /tmp/mom-inst.deb
+    unset _ubuntu_ver _os_tag
     echo "mom installed via mom-inst package."
 fi
 usermod -aG mom "$USERNAME" 2>/dev/null || true
