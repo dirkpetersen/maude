@@ -27,11 +27,14 @@ echo "Installing textual..."
 # crashes the Set Creds modal. Drop the cap when fixed upstream.
 pip install --quiet --break-system-packages 'textual<8'
 
-# ── Source ensure_tool_symlinks() helper ──────────────────────────────
+# ── Source maude shell libraries ──────────────────────────────────────
 mkdir -p "$HOME/.local/lib/maude"
-curl -fsSL "$GH_RAW/lib/ensure-tools.sh" -o "$HOME/.local/lib/maude/ensure-tools.sh"
-# shellcheck source=/dev/null
-. "$HOME/.local/lib/maude/ensure-tools.sh"
+for _lib in ensure-tools.sh refresh-md.sh update-skills.sh; do
+    curl -fsSL "$GH_RAW/lib/$_lib" -o "$HOME/.local/lib/maude/$_lib"
+    # shellcheck source=/dev/null
+    . "$HOME/.local/lib/maude/$_lib"
+done
+unset _lib
 
 # ── Install Bun + kanna-code ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then
@@ -97,38 +100,19 @@ if [[ ! -f "$HOME/.claude/yolo-mode" ]]; then
     echo "Claude Code: yolo-mode marker created."
 fi
 
-# ── Copy Anthropic skills into ~/.claude/skills ──────────────────────
-update_skills() {
-    local skills_dir="$HOME/.claude/skills"
-    mkdir -p "$skills_dir"
-    local tmp; tmp=$(mktemp -d)
-    echo "Cloning Anthropic skills repo..."
-    if git clone --depth 1 https://github.com/anthropics/skills.git "$tmp" 2>/dev/null; then
-        for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
-            if [[ -d "$tmp/skills/$skill" ]]; then
-                [[ -L "$skills_dir/$skill" ]] && rm -f "$skills_dir/$skill"
-                cp -af "$tmp/skills/$skill" "$skills_dir/"
-                echo "  Copied skill: $skill"
-            else
-                echo "  WARNING: skill '$skill' not found in repo"
-            fi
-        done
-    else
-        echo "WARNING: could not clone skills repo — skipping"
-    fi
-    rm -rf "$tmp"
-}
-update_skills
-
-# ── Claude Code: project instructions ────────────────────────────────
-# MAUDE.md is always overwritten with latest sandbox rules.
-# CLAUDE.md is only created if missing (user may have customized it).
-curl -fsSL "$GH_RAW/MAUDE.md" -o "$HOME/.claude/MAUDE.md"
-echo "Claude Code: MAUDE.md installed."
-
-if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
-    curl -fsSL "$GH_RAW/CLAUDE.template.md" -o "$HOME/.claude/CLAUDE.md"
-    echo "Claude Code: CLAUDE.md created from template."
+# ── Copy Anthropic skills into ~/.claude/skills (via update_skills lib) ─
+echo "Cloning Anthropic skills repo..."
+if count=$(update_skills); then
+    echo "  Copied $count skills."
+else
+    echo "  WARNING: could not clone skills repo — skipping."
 fi
+unset count
+
+# ── Claude Code: project instructions (MAUDE.md + CLAUDE.md template) ─
+# Uses refresh_claude_md() from refresh-md.sh, which validates the download
+# and populates the local cache for subsequent project opens.
+MAUDE_RAW="$GH_RAW" refresh_claude_md
+echo "Claude Code: MAUDE.md installed."
 
 echo "=== User bootstrap complete ==="

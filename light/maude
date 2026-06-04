@@ -134,38 +134,67 @@ delete_project() {
 
 # ── Launch TUI ────────────────────────────────────────────────────────
 MAUDE_PY="$HOME/.local/bin/maude.py"
-GH_RAW="https://raw.githubusercontent.com/dirkpetersen/maude/main/light"
+# GitHub raw URL — overridable for testing forks (e.g. MAUDE_RAW=...)
+GH_RAW="${MAUDE_RAW:-https://raw.githubusercontent.com/dirkpetersen/maude/main/light}"
 MAUDE_PY_URL="$GH_RAW/maude.py"
 MAUDE_BIN_URL="$GH_RAW/maude"
 MAUDE_LIB_DIR="$HOME/.local/lib/maude"
 
-# Source ensure_tool_symlinks() — fetches the lib on first use, then caches.
-ensure_lib() {
-    local lib="$MAUDE_LIB_DIR/ensure-tools.sh"
+# Inline minimal fallback used if the lib download fails. Mirrors
+# ensure-tools.sh so node/python/etc. still get linked when offline.
+_inline_ensure_tool_symlinks() {
+    local bin="$HOME/.local/bin"
+    mkdir -p "$bin"
+    [[ -x "$HOME/.bun/bin/bun"   ]] && ln -sfn "$HOME/.bun/bin/bun"   "$bin/bun"
+    [[ -x "$HOME/.bun/bin/kanna" ]] && ln -sfn "$HOME/.bun/bin/kanna" "$bin/kanna"
+    local _py _pip
+    _py=$(command -v python3 2>/dev/null)
+    _pip=$(command -v pip3 2>/dev/null)
+    [[ -x "$_py"  ]] && ln -sfn "$_py"  "$bin/python"
+    [[ -x "$_pip" ]] && ln -sfn "$_pip" "$bin/pip"
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -d "$nvm_dir/versions/node" ]]; then
+        local nb; nb=$(ls -td "$nvm_dir/versions/node"/*/bin 2>/dev/null | head -1)
+        if [[ -n "$nb" ]]; then
+            local t
+            for t in node npm npx; do
+                [[ -x "$nb/$t" ]] && ln -sfn "$nb/$t" "$bin/$t"
+            done
+        fi
+    fi
+}
+
+# Source a cached library file from $MAUDE_LIB_DIR; download on first use.
+# Returns 0 on success, 1 if the file couldn't be obtained.
+load_lib() {
+    local name="$1"
+    local lib="$MAUDE_LIB_DIR/$name"
     if [[ ! -f "$lib" ]]; then
         mkdir -p "$MAUDE_LIB_DIR"
-        curl -fsSL "$GH_RAW/lib/ensure-tools.sh" -o "$lib" 2>/dev/null || return 1
+        curl -fsSL --max-time 10 "$GH_RAW/lib/$name" -o "$lib" 2>/dev/null || return 1
     fi
     # shellcheck source=/dev/null
     . "$lib"
 }
-ensure_lib || {
-    # Fallback: if we can't fetch the lib, define a minimal inline version
-    # so symlinks still work. The next `maude update` will fix it properly.
-    ensure_tool_symlinks() {
-        local bin="$HOME/.local/bin"
-        mkdir -p "$bin"
-        [[ -x "$HOME/.bun/bin/bun"   ]] && ln -sfn "$HOME/.bun/bin/bun"   "$bin/bun"
-        [[ -x "$HOME/.bun/bin/kanna" ]] && ln -sfn "$HOME/.bun/bin/kanna" "$bin/kanna"
-    }
+
+load_lib ensure-tools.sh || ensure_tool_symlinks() { _inline_ensure_tool_symlinks; }
+load_lib refresh-md.sh   || true   # refresh_claude_md falls through if not loaded
+load_lib update-skills.sh || true
+
+_pip_install_textual() {
+    pip install --quiet --break-system-packages 'textual<8' 2>/dev/null && return 0
+    pip install --quiet 'textual<8' 2>/dev/null && return 0
+    return 1
 }
 
 ensure_textual() {
     if ! python3 -c "import textual" 2>/dev/null; then
         echo -e "${CYAN}Installing textual...${NC}"
-        pip install --quiet --break-system-packages 'textual<8' || \
-            pip install --quiet 'textual<8'
-        return
+        _pip_install_textual || {
+            echo -e "${RED}Failed to install textual — TUI will not work.${NC}" >&2
+            return 1
+        }
+        return 0
     fi
     # Already installed — downgrade if the version is broken.
     local ver
@@ -173,10 +202,13 @@ ensure_textual() {
     case "$ver" in
         8.*|9.*|1[0-9].*)
             echo -e "${YELLOW}Downgrading textual ($ver → <8) to avoid a known crash...${NC}"
-            pip install --quiet --break-system-packages 'textual<8' || \
-                pip install --quiet 'textual<8'
+            _pip_install_textual || {
+                echo -e "${RED}Failed to downgrade textual — TUI may crash.${NC}" >&2
+                return 1
+            }
             ;;
     esac
+    return 0
 }
 
 launch_tui() {
@@ -245,23 +277,44 @@ update_all() {
 
     echo -e "${BOLD}Refreshing statusline.sh...${NC}"
     local statusline="$HOME/.claude/statusline.sh"
-    if curl -fsSL "$GH_RAW/statusline.sh?cache=${ts}" -o "$statusline"; then
-        chmod +x "$statusline"
+    local statusline_tmp; statusline_tmp=$(mktemp)
+    if curl -fsSL --max-time 10 "$GH_RAW/statusline.sh?cache=${ts}" -o "$statusline_tmp" \
+       && head -n1 "$statusline_tmp" | grep -q '^#!/bin/bash' \
+       && grep -q 'context_window' "$statusline_tmp"; then
+        chmod +x "$statusline_tmp"
+        mv "$statusline_tmp" "$statusline"
         echo -e "${GREEN}  ✓ statusline.sh updated${NC}"
     else
-        echo -e "${YELLOW}  ✗ could not fetch statusline.sh${NC}"
+        rm -f "$statusline_tmp"
+        echo -e "${YELLOW}  ✗ statusline download missing or invalid (kept existing copy)${NC}"
         rc=1
     fi
     echo ""
 
-    echo -e "${BOLD}Refreshing tool symlinks library...${NC}"
+    echo -e "${BOLD}Refreshing maude libraries (ensure-tools, refresh-md, update-skills)...${NC}"
     mkdir -p "$MAUDE_LIB_DIR"
-    if curl -fsSL "$GH_RAW/lib/ensure-tools.sh?cache=${ts}" -o "$MAUDE_LIB_DIR/ensure-tools.sh"; then
-        # shellcheck source=/dev/null
-        . "$MAUDE_LIB_DIR/ensure-tools.sh"
-        echo -e "${GREEN}  ✓ ensure-tools.sh updated${NC}"
+    local lib_rc=0
+    for lib in ensure-tools.sh refresh-md.sh update-skills.sh; do
+        local lib_tmp; lib_tmp=$(mktemp)
+        if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
+           && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
+            mv "$lib_tmp" "$MAUDE_LIB_DIR/$lib"
+        else
+            rm -f "$lib_tmp"
+            echo -e "${YELLOW}  ✗ could not fetch $lib (kept cached copy)${NC}"
+            lib_rc=1
+        fi
+    done
+    # Re-source the freshly-downloaded copies.
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/ensure-tools.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/refresh-md.sh"   2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/update-skills.sh" 2>/dev/null || true
+    if [[ $lib_rc -eq 0 ]]; then
+        echo -e "${GREEN}  ✓ libraries refreshed${NC}"
     else
-        echo -e "${YELLOW}  ✗ could not fetch ensure-tools.sh${NC}"
         rc=1
     fi
     echo ""
@@ -313,17 +366,31 @@ update_all() {
 
     echo -e "${BOLD}Upgrading Ubuntu packages (mom upgrade -y)...${NC}"
     if command -v mom >/dev/null 2>&1; then
-        # mom upgrade is only supported in v0.2.19+
+        # mom is setuid root but requires the caller to be in the 'mom' group.
+        # Group membership only takes effect on next login, so if the user
+        # was just added we may need to fall back to `sg mom -c '...'`.
         local mom_ver; mom_ver=$(mom --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
-        if [[ -n "$mom_ver" ]] && dpkg --compare-versions "$mom_ver" ge "0.2.19"; then
+        if [[ -z "$mom_ver" ]] || ! dpkg --compare-versions "$mom_ver" ge "0.2.19"; then
+            echo -e "${YELLOW}  mom ${mom_ver:-unknown} is older than v0.2.19 — skipping (run: mom install -y mom-inst to upgrade mom itself)${NC}"
+        elif id -nG "$USER" | grep -qw mom; then
             if mom upgrade -y; then
                 echo -e "${GREEN}  ✓ Ubuntu packages upgraded${NC}"
             else
                 echo -e "${YELLOW}  ✗ mom upgrade failed${NC}"
                 rc=1
             fi
+        elif getent group mom | grep -qw "$USER"; then
+            # In the group on disk but current shell hasn't picked it up.
+            if sg mom -c "mom upgrade -y"; then
+                echo -e "${GREEN}  ✓ Ubuntu packages upgraded (via sg)${NC}"
+            else
+                echo -e "${YELLOW}  ✗ mom upgrade failed${NC}"
+                rc=1
+            fi
         else
-            echo -e "${YELLOW}  mom ${mom_ver:-unknown} is older than v0.2.19 — skipping (run: mom install -y mom-inst to upgrade mom itself)${NC}"
+            echo -e "${YELLOW}  $USER is not in the 'mom' group; cannot run mom upgrade.${NC}"
+            echo -e "${YELLOW}  Ask an admin to: sudo usermod -aG mom $USER && newgrp mom${NC}"
+            rc=1
         fi
     else
         echo -e "${YELLOW}  mom is not installed; skipping${NC}"
@@ -332,24 +399,18 @@ update_all() {
     echo ""
 
     echo -e "${BOLD}Updating Anthropic skills...${NC}"
-    local skills_dir="$HOME/.claude/skills"
-    mkdir -p "$skills_dir"
-    local skills_tmp; skills_tmp=$(mktemp -d)
-    if git clone --quiet --depth 1 https://github.com/anthropics/skills.git "$skills_tmp" 2>/dev/null; then
-        local updated=0
-        for skill in claude-api doc-coauthoring docx mcp-builder pdf pptx skill-creator xlsx; do
-            if [[ -d "$skills_tmp/skills/$skill" ]]; then
-                [[ -L "$skills_dir/$skill" ]] && rm -f "$skills_dir/$skill"
-                cp -af "$skills_tmp/skills/$skill" "$skills_dir/"
-                updated=$((updated+1))
-            fi
-        done
-        echo -e "${GREEN}  ✓ $updated skills updated${NC}"
+    if declare -F update_skills >/dev/null; then
+        local count
+        if count=$(update_skills); then
+            echo -e "${GREEN}  ✓ $count skills updated${NC}"
+        else
+            echo -e "${YELLOW}  ✗ could not clone skills repo — skipping${NC}"
+            rc=1
+        fi
     else
-        echo -e "${YELLOW}  ✗ could not clone skills repo — skipping${NC}"
+        echo -e "${YELLOW}  update-skills.sh library not loaded — skipping${NC}"
         rc=1
     fi
-    rm -rf "$skills_tmp"
     echo ""
 
     if [[ $rc -eq 0 ]]; then
@@ -523,15 +584,23 @@ warn_if_suspicious_repo() {
     fi
 }
 
-refresh_claude_md() {
-    mkdir -p "$HOME/.claude"
-    # MAUDE.md is always overwritten with the latest sandbox rules from the repo.
-    curl -fsSL "$GH_RAW/MAUDE.md" -o "$HOME/.claude/MAUDE.md" 2>/dev/null || true
-    # CLAUDE.md is created from template only if missing — user owns it after that.
-    if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
-        curl -fsSL "$GH_RAW/CLAUDE.template.md" -o "$HOME/.claude/CLAUDE.md" 2>/dev/null || true
-    fi
-}
+if ! declare -F refresh_claude_md >/dev/null; then
+    # Fallback if lib/refresh-md.sh isn't available — best-effort, no caching.
+    refresh_claude_md() {
+        mkdir -p "$HOME/.claude"
+        local tmp; tmp=$(mktemp)
+        if curl -fsSL --max-time 10 "$GH_RAW/MAUDE.md" -o "$tmp" 2>/dev/null \
+           && [[ -s "$tmp" ]] && head -1 "$tmp" | grep -q '^# Maude Sandbox'; then
+            mv "$tmp" "$HOME/.claude/MAUDE.md"
+        else
+            rm -f "$tmp"
+        fi
+        if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
+            curl -fsSL --max-time 10 "$GH_RAW/CLAUDE.template.md" \
+                -o "$HOME/.claude/CLAUDE.md" 2>/dev/null || true
+        fi
+    }
+fi
 
 # ── Auto-update Claude Code once a week ──────────────────────────────
 claude_maybe_update() {
@@ -550,16 +619,38 @@ claude_maybe_update() {
     fi
 }
 
+# Resolve which `claude` to launch. Maude installs a wrapper at ~/bin/claude
+# that sets auth env vars per provider; if the wrapper is broken (e.g. dead
+# symlink from a partial dev-station install), fall back to the next claude
+# on PATH so the user isn't stuck.
+resolve_claude_cmd() {
+    if [[ -x "$HOME/bin/claude" ]]; then
+        # Quick smoke test — broken wrappers tend to fail trivially.
+        if "$HOME/bin/claude" --version >/dev/null 2>&1; then
+            printf '%s\n' "$HOME/bin/claude"
+            return 0
+        fi
+        echo -e "${YELLOW}Warning: ~/bin/claude wrapper failed --version; falling back.${NC}" >&2
+    fi
+    local alt
+    alt=$(PATH="${PATH//$HOME\/bin:/}" command -v claude 2>/dev/null)
+    if [[ -n "$alt" ]]; then
+        printf '%s\n' "$alt"
+        return 0
+    fi
+    printf '%s\n' "claude"   # last resort, lets the shell error out cleanly
+}
+
 # Check if project already exists
 if [[ -d "$PROJECT_PATH" ]]; then
-    # Existing project
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     warn_if_suspicious_repo "$PROJECT_PATH"
     claude_maybe_update
     refresh_claude_md
     cd "$PROJECT_PATH"
     echo ""
-    claude opus-1m --continue || exec claude opus-1m
+    CLAUDE_CMD=$(resolve_claude_cmd)
+    "$CLAUDE_CMD" opus-1m --continue || exec "$CLAUDE_CMD" opus-1m
 else
     # New project → create, git init, fresh start
     echo -e "${CYAN}Creating new project:${NC} $PROJECT_NAME"
@@ -570,5 +661,6 @@ else
     echo -e "${GREEN}  Initialized git repo${NC}"
     refresh_claude_md
     echo ""
-    cd "$PROJECT_PATH" && exec claude opus-1m
+    CLAUDE_CMD=$(resolve_claude_cmd)
+    cd "$PROJECT_PATH" && exec "$CLAUDE_CMD" opus-1m
 fi

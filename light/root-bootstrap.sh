@@ -74,10 +74,18 @@ if ! dpkg -s mom-inst >/dev/null 2>&1; then
     echo "Installing mom-inst package v${_ver} (${_os_tag}, ${_arch})..."
     curl -fsSL "${_base}/${_deb}"        -o "/tmp/${_deb}"
     curl -fsSL "${_base}/SHA256SUMS"     -o /tmp/mom-SHA256SUMS
-    # Verify checksum before installing — abort if it doesn't match.
-    if ! ( cd /tmp && grep " ${_deb}\$" mom-SHA256SUMS | sha256sum -c --status ); then
+    # Verify checksum before installing. Look up the entry first — if the
+    # asset isn't listed in SHA256SUMS, sha256sum -c with empty stdin would
+    # spuriously succeed.
+    _expected=$(grep " ${_deb}\$" /tmp/mom-SHA256SUMS || true)
+    if [[ -z "$_expected" ]]; then
+        echo "ERROR: no checksum entry for ${_deb} in SHA256SUMS — refusing to install."
+        rm -f "/tmp/${_deb}" /tmp/mom-SHA256SUMS
+        exit 1
+    fi
+    if ! ( cd /tmp && printf '%s\n' "$_expected" | sha256sum -c --status ); then
         echo "ERROR: SHA-256 mismatch for ${_deb} — refusing to install."
-        echo "       expected: $(grep " ${_deb}\$" /tmp/mom-SHA256SUMS | awk '{print $1}')"
+        echo "       expected: $(printf '%s' "$_expected" | awk '{print $1}')"
         echo "       got:      $(sha256sum "/tmp/${_deb}" | awk '{print $1}')"
         rm -f "/tmp/${_deb}" /tmp/mom-SHA256SUMS
         exit 1
@@ -85,7 +93,7 @@ if ! dpkg -s mom-inst >/dev/null 2>&1; then
     echo "Checksum OK for ${_deb}."
     dpkg -i "/tmp/${_deb}"
     rm -f "/tmp/${_deb}" /tmp/mom-SHA256SUMS
-    unset _ubuntu_ver _os_tag _deb _base
+    unset _ubuntu_ver _os_tag _deb _base _expected
     echo "mom installed via mom-inst package."
 fi
 usermod -aG mom "$USERNAME" 2>/dev/null || true
@@ -202,128 +210,37 @@ chown -R "$USERNAME:$USERNAME" "$USER_HOME/bin" "$USER_HOME/.local"
 # The .claude and Projects dirs are pre-created on the Windows side by
 # setup-wsl-maude.ps1 so they exist when the mount activates.
 
-# ── Welcome screen ────────────────────────────────────────────────────
-# Displayed once per interactive login session.
-cat > /etc/profile.d/maude-welcome.sh << 'WELCOME'
-# ── Ensure DANGER-ZONE.txt is present on the shared mount ────────────
-if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then
-    curl -fsSL "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/DANGER-ZONE.txt" \
-        -o "$HOME/Maude/DANGER-ZONE.txt" 2>/dev/null || true
-fi
+# ── Profile.d scripts (welcome + shell tweaks) ────────────────────────
+# Both files live in the repo; they're piped to /tmp by the PowerShell
+# setup script (preferred) or fetched directly from GitHub as a fallback.
+GH_RAW="https://raw.githubusercontent.com/dirkpetersen/maude/main/light"
 
-# ── Bootstrap keychain before the TUI launches ───────────────────────
-# If the user ran `maude github` and set a passphrase on their SSH key,
-# keychain keeps ssh-agent alive across shell logins so the passphrase
-# is entered once per WSL session, not every TUI launch. We do this BEFORE
-# `maude tui` so the TUI inherits a persistent SSH_AUTH_SOCK.
-if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && command -v keychain >/dev/null 2>&1; then
-    _maude_key=""
-    for _k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
-        [[ -f "$_k" ]] && { _maude_key="$_k"; break; }
-    done
-    # Step 1: attach to (or start) keychain's persistent ssh-agent without
-    # loading any key. Sets SSH_AUTH_SOCK in our env; never prompts.
-    eval "$(keychain --quiet --noask --eval --agents ssh)" 2>/dev/null || true
-    if [[ -n "$_maude_key" ]]; then
-        # Step 2: is our key already loaded? Compare fingerprints.
-        _maude_fp=$(ssh-keygen -lf "$_maude_key" 2>/dev/null | awk '{print $2}')
-        if [[ -n "$_maude_fp" ]] && ! ssh-add -l 2>/dev/null | grep -qF "$_maude_fp"; then
-            # Not loaded → show a friendly banner before keychain prompts.
-            G=$'\033[1;32m'; C=$'\033[1;36m'; B=$'\033[1;37m'; D=$'\033[2m'; N=$'\033[0m'
-            printf '\n'
-            printf '  %s🔑 Unlock your GitHub SSH key%s\n' "$G" "$N"
-            printf '  %s%s%s\n' "$D" "────────────────────────────────────────────" "$N"
-            printf '  Enter the passphrase you set in %smaude github%s\n' "$C" "$N"
-            printf '  to load %s%s%s into ssh-agent for this session.\n' "$B" "$_maude_key" "$N"
-            printf '  %s(Press Enter on a blank line to skip — you can unlock later from the TUI.)%s\n' "$D" "$N"
-            printf '\n'
-            eval "$(keychain --quiet --eval --agents ssh "$_maude_key")" 2>/dev/null || true
-        fi
-        unset _maude_fp
+install_profile_script() {
+    local local_src="$1" url="$2" dest="$3"
+    if [[ -f "$local_src" ]]; then
+        install -m 644 "$local_src" "$dest"
+    else
+        curl -fsSL "$url" -o "$dest"
+        chmod 644 "$dest"
     fi
-    unset _maude_key _k
-fi
+    # /etc/profile.d/*.sh need to be sourceable; chmod +x is a Debian convention.
+    chmod +x "$dest"
+}
 
-# Auto-start the TUI by default; users can opt out with ~/.maude-tui-disabled.
-# Guard with MAUDE_WELCOMED so we don't re-launch when .bashrc re-sources
-# this script (it is already sourced via /etc/profile.d on login shells).
-if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && [[ ! -f "$HOME/.maude-tui-disabled" ]] && command -v maude >/dev/null 2>&1; then
-    export MAUDE_WELCOMED=1
-    maude tui
-    return 0 2>/dev/null || true
-fi
+install_profile_script /tmp/maude-welcome.sh "$GH_RAW/welcome.sh"     /etc/profile.d/maude-welcome.sh
+install_profile_script /tmp/maude-shell.sh   "$GH_RAW/maude-shell.sh" /etc/profile.d/maude-shell.sh
 
-# Show welcome only in interactive terminals and only once per session
-if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
-    export MAUDE_WELCOMED=1
-    G='\033[1;32m'   # bright green
-    C='\033[1;36m'   # bright cyan
-    Y='\033[1;33m'   # bright yellow
-    B='\033[1;37m'   # bright white
-    N='\033[0m'      # reset
-    printf "\n"
-    printf "${G}  __  __                 _      ${N}\n"
-    printf "${G} |  \/  | __ _ _   _  __| | ___ ${N}\n"
-    printf "${G} | |\/| |/ _\` | | | |/ _\` |/ _ \\\\${N}\n"
-    printf "${G} | |  | | (_| | |_| | (_| |  __/${N}\n"
-    printf "${G} |_|  |_|\__,_|\__,_|\__,_|\___|${N}\n"
-    printf "\n"
-    printf "  ${B}Agentic coding sandbox${N}  -  Ubuntu LTS\n"
-    printf "\n"
-    printf "  Always type the command '${B}maude${N}' followed by more words as the instruction:\n"
-    printf "\n"
-    printf "  ${C}maude project-name${N}   Create or open a coding project\n"
-    printf "  ${C}maude tui${N}            Interactive project launcher (Textual UI)\n"
-    printf "  ${C}menu${N}                 Shortcut for 'maude tui'\n"
-    printf "  ${C}maude web${N}            Launch web UI (kanna)\n"
-    printf "  ${C}maude github${N}         Wizard for GitHub identity, SSH/GPG keys, signing\n"
-    printf "  ${C}maude update${N}         Update maude CLI, Claude Code, the TUI, and kanna\n"
-    printf "  ${C}maude list${N}           Show your projects\n"
-    printf "  ${C}maude delete name${N}    Delete a project (moves to .deleted/)\n"
-    printf "  ${C}maude help${N}           Full usage info\n"
-    printf "\n"
-    printf "  ${Y}mom install <pkg>${N}   Install system packages (no sudo needed)\n"
-    printf "\n"
-    printf "  ${B}Tips:${N}\n"
-    printf "    Screen split:    Alt+Shift+Plus (vertical) | Alt+Shift+Minus (horizontal)\n"
-    printf "    Share an image:  drop it into your Maude folder on Windows, then ask Claude\n"
-    printf "                     to look at it (e.g. ~/Maude/Projects/<name>/screenshot.png)\n"
-    printf "    Activate mic:    ${B}Win+H${N}  (Windows voice dictation)\n"
-    printf "    TUI auto-launch: untick ${B}Start TUI with Maude${N} in the sidebar to opt out\n"
-    printf "\n"
-    if [[ ! -f "$HOME/.aws/credentials" ]] && [[ ! -f "$HOME/.azure/clauderc" ]]; then
-        printf "  ${Y}LLM service credentials not yet set up.${N}\n"
-        printf "  ${Y}Open the TUI ('${B}maude tui${Y}' or '${B}menu${Y}') and click ${B}Set Creds${Y}.${N}\n"
-        printf "  ${Y}You can pick: paste exports / AWS Bedrock / Azure Foundry.${N}\n"
-        printf "\n"
-    fi
-fi
-WELCOME
-chmod +x /etc/profile.d/maude-welcome.sh
-
-# Hook welcome into user's .bashrc (profile.d only runs for login shells)
-if [[ -f "/home/$USERNAME/.bashrc" ]]; then
-    grep -qxF '. /etc/profile.d/maude-welcome.sh' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        printf '\n# Maude welcome\n. /etc/profile.d/maude-welcome.sh\n' >> "/home/$USERNAME/.bashrc"
-fi
-
-# ── Maude shell tweaks: PS1, help/menu functions, tab completion, etc. ─
-# Consolidated into a single /etc/profile.d script (replaces six separate
-# .bashrc heredoc blocks). The file is downloaded fresh on every bootstrap
-# so updates take effect on reinstall.
-if [[ -f /tmp/maude-shell.sh ]]; then
-    install -m 644 /tmp/maude-shell.sh /etc/profile.d/maude-shell.sh
-else
-    curl -fsSL "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude-shell.sh" \
-        -o /etc/profile.d/maude-shell.sh
-    chmod 644 /etc/profile.d/maude-shell.sh
-fi
-
-# Hook into both /etc/skel/.bashrc and the user's .bashrc
+# Hook the profile.d scripts into both /etc/skel/.bashrc (future users)
+# and the active user's .bashrc (profile.d only auto-runs for login shells).
+hook_into_bashrc() {
+    local rc="$1" path="$2" header="$3"
+    [[ -f "$rc" ]] || return 0
+    grep -qxF ". $path" "$rc" 2>/dev/null || \
+        printf '\n# %s\n. %s\n' "$header" "$path" >> "$rc"
+}
 for rc in /etc/skel/.bashrc "/home/$USERNAME/.bashrc"; do
-    [[ -f "$rc" ]] || continue
-    grep -qxF '. /etc/profile.d/maude-shell.sh' "$rc" 2>/dev/null || \
-        printf '\n# Maude shell tweaks (PS1, help/menu, tab completion)\n. /etc/profile.d/maude-shell.sh\n' >> "$rc"
+    hook_into_bashrc "$rc" /etc/profile.d/maude-welcome.sh "Maude welcome"
+    hook_into_bashrc "$rc" /etc/profile.d/maude-shell.sh   "Maude shell tweaks (PS1, help/menu, tab completion)"
 done
 
 # ── Install Claude Code ───────────────────────────────────────────────

@@ -494,6 +494,7 @@ $filesToDownload = @(
     @{ Url = "$GH_RAW/light/maude-bootstrap.sh";      Dest = "maude-bootstrap.sh";                 Key = "light/maude-bootstrap.sh" }
     @{ Url = "$GH_RAW/light/maude";                   Dest = "maude";                              Key = "light/maude" }
     @{ Url = "$GH_RAW/light/maude-shell.sh";          Dest = "maude-shell.sh";                     Key = "light/maude-shell.sh" }
+    @{ Url = "$GH_RAW/light/welcome.sh";              Dest = "welcome.sh";                         Key = "light/welcome.sh" }
     @{ Url = "$GH_RAW/maude.png";                     Dest = "maude.png";                          Key = "maude.png" }
     @{ Url = "$GH_RAW/packages/ubuntu-packages.yaml"; Dest = "..\packages\ubuntu-packages.yaml";   Key = "packages/ubuntu-packages.yaml" }
 )
@@ -1063,6 +1064,7 @@ $filesToPipe = @(
     @{ Src = "root-bootstrap.sh";  Dst = "root-bootstrap.sh" }
     @{ Src = "maude";              Dst = "maude-launcher" }
     @{ Src = "maude-shell.sh";     Dst = "maude-shell.sh" }
+    @{ Src = "welcome.sh";         Dst = "maude-welcome.sh" }
 )
 foreach ($f in $filesToPipe) {
     $src = Join-Path $ScriptDir $f.Src
