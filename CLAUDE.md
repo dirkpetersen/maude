@@ -38,8 +38,7 @@ mom       -> setuid binary, lets non-root users install packages
 ```
 Windows host
     |
-    +-- C:\Users\<user>\OneDrive\...\Maude\          <- shared folder (OneDrive)
-    |   OR AppData\LocalLow\Maude\                  <- fallback (no OneDrive)
+    +-- %LOCALAPPDATA%\Maude\Data\Maude\              <- shared folder (default)
     |       +-- Projects/       <- coding projects (directly used by WSL)
     |       +-- .claude/        <- Claude Code config (symlinked from WSL)
     |       +-- .kanna/         <- kanna web UI data (symlinked from WSL)
@@ -155,7 +154,7 @@ Key implementation details:
 - WT profile cleanup runs BEFORE self-elevation (elevated process has different `$env:LOCALAPPDATA`)
 - `~/.claude` is symlinked to `~/Maude/.claude` so settings persist on the host mount
 - **Security model**: automount disabled + no generic sudo = AI agent can only access the shared `Maude` folder and installed tools; Claude Code runs in bypassPermissions mode (safe inside sandbox). A `~/.claude/yolo-mode` marker file is created during bootstrap (delete it to disable)
-- **DANGER-ZONE.txt**: copied to `~/Maude/DANGER-ZONE.txt` on the shared host mount; warns users not to share the Maude folder via OneDrive sharing features. Auto-restored on each startup if missing
+- **DANGER-ZONE.txt**: copied to `~/Maude/DANGER-ZONE.txt` on the shared host mount; warns users about the AI's unrestricted access to this folder. Auto-restored on each startup if missing
 - The `maude` CLI auto-updates Claude Code weekly (stamp file: `~/.claude/.last-update-check`)
 - **Sandbox instructions split**: `~/.claude/MAUDE.md` is always overwritten on each `maude` launch (sandbox rules, not user-editable); `~/.claude/CLAUDE.md` is created once if missing and user-owned. `CLAUDE.md` includes sandbox rules via `@MAUDE.md`
 - `maude delete <name>` is a soft-delete — moves to `Projects/.deleted/`, not permanent

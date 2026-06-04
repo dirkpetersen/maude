@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Maude Light is
 
-A one-command Windows sandbox for agentic coding. A single PowerShell command installs an isolated Ubuntu WSL2 distro (`Maude`), mounts a shared folder on the Windows host (OneDrive or `AppData\LocalLow\Maude\`), symlinks Claude Code config into that folder so settings survive reinstalls, and drops the user into a Textual TUI where they can create projects and open them in Claude Code.
+A one-command Windows sandbox for agentic coding. A single PowerShell command installs an isolated Ubuntu WSL2 distro (`Maude`), mounts a shared folder on the Windows host (`%LOCALAPPDATA%\Maude\Data\Maude`), symlinks Claude Code config into that folder so settings survive reinstalls, and drops the user into a Textual TUI where they can create projects and open them in Claude Code.
 
 **Goal**: a non-technical Windows user pastes one line into PowerShell and has a working AI coding environment in under 3 minutes.
 
@@ -15,8 +15,7 @@ A one-command Windows sandbox for agentic coding. A single PowerShell command in
 ```
 Windows host
     |
-    +-- C:\Users\<user>\OneDrive\...\Maude\      <- shared folder (OneDrive preferred)
-    |   OR AppData\LocalLow\Maude\               <- fallback (no OneDrive)
+    +-- %LOCALAPPDATA%\Maude\Data\Maude\          <- shared folder (default)
     |       +-- Projects/     <- coding projects (directly used by WSL)
     |       +-- .claude/      <- Claude Code config (symlinked from WSL home)
     |       +-- .kanna/       <- kanna web UI data (symlinked from WSL home)
@@ -194,4 +193,4 @@ Kanna is launched with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so it shells out to 
 | `~/Maude/.claude/` | All Claude Code config, credentials, CLAUDE.md, yolo-mode marker |
 | `~/Maude/.kanna/` | kanna web UI data |
 | `~/Maude/Projects/` | User's coding projects |
-| `~/Maude/DANGER-ZONE.txt` | Warning not to share Maude folder via OneDrive sharing; auto-restored on startup if deleted |
+| `~/Maude/DANGER-ZONE.txt` | Safety warning about the AI's unrestricted access to this folder; auto-restored on startup if deleted |

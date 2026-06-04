@@ -1,10 +1,10 @@
 # Maude Light
 
-A secure WSL2 sandbox for agentic AI coding. By default, WSL instances mount the entire Windows file system, giving both the user and any AI agent unrestricted access to OneDrive, Documents, and everything else on disk. Maude changes that.
+A secure WSL2 sandbox for agentic AI coding. By default, WSL instances mount the entire Windows file system, giving both the user and any AI agent unrestricted access to Documents and everything else on disk. Maude changes that.
 
-Maude creates a single `Maude` subfolder inside OneDrive (or `%LOCALAPPDATA%\Maude\Data\Maude` if OneDrive is not available or `-NoOneDrive` is used) and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
+Maude creates a single `Maude` subfolder inside `%LOCALAPPDATA%\Maude\Data\Maude` and shares **only** that empty directory with a standard Ubuntu WSL instance. It removes generic `sudo` access (unlike the default Ubuntu configuration) so the user and the AI agent can only run tools that are already installed. New packages can be added through the [`mom`](https://github.com/dirkpetersen/mom) package manager, which supports install, update, and repo refresh — but cannot add arbitrary repositories or run unvetted code. The user decides which files to expose to the AI agent by copying them into the `Maude` folder.
 
-Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder on OneDrive, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
+Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder under `%LOCALAPPDATA%`, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
 
 Use a TUI
 <img width="1330" height="1075" alt="image" src="https://github.com/user-attachments/assets/5c97eecf-d4c7-48af-a2e3-6f3de060f743" />
@@ -61,17 +61,11 @@ Just the non-elevated user-phase command — no admin, no UAC.
 
 | Flag | Phase | Effect |
 |------|-------|--------|
-| *(default)* | user | `%LOCALAPPDATA%\Maude\Data\Maude` (new install) or the previous location (reinstall) |
-| `-OneDrive` | user | Shared folder in OneDrive (Business > Personal > generic) |
-| `-NoOneDrive` | user | Force `%LOCALAPPDATA%\Maude\Data\Maude` |
+| *(default)* | user | `%LOCALAPPDATA%\Maude\Data\Maude` |
 | `-Noble` | both | Use Ubuntu 24.04 instead of the default 26.04 |
 | `-Admin` | admin | First-time install on a machine where WSL2 isn't yet installed. Required only for the WSL Windows-feature install + Windows Terminal install + Defender exclusion. Once those are present, all subsequent installs run unelevated. |
 | `-NoDefenderExclusion` | admin | Don't add the Windows Defender exclusion (use only if your security policy forbids it; user-phase template builds may then hit AV locks) |
 | `-Release <tag>` | both | Pin to a tagged release and verify SHA-256 of every downloaded file against `light/checksums.txt` from that tag (see below) |
-
-Flags can be combined, e.g. `-OneDrive -Noble`.
-
-> **OneDrive sharing risk:** if you choose `-OneDrive`, the user-phase script will print a warning about prompt-injection risk via OneDrive sharing. If anyone has edit access to the Maude folder (or any ancestor) through OneDrive sharing, they can drop files that the AI will execute as instructions. Verify the folder and its parents are not shared, or use `-NoOneDrive` instead.
 
 ### Refreshing the template (e.g., new Ubuntu version)
 
@@ -226,7 +220,7 @@ This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the l
 
 ### Shared folder
 
-`~/Maude` is mounted from your Windows host (OneDrive, or `%LOCALAPPDATA%\Maude\Data\Maude` with `-NoOneDrive`). Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
+`~/Maude` is mounted from `%LOCALAPPDATA%\Maude\Data\Maude` on your Windows host. Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
 
 ## Troubleshooting
 
@@ -305,11 +299,6 @@ Windows host
   │                 ├── .claude/                 ← Claude Code config (symlinked from WSL)
   │                 └── .kanna/                  ← kanna web UI data (symlinked from WSL)
   │
-  ├── C:\Users\you\OneDrive\...\Maude\          ← alternative shared folder location
-  │       ├── Projects/                          ←   (with -OneDrive flag)
-  │       ├── .claude/
-  │       └── .kanna/
-  │
   └── WSL2: Maude (Ubuntu 26.04, or 24.04 with -Noble)
         ├── ~/Maude/           ← drvfs mount of the shared folder
         │     ├── Projects/    ← coding projects (maude CLI)
@@ -341,7 +330,7 @@ Maude Light could be ported to macOS using [Lima](https://github.com/lima-vm/lim
 | Windows Terminal profile + icon | Not needed -- `limactl shell Maude` or alias |
 | Desktop `.lnk` shortcut | macOS `.app` bundle or Dock alias (optional) |
 | `curl.exe` (not `curl`) | `curl` works natively |
-| OneDrive folder detection | `~/Documents` or iCloud Drive detection |
+| `%LOCALAPPDATA%` folder detection | `~/Documents` or iCloud Drive detection |
 
 **What stays the same:** `root-bootstrap.sh`, `maude-bootstrap.sh`, the `maude` launcher, the `~/.claude` symlink strategy, `ubuntu-packages.yaml`, and all tooling (Claude Code, mom, dev-station, skills) run identically inside the Linux VM. The main work is replacing the ~500-line PowerShell orchestrator with a ~200-line bash script that drives Lima instead of WSL.
 

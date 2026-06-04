@@ -8,11 +8,10 @@
 WHAT IS THIS FOLDER?
 --------------------
 This is your "Maude" folder. It lives inside your local drive
-or OneDrive and is the ONLY folder on your computer that the 
-AI assistant (Claude) can see and touch. Everything else on 
-your PC — your email, your other OneDrive files, your Desktop,
-your Downloads — is completely hidden from the AI. That is the
-good news.
+and is the ONLY folder on your computer that the AI assistant
+(Claude) can see and touch. Everything else on your PC — your
+email, your Desktop, your Downloads — is completely hidden
+from the AI. That is the good news.
 
 The bad news: anything you put IN this folder is fully
 exposed to the AI, and the AI runs in "unrestricted mode."
@@ -56,9 +55,9 @@ its subfolders, including:
 ======================================================
 
 Before you copy a document into Maude, make sure the
-original stays in a safe location — another OneDrive
-folder, a shared drive, a USB stick, your email, anywhere
-that is NOT inside this Maude folder.
+original stays in a safe location — a shared drive, a USB
+stick, your email, anywhere that is NOT inside this Maude
+folder.
 
 If the AI accidentally overwrites or deletes your file
 and this was your only copy, it is GONE.
@@ -67,7 +66,7 @@ and this was your only copy, it is GONE.
 HOW YOU SHOULD WORK WITH THIS FOLDER
 --------------------------------------
 1. KEEP your original files in their normal location
-   (OneDrive, shared drives, email, etc.).
+   (shared drives, email, etc.).
 
 2. COPY the files you want the AI to analyze or work on
    INTO this Maude folder. Think of these copies as
@@ -82,16 +81,6 @@ HOW YOU SHOULD WORK WITH THIS FOLDER
 
 5. DELETE the working copies from the Maude folder when
    you no longer need them here.
-
-6. DO NOT share this folder (or any subfolder) using
-   OneDrive's sharing features. If you share this folder
-   with colleagues, they will see documents that may have
-   been silently modified, overwritten, or created by the
-   AI — without any review or approval from you. They
-   could mistake AI-generated or AI-altered content for
-   your final, authoritative work. Always take outputs
-   OUT of this folder and share them from a normal
-   OneDrive location once you have reviewed them.
 
 Think of this folder as a WORKBENCH, not a filing cabinet.
 You bring materials to the workbench, do the work, take
@@ -108,9 +97,8 @@ is the longer explanation so you understand why.
 When you ask the AI to analyze a document, the contents of
 that document are sent to the cloud servers of our AI
 providers (Microsoft Azure and Amazon Web Services) for
-processing. This is similar to how your files travel to
-Microsoft's servers when you save them to OneDrive — the
-data has to go somewhere to be processed.
+processing. The data has to go somewhere to be processed,
+similar to any other cloud service you use.
 
 However, our organization has SERVICE LEVEL AGREEMENTS
 (SLAs) and DATA PROCESSING AGREEMENTS (DPAs) with our
@@ -139,8 +127,7 @@ So while no system is 100% risk-free, there are strong
 legal and contractual protections in place. The risk of
 your data leaking through these AI services is comparable
 to the risk of it leaking through any other enterprise
-cloud service you already use (OneDrive, SharePoint,
-email, etc.).
+cloud service you already use (SharePoint, email, etc.).
 
 THAT SAID — use common sense:
 
