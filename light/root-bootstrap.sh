@@ -69,13 +69,23 @@ if ! dpkg -s mom-inst >/dev/null 2>&1; then
         2604) _os_tag="ubuntu-2604" ;;
         *)    _os_tag="ubuntu-2404" ;;
     esac
+    _deb="mom-inst_${_ver}_${_os_tag}_${_arch}.deb"
+    _base="https://github.com/dirkpetersen/mom/releases/download/v${_ver}"
     echo "Installing mom-inst package v${_ver} (${_os_tag}, ${_arch})..."
-    curl -fsSL \
-        "https://github.com/dirkpetersen/mom/releases/download/v${_ver}/mom-inst_${_ver}_${_os_tag}_${_arch}.deb" \
-        -o /tmp/mom-inst.deb
-    dpkg -i /tmp/mom-inst.deb
-    rm -f /tmp/mom-inst.deb
-    unset _ubuntu_ver _os_tag
+    curl -fsSL "${_base}/${_deb}"        -o "/tmp/${_deb}"
+    curl -fsSL "${_base}/SHA256SUMS"     -o /tmp/mom-SHA256SUMS
+    # Verify checksum before installing — abort if it doesn't match.
+    if ! ( cd /tmp && grep " ${_deb}\$" mom-SHA256SUMS | sha256sum -c --status ); then
+        echo "ERROR: SHA-256 mismatch for ${_deb} — refusing to install."
+        echo "       expected: $(grep " ${_deb}\$" /tmp/mom-SHA256SUMS | awk '{print $1}')"
+        echo "       got:      $(sha256sum "/tmp/${_deb}" | awk '{print $1}')"
+        rm -f "/tmp/${_deb}" /tmp/mom-SHA256SUMS
+        exit 1
+    fi
+    echo "Checksum OK for ${_deb}."
+    dpkg -i "/tmp/${_deb}"
+    rm -f "/tmp/${_deb}" /tmp/mom-SHA256SUMS
+    unset _ubuntu_ver _os_tag _deb _base
     echo "mom installed via mom-inst package."
 fi
 usermod -aG mom "$USERNAME" 2>/dev/null || true
@@ -297,78 +307,24 @@ if [[ -f "/home/$USERNAME/.bashrc" ]]; then
         printf '\n# Maude welcome\n. /etc/profile.d/maude-welcome.sh\n' >> "/home/$USERNAME/.bashrc"
 fi
 
-# ── Allow pip install without venv (safe inside sandbox) ──────────────
-if [[ -f "/home/$USERNAME/.bashrc" ]]; then
-    grep -q 'PIP_BREAK_SYSTEM_PACKAGES' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        printf '\n# Maude sandbox: allow pip install without venv\nexport PIP_BREAK_SYSTEM_PACKAGES=1\n' >> "/home/$USERNAME/.bashrc"
+# ── Maude shell tweaks: PS1, help/menu functions, tab completion, etc. ─
+# Consolidated into a single /etc/profile.d script (replaces six separate
+# .bashrc heredoc blocks). The file is downloaded fresh on every bootstrap
+# so updates take effect on reinstall.
+if [[ -f /tmp/maude-shell.sh ]]; then
+    install -m 644 /tmp/maude-shell.sh /etc/profile.d/maude-shell.sh
+else
+    curl -fsSL "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude-shell.sh" \
+        -o /etc/profile.d/maude-shell.sh
+    chmod 644 /etc/profile.d/maude-shell.sh
 fi
 
-# ── PS1: replace hostname with underscore ─────────────────────────────
-if [[ -f "/home/$USERNAME/.bashrc" ]]; then
-    grep -q 'MAUDE_PS1' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        cat >> "/home/$USERNAME/.bashrc" << 'PS1EOF'
-
-# Maude PS1: show user@_ instead of user@hostname
-MAUDE_PS1=1
-PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-PS1EOF
-fi
-
-# ── help() → maude help when called with no arguments ─────────────────
-if [[ -f "/home/$USERNAME/.bashrc" ]]; then
-    grep -q 'maude help' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        cat >> "/home/$USERNAME/.bashrc" << 'HELPEOF'
-
-# Override built-in help: bare "help" shows maude help for beginners
-help() {
-    if [[ $# -eq 0 ]]; then
-        echo "Please type 'maude help <ENTER>' for help"
-    else
-        builtin help "$@"
-    fi
-}
-HELPEOF
-fi
-
-# ── menu() → launches maude tui ──────────────────────────────────────
-if [[ -f "/home/$USERNAME/.bashrc" ]]; then
-    grep -q 'maude tui' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        cat >> "/home/$USERNAME/.bashrc" << 'MENUEOF'
-
-# Shortcut: typing "menu" launches the Maude TUI
-menu() {
-    maude tui
-}
-MENUEOF
-fi
-
-# ── Tab completion for maude command ─────────────────────────────────
-if [[ -f "/home/$USERNAME/.bashrc" ]]; then
-    grep -q '_maude_complete' "/home/$USERNAME/.bashrc" 2>/dev/null || \
-        cat >> "/home/$USERNAME/.bashrc" << 'COMPEOF'
-
-# Maude tab completion
-_maude_complete() {
-    local cur="${COMP_WORDS[COMP_CWORD]}"
-    local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    if [[ "$COMP_CWORD" -eq 1 ]]; then
-        local cmds="web tui list ls delete rm help"
-        local projects=""
-        if [[ -d "$HOME/Maude/Projects" ]]; then
-            projects=$(ls -d "$HOME/Maude/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
-        fi
-        COMPREPLY=( $(compgen -W "$cmds $projects" -- "$cur") )
-    elif [ "$COMP_CWORD" -eq 2 ] && [[ "$prev" == "delete" || "$prev" == "rm" ]]; then
-        local projects=""
-        if [[ -d "$HOME/Maude/Projects" ]]; then
-            projects=$(ls -d "$HOME/Maude/Projects"/*/ 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
-        fi
-        COMPREPLY=( $(compgen -W "$projects" -- "$cur") )
-    fi
-}
-complete -F _maude_complete maude
-COMPEOF
-fi
+# Hook into both /etc/skel/.bashrc and the user's .bashrc
+for rc in /etc/skel/.bashrc "/home/$USERNAME/.bashrc"; do
+    [[ -f "$rc" ]] || continue
+    grep -qxF '. /etc/profile.d/maude-shell.sh' "$rc" 2>/dev/null || \
+        printf '\n# Maude shell tweaks (PS1, help/menu, tab completion)\n. /etc/profile.d/maude-shell.sh\n' >> "$rc"
+done
 
 # ── Install Claude Code ───────────────────────────────────────────────
 echo "Installing Claude Code..."
