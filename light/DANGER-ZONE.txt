@@ -82,6 +82,16 @@ HOW YOU SHOULD WORK WITH THIS FOLDER
 5. DELETE the working copies from the Maude folder when
    you no longer need them here.
 
+6. DO NOT share this folder (or any subfolder) using
+   file sharing or collaboration features. If you share
+   this folder with colleagues, they will see documents
+   that may have been silently modified, overwritten, or
+   created by the AI — without any review or approval
+   from you. They could mistake AI-generated or
+   AI-altered content for your final, authoritative work.
+   Always take outputs OUT of this folder and share them
+   from a safe location once you have reviewed them.
+
 Think of this folder as a WORKBENCH, not a filing cabinet.
 You bring materials to the workbench, do the work, take
 the finished product away, and clean up. You would never
@@ -97,8 +107,9 @@ is the longer explanation so you understand why.
 When you ask the AI to analyze a document, the contents of
 that document are sent to the cloud servers of our AI
 providers (Microsoft Azure and Amazon Web Services) for
-processing. The data has to go somewhere to be processed,
-similar to any other cloud service you use.
+processing. This is similar to how your files travel to
+cloud servers when you use any other online service — the
+data has to go somewhere to be processed.
 
 However, our organization has SERVICE LEVEL AGREEMENTS
 (SLAs) and DATA PROCESSING AGREEMENTS (DPAs) with our
