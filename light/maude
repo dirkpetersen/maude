@@ -136,6 +136,7 @@ delete_project() {
 MAUDE_PY="$HOME/.local/bin/maude.py"
 MAUDE_PY_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
 MAUDE_BIN_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude"
+MAUDE_BOOTSTRAP_URL="https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude-bootstrap.sh"
 
 # Ensure a known-good textual is installed (≥6, <8). Textual 8.2.x has
 # a 'text-area--gutter' regression that crashes the Set Creds modal;
@@ -252,6 +253,28 @@ update_all() {
         echo -e "${YELLOW}  claude is not installed; skipping${NC}"
         rc=1
     fi
+    echo ""
+
+    echo -e "${BOLD}Refreshing statusline.sh...${NC}"
+    local statusline="$HOME/.claude/statusline.sh"
+    local bootstrap_tmp; bootstrap_tmp=$(mktemp)
+    if curl -fsSL "${MAUDE_BOOTSTRAP_URL}?cache=${ts}" -o "$bootstrap_tmp"; then
+        # Extract the heredoc content between STATUSLINEEOF markers and write it.
+        local new_statusline; new_statusline=$(awk '/^cat > "\$HOME\/.claude\/statusline.sh"/,/^STATUSLINEEOF/' "$bootstrap_tmp" \
+            | grep -v '^cat >' | grep -v '^STATUSLINEEOF')
+        if [[ -n "$new_statusline" ]]; then
+            printf '%s\n' "$new_statusline" > "$statusline"
+            chmod +x "$statusline"
+            echo -e "${GREEN}  ✓ statusline.sh updated${NC}"
+        else
+            echo -e "${YELLOW}  ✗ could not parse statusline from bootstrap${NC}"
+            rc=1
+        fi
+    else
+        echo -e "${YELLOW}  ✗ could not fetch maude-bootstrap.sh${NC}"
+        rc=1
+    fi
+    rm -f "$bootstrap_tmp"
     echo ""
 
     echo -e "${BOLD}Updating the Maude TUI (maude.py)...${NC}"
