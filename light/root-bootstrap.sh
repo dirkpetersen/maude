@@ -60,8 +60,8 @@ if dpkg -s mom >/dev/null 2>&1 && ! dpkg -s mom-inst >/dev/null 2>&1; then
 fi
 if ! dpkg -s mom-inst >/dev/null 2>&1; then
     _arch=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
-    echo "Installing mom-inst package (${_arch})..."
-    _ver=$(curl -sI https://github.com/dirkpetersen/mom/releases/latest | grep -i location | grep -oP 'v\K[0-9.]+')
+    _ver="0.2.19"
+    echo "Installing mom-inst package v${_ver} (${_arch})..."
     curl -fsSL \
         "https://github.com/dirkpetersen/mom/releases/download/v${_ver}/mom-inst_${_ver}_ubuntu-2404_${_arch}.deb" \
         -o /tmp/mom-inst.deb
