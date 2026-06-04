@@ -38,6 +38,13 @@ ensure_tool_symlinks() {
     [[ -x "$HOME/.bun/bin/bun"   ]] && ln -sfn "$HOME/.bun/bin/bun"   "$bin/bun"
     [[ -x "$HOME/.bun/bin/kanna" ]] && ln -sfn "$HOME/.bun/bin/kanna" "$bin/kanna"
 
+    # python / pip → python3 / pip3 (Ubuntu 26.04 ships only the versioned names)
+    local _py; _py=$(command -v python3 2>/dev/null)
+    local _pip; _pip=$(command -v pip3 2>/dev/null)
+    [[ -x "$_py"  ]] && ln -sfn "$_py"  "$bin/python"
+    [[ -x "$_pip" ]] && ln -sfn "$_pip" "$bin/pip"
+    unset _py _pip
+
     # Node via NVM: prefer default alias, fall back to latest installed version
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
     local node_bin=""
