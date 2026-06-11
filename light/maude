@@ -410,8 +410,8 @@ update_all() {
         # Group membership only takes effect on next login, so if the user
         # was just added we may need to fall back to `sg mom -c '...'`.
         local mom_ver; mom_ver=$(mom --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
-        if [[ -z "$mom_ver" ]] || ! dpkg --compare-versions "$mom_ver" ge "0.2.19"; then
-            echo -e "${YELLOW}  mom ${mom_ver:-unknown} is older than v0.2.19 — skipping (run: mom install -y mom-inst to upgrade mom itself)${NC}"
+        if [[ -z "$mom_ver" ]] || ! dpkg --compare-versions "$mom_ver" ge "0.2.20"; then
+            echo -e "${YELLOW}  mom ${mom_ver:-unknown} is older than v0.2.20 — skipping (run: mom install -y mom-inst to upgrade mom itself)${NC}"
         elif id -nG "$USER" | grep -qw mom; then
             if mom upgrade -y; then
                 echo -e "${GREEN}  ✓ Ubuntu packages upgraded${NC}"
