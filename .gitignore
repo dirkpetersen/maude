@@ -3,3 +3,7 @@
 
 # Internal cybersecurity review (not for public repo)
 Maude-review.docx
+
+# Python bytecode caches
+__pycache__/
+*.pyc
