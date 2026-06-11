@@ -342,6 +342,38 @@ update_all() {
     fi
     echo ""
 
+    # Self-heal the "Failed to start the systemd user session" cold-start
+    # warning: bootstraps older than 77bf426 masked user@.service. Unmasking
+    # needs root, which the sandbox user doesn't have — fix what we can and
+    # print the exact root one-liner otherwise.
+    echo -e "${BOLD}Checking systemd user session health...${NC}"
+    local session_ok=1
+    if [[ "$(systemctl is-enabled user@.service 2>/dev/null)" == "masked" ]]; then
+        if sudo -n systemctl unmask user@.service >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ user@.service unmasked${NC}"
+        else
+            session_ok=0
+            echo -e "${YELLOW}  user@.service is masked (old bootstrap); root is needed to unmask.${NC}"
+            echo -e "${YELLOW}  From Windows PowerShell, run:${NC}"
+            echo -e "${CYAN}    wsl -d Maude -u root -- systemctl unmask user@.service${NC}"
+            echo -e "${CYAN}    wsl --terminate Maude${NC}"
+            rc=1
+        fi
+    fi
+    if ! dpkg -s dbus-user-session >/dev/null 2>&1; then
+        echo -e "${YELLOW}  dbus-user-session is missing — installing via mom...${NC}"
+        if mom install -y dbus-user-session 2>/dev/null \
+           || sg mom -c "mom install -y dbus-user-session" 2>/dev/null; then
+            echo -e "${GREEN}  ✓ dbus-user-session installed${NC}"
+        else
+            session_ok=0
+            echo -e "${YELLOW}  ✗ could not install dbus-user-session${NC}"
+            rc=1
+        fi
+    fi
+    [[ $session_ok -eq 1 ]] && echo -e "${GREEN}  ✓ systemd user session OK${NC}"
+    echo ""
+
     echo -e "${BOLD}Checking textual version (auto-downgrades 8.x to <8)...${NC}"
     ensure_textual
     echo ""
