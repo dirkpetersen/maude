@@ -398,6 +398,14 @@ update_all() {
 
     echo -e "${BOLD}Upgrading Ubuntu packages (mom upgrade -y)...${NC}"
     if command -v mom >/dev/null 2>&1; then
+        # Upgrading systemd in place strands the running user manager: its
+        # executor helpers vanish from disk, the session dies unkillable on
+        # the drvfs mount, and every cold start then fails with "Failed to
+        # start the systemd user session" until the WSL VM is restarted.
+        # Snapshot the version so we can warn when that restart is needed.
+        local systemd_before systemd_after
+        systemd_before=$(dpkg-query -W -f='${Version}' systemd 2>/dev/null)
+        local upgraded=0
         # mom is setuid root but requires the caller to be in the 'mom' group.
         # Group membership only takes effect on next login, so if the user
         # was just added we may need to fall back to `sg mom -c '...'`.
@@ -407,6 +415,7 @@ update_all() {
         elif id -nG "$USER" | grep -qw mom; then
             if mom upgrade -y; then
                 echo -e "${GREEN}  ✓ Ubuntu packages upgraded${NC}"
+                upgraded=1
             else
                 echo -e "${YELLOW}  ✗ mom upgrade failed${NC}"
                 rc=1
@@ -415,6 +424,7 @@ update_all() {
             # In the group on disk but current shell hasn't picked it up.
             if sg mom -c "mom upgrade -y"; then
                 echo -e "${GREEN}  ✓ Ubuntu packages upgraded (via sg)${NC}"
+                upgraded=1
             else
                 echo -e "${YELLOW}  ✗ mom upgrade failed${NC}"
                 rc=1
@@ -423,6 +433,16 @@ update_all() {
             echo -e "${YELLOW}  $USER is not in the 'mom' group; cannot run mom upgrade.${NC}"
             echo -e "${YELLOW}  Ask an admin to: sudo usermod -aG mom $USER && newgrp mom${NC}"
             rc=1
+        fi
+        if [[ $upgraded -eq 1 ]]; then
+            systemd_after=$(dpkg-query -W -f='${Version}' systemd 2>/dev/null)
+            if [[ -n "$systemd_before" && "$systemd_before" != "$systemd_after" ]]; then
+                echo ""
+                echo -e "${YELLOW}  systemd was upgraded ($systemd_before → $systemd_after).${NC}"
+                echo -e "${YELLOW}  Restart the WSL VM soon or the next cold start will fail with${NC}"
+                echo -e "${YELLOW}  'Failed to start the systemd user session'. From Windows PowerShell:${NC}"
+                echo -e "${CYAN}    wsl --shutdown${NC}"
+            fi
         fi
     else
         echo -e "${YELLOW}  mom is not installed; skipping${NC}"
