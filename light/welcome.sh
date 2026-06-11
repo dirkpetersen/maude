@@ -27,8 +27,8 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && command -v keychain >/dev/null 2>
         if [[ -n "$_maude_fp" ]] && ! ssh-add -l 2>/dev/null | grep -qF "$_maude_fp"; then
             G=$'\033[1;32m'; C=$'\033[1;36m'; B=$'\033[1;37m'; D=$'\033[2m'; N=$'\033[0m'
             printf '\n'
-            printf '  %s🔑 Unlock your GitHub SSH key%s\n' "$G" "$N"
-            printf '  %s%s%s\n' "$D" "────────────────────────────────────────────" "$N"
+            printf '  %s### Unlock your GitHub SSH key ###%s\n' "$G" "$N"
+            printf '  %s%s%s\n' "$D" "--------------------------------------------" "$N"
             printf '  Enter the passphrase you set in %smaude github%s\n' "$C" "$N"
             printf '  to load %s%s%s into ssh-agent for this session.\n' "$B" "$_maude_key" "$N"
             printf '  %s(Press Enter on a blank line to skip — you can unlock later from the TUI.)%s\n' "$D" "$N"
