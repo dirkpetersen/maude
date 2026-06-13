@@ -29,7 +29,7 @@ pip install --quiet --break-system-packages 'textual<8'
 
 # ── Source maude shell libraries ──────────────────────────────────────
 mkdir -p "$HOME/.local/lib/maude"
-for _lib in ensure-tools.sh refresh-md.sh update-skills.sh; do
+for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh; do
     curl -fsSL "$GH_RAW/lib/$_lib" -o "$HOME/.local/lib/maude/$_lib"
     # shellcheck source=/dev/null
     . "$HOME/.local/lib/maude/$_lib"
@@ -108,6 +108,14 @@ else
     echo "  WARNING: could not clone skills repo — skipping."
 fi
 unset count
+
+# ── Install Google's Gemini CLI + gemini skill ───────────────────────
+echo "Installing Gemini CLI + skill..."
+if update_gemini; then
+    echo "  Gemini CLI + skill installed."
+else
+    echo "  WARNING: Gemini CLI/skill install had problems — continuing."
+fi
 
 # ── Claude Code: project instructions (MAUDE.md + CLAUDE.md template) ─
 # Uses refresh_claude_md() from refresh-md.sh, which validates the download

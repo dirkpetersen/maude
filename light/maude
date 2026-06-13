@@ -294,7 +294,7 @@ update_all() {
     echo -e "${BOLD}Refreshing maude libraries (ensure-tools, refresh-md, update-skills)...${NC}"
     mkdir -p "$MAUDE_LIB_DIR"
     local lib_rc=0
-    for lib in ensure-tools.sh refresh-md.sh update-skills.sh; do
+    for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh; do
         local lib_tmp; lib_tmp=$(mktemp)
         if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
            && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
@@ -312,6 +312,8 @@ update_all() {
     . "$MAUDE_LIB_DIR/refresh-md.sh"   2>/dev/null || true
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/update-skills.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/gemini.sh" 2>/dev/null || true
     if [[ $lib_rc -eq 0 ]]; then
         echo -e "${GREEN}  ✓ libraries refreshed${NC}"
     else
@@ -390,6 +392,20 @@ update_all() {
         echo -e "${YELLOW}  bun is not installed; skipping kanna update${NC}"
         rc=1
     fi
+
+    echo -e "${BOLD}Updating Gemini CLI + skill...${NC}"
+    if declare -F update_gemini >/dev/null; then
+        if update_gemini; then
+            echo -e "${GREEN}  ✓ Gemini CLI + skill updated${NC}"
+        else
+            echo -e "${YELLOW}  ✗ Gemini CLI/skill update had problems${NC}"
+            rc=1
+        fi
+    else
+        echo -e "${YELLOW}  gemini.sh library not loaded — skipping${NC}"
+        rc=1
+    fi
+    echo ""
 
     echo -e "${BOLD}Refreshing tool symlinks (bun, kanna, node, npm, npx, python, pip)...${NC}"
     ensure_tool_symlinks

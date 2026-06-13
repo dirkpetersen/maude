@@ -858,7 +858,8 @@ AWS_CREDS_PATH   = Path.home() / ".aws"   / "credentials"
 AWS_CONFIG_PATH  = Path.home() / ".aws"   / "config"
 
 # Recognised credential-related env vars, for parsing pasted exports.
-CRED_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "OPENAI_")
+CRED_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "OPENAI_",
+                 "GEMINI_", "GOOGLE_")
 CRED_KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
 
@@ -1055,7 +1056,8 @@ class CredsEntryScreen(ModalScreen[bool]):
         if self.mode == self.MODE_PASTE:
             body.mount(Label(
                 "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
-                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*."
+                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*, "
+                "GEMINI_*, GOOGLE_* (for the gemini-cli skill)."
             ))
             body.mount(TextArea("", id="creds-text",
                                 language=None, show_line_numbers=False))
