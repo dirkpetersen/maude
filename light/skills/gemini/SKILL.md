@@ -69,8 +69,9 @@ Gemini reads credentials from the environment. Any one of these is enough:
   service-account JSON) for Application Default Credentials.
 - Gemini Code Assist / OAuth: `GOOGLE_GENAI_USE_GCA=true`.
 
-These are set through **Set Creds → Paste exports** in the Maude TUI and live in
-`~/.azure/clauderc`, so the running session and future sessions inherit them.
+These are set through **Set Creds → Paste exports** in the Maude TUI, which stores
+`GEMINI_*`/`GOOGLE_*` vars in `~/.gemini/.env` — the file the Gemini CLI auto-loads
+on every run — so future sessions pick them up automatically.
 
 ## Example
 

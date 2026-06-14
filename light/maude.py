@@ -853,13 +853,18 @@ def add_keychain_to_bashrc() -> bool:
 
 # ── Modal screens ──────────────────────────────────────────────────────────
 
-CLAUDERC_PATH    = Path.home() / ".azure" / "clauderc"
-AWS_CREDS_PATH   = Path.home() / ".aws"   / "credentials"
-AWS_CONFIG_PATH  = Path.home() / ".aws"   / "config"
+CLAUDERC_PATH    = Path.home() / ".azure"  / "clauderc"
+AWS_CREDS_PATH   = Path.home() / ".aws"    / "credentials"
+AWS_CONFIG_PATH  = Path.home() / ".aws"    / "config"
+GEMINI_ENV_PATH  = Path.home() / ".gemini" / ".env"
 
 # Recognised credential-related env vars, for parsing pasted exports.
 CRED_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "OPENAI_",
                  "GEMINI_", "GOOGLE_")
+# Vars that belong to the Gemini CLI: routed to ~/.gemini/.env (where the
+# CLI looks by default) instead of ~/.azure/clauderc, which is Claude's
+# Azure-vs-AWS routing file and unrelated to Gemini.
+GEMINI_PREFIXES = ("GEMINI_", "GOOGLE_")
 CRED_KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
 
@@ -926,6 +931,40 @@ def merge_clauderc(values: dict[str, str]) -> None:
             pass
     existing.update(values)
     write_clauderc(existing)
+
+
+def merge_gemini_env(values: dict[str, str]) -> None:
+    """Merge `values` into ~/.gemini/.env (dotenv format), the file the
+    Gemini CLI auto-loads. Preserves existing keys; `values` win on collision.
+    """
+    existing: dict[str, str] = {}
+    if GEMINI_ENV_PATH.exists():
+        try:
+            for raw in GEMINI_ENV_PATH.read_text().splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].lstrip()
+                m = CRED_KEY_RE.match(line)
+                if m:
+                    k, v = m.group(1), m.group(2).strip()
+                    if (v.startswith('"') and v.endswith('"')) or \
+                       (v.startswith("'") and v.endswith("'")):
+                        v = v[1:-1]
+                    existing[k] = v
+        except OSError:
+            pass
+    existing.update(values)
+    GEMINI_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # dotenv format — plain KEY="VALUE", no `export` (the CLI's loader
+    # does not strip it).
+    lines = [f'{k}="{v}"' for k, v in existing.items()]
+    GEMINI_ENV_PATH.write_text("\n".join(lines) + "\n")
+    try:
+        GEMINI_ENV_PATH.chmod(0o600)
+    except OSError:
+        pass
 
 
 def write_aws_credentials(access_key: str, secret_key: str, region: str) -> None:
@@ -1056,8 +1095,8 @@ class CredsEntryScreen(ModalScreen[bool]):
         if self.mode == self.MODE_PASTE:
             body.mount(Label(
                 "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
-                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*, "
-                "GEMINI_*, GOOGLE_* (for the gemini-cli skill)."
+                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
+                "GEMINI_*/GOOGLE_* are saved to ~/.gemini/.env for the gemini CLI."
             ))
             body.mount(TextArea("", id="creds-text",
                                 language=None, show_line_numbers=False))
@@ -1140,7 +1179,16 @@ class CredsEntryScreen(ModalScreen[bool]):
         if not values:
             self._set_status("[bold red]No recognised credential lines found.[/]")
             raise _CredsValidation()
-        merge_clauderc(values)
+        # Route Gemini/Google vars to ~/.gemini/.env (the Gemini CLI's default
+        # location); everything else to ~/.azure/clauderc for the claude wrapper.
+        gemini_vals = {k: v for k, v in values.items()
+                       if k.startswith(GEMINI_PREFIXES)}
+        other_vals = {k: v for k, v in values.items()
+                      if not k.startswith(GEMINI_PREFIXES)}
+        if other_vals:
+            merge_clauderc(other_vals)
+        if gemini_vals:
+            merge_gemini_env(gemini_vals)
         os.environ.update(values)
 
     def _save_bedrock(self) -> None:
