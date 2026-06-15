@@ -481,6 +481,16 @@ update_all() {
     fi
     echo ""
 
+    # Skills (gemini + Anthropic) are scanned only when Claude Code starts a
+    # NEW session. The maude CLI and the TUI's Open Project both use
+    # `claude --continue`, which resumes the prior session and won't see
+    # freshly installed/updated skills — so point the user at a fresh start.
+    echo -e "${CYAN}Note: new/updated skills load only in a fresh Claude session.${NC}"
+    echo -e "${CYAN}  A resumed 'claude --continue' won't see them. To pick them up:${NC}"
+    echo -e "${CYAN}  • TUI: tick 'Clear context (no history)' when opening a project, or${NC}"
+    echo -e "${CYAN}  • shell: run 'claude opus-1m' (without --continue) once.${NC}"
+    echo ""
+
     if [[ $rc -eq 0 ]]; then
         echo -e "${GREEN}All updates complete.${NC}"
     else
