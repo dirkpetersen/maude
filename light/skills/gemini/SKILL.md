@@ -68,7 +68,9 @@ Gemini reads credentials from the environment. Any one of these is enough:
   `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, and EITHER `GOOGLE_API_KEY`
   (express mode) OR `GOOGLE_APPLICATION_CREDENTIALS` (path to a service-account
   JSON) / `gcloud` Application Default Credentials. Note: `GOOGLE_API_KEY` alone,
-  without `GOOGLE_GENAI_USE_VERTEXAI=true`, does nothing.
+  without `GOOGLE_GENAI_USE_VERTEXAI=true`, does nothing. If you enable Vertex via
+  Set Creds without naming a `GOOGLE_CLOUD_LOCATION`, Maude defaults it to
+  `us-west1` (Oregon).
 - Gemini Code Assist / OAuth: `GOOGLE_GENAI_USE_GCA=true`.
 
 There is no `GOOGLE_KEY` variable — that name is not recognised.

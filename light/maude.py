@@ -865,6 +865,10 @@ CRED_PREFIXES = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "OPENAI_",
 # CLI looks by default) instead of ~/.azure/clauderc, which is Claude's
 # Azure-vs-AWS routing file and unrelated to Gemini.
 GEMINI_PREFIXES = ("GEMINI_", "GOOGLE_")
+# Default Vertex AI region when a user enables Vertex without naming one.
+# us-west1 is The Dalles, Oregon — the closest region (mirrors the Bedrock
+# tab defaulting to us-west-2, also Oregon).
+DEFAULT_VERTEX_LOCATION = "us-west1"
 CRED_KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
 
@@ -1100,7 +1104,8 @@ class CredsEntryScreen(ModalScreen[bool]):
                 "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
                 "For Gemini, use GEMINI_API_KEY (from aistudio.google.com/apikey) "
                 "or, for Vertex/Google Cloud, GOOGLE_GENAI_USE_VERTEXAI=true with "
-                "GOOGLE_CLOUD_PROJECT + GOOGLE_API_KEY — saved to ~/.gemini/.env."
+                "GOOGLE_CLOUD_PROJECT + GOOGLE_API_KEY (location defaults to "
+                "us-west1/Oregon) — saved to ~/.gemini/.env."
             ))
             body.mount(TextArea("", id="creds-text",
                                 language=None, show_line_numbers=False))
@@ -1192,6 +1197,19 @@ class CredsEntryScreen(ModalScreen[bool]):
         if other_vals:
             merge_clauderc(other_vals)
         if gemini_vals:
+            # Vertex needs a region. If the user turned Vertex on but didn't
+            # name one (and none is already saved), default to Oregon.
+            uses_vertex = str(gemini_vals.get("GOOGLE_GENAI_USE_VERTEXAI", "")) \
+                .strip().lower() in ("1", "true", "yes")
+            have_loc = bool(gemini_vals.get("GOOGLE_CLOUD_LOCATION"))
+            if not have_loc and GEMINI_ENV_PATH.exists():
+                try:
+                    have_loc = "GOOGLE_CLOUD_LOCATION" in GEMINI_ENV_PATH.read_text()
+                except OSError:
+                    pass
+            if uses_vertex and not have_loc:
+                gemini_vals["GOOGLE_CLOUD_LOCATION"] = DEFAULT_VERTEX_LOCATION
+                values = {**values, "GOOGLE_CLOUD_LOCATION": DEFAULT_VERTEX_LOCATION}
             merge_gemini_env(gemini_vals)
         os.environ.update(values)
 
