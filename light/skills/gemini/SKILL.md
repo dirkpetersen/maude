@@ -62,12 +62,16 @@ the prompt to Gemini through a file on **stdin** instead. Every single time:
 
 Gemini reads credentials from the environment. Any one of these is enough:
 
-- `GEMINI_API_KEY` — Google AI Studio key (simplest).
-- `GOOGLE_API_KEY` — generic Google API key (also works with Vertex express mode).
-- Vertex AI: `GOOGLE_GENAI_USE_VERTEXAI=true` plus `GOOGLE_CLOUD_PROJECT` and
-  `GOOGLE_CLOUD_LOCATION`, optionally `GOOGLE_APPLICATION_CREDENTIALS` (path to a
-  service-account JSON) for Application Default Credentials.
+- `GEMINI_API_KEY` — Google AI Studio key (simplest; get one at
+  https://aistudio.google.com/apikey). On its own this is enough.
+- Vertex AI / Google Cloud: `GOOGLE_GENAI_USE_VERTEXAI=true` plus
+  `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, and EITHER `GOOGLE_API_KEY`
+  (express mode) OR `GOOGLE_APPLICATION_CREDENTIALS` (path to a service-account
+  JSON) / `gcloud` Application Default Credentials. Note: `GOOGLE_API_KEY` alone,
+  without `GOOGLE_GENAI_USE_VERTEXAI=true`, does nothing.
 - Gemini Code Assist / OAuth: `GOOGLE_GENAI_USE_GCA=true`.
+
+There is no `GOOGLE_KEY` variable — that name is not recognised.
 
 These are set through **Set Creds → Paste exports** in the Maude TUI, which stores
 `GEMINI_*`/`GOOGLE_*` vars in `~/.gemini/.env` — the file the Gemini CLI auto-loads

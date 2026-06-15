@@ -893,7 +893,9 @@ def parse_creds_text(text: str) -> dict[str, str]:
         if (val.startswith('"') and val.endswith('"')) or \
            (val.startswith("'") and val.endswith("'")):
             val = val[1:-1]
-        if key.startswith(CRED_PREFIXES):
+        # Skip empty values — a bare `FOO=` is junk that would only mask
+        # the real "not authenticated" error downstream.
+        if key.startswith(CRED_PREFIXES) and val:
             out[key] = val
     return out
 
@@ -1096,7 +1098,9 @@ class CredsEntryScreen(ModalScreen[bool]):
             body.mount(Label(
                 "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
                 "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
-                "GEMINI_*/GOOGLE_* are saved to ~/.gemini/.env for the gemini CLI."
+                "For Gemini, use GEMINI_API_KEY (from aistudio.google.com/apikey) "
+                "or, for Vertex/Google Cloud, GOOGLE_GENAI_USE_VERTEXAI=true with "
+                "GOOGLE_CLOUD_PROJECT + GOOGLE_API_KEY — saved to ~/.gemini/.env."
             ))
             body.mount(TextArea("", id="creds-text",
                                 language=None, show_line_numbers=False))
