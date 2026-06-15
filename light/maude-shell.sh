@@ -5,6 +5,11 @@
 # Allow `pip install` without a venv (safe inside the sandbox)
 export PIP_BREAK_SYSTEM_PACKAGES=1
 
+# Advertise 24-bit color so apps (vim, tmux, fzf, …) emit true-color
+# escapes. Windows Terminal renders them natively; only this hint was
+# missing under WSL. TERM stays xterm-256color (don't change it).
+export COLORTERM=truecolor
+
 # Maude PS1: show user@_ instead of user@hostname
 PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 
