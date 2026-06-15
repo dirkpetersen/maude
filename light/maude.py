@@ -973,16 +973,37 @@ def merge_gemini_env(values: dict[str, str]) -> None:
         pass
 
 
+def _env_file_value(text: str, key: str) -> str:
+    """Return the value of `key` in a dotenv/export blob, or '' if absent."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        m = CRED_KEY_RE.match(line)
+        if m and m.group(1) == key:
+            v = m.group(2).strip()
+            if (v.startswith('"') and v.endswith('"')) or \
+               (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            return v
+    return ""
+
+
 def finalize_gemini_vals(gemini_vals: dict[str, str]) -> dict[str, str]:
-    """Fill in Gemini-CLI defaults so a partial paste still authenticates.
+    """Pick a Gemini-CLI auth mode that will actually authenticate.
 
-    - If Google Cloud creds (GOOGLE_API_KEY / GOOGLE_CLOUD_PROJECT) are present
-      but no auth *mode* is chosen, enable Vertex AI — those vars do nothing to
-      the Gemini CLI without GOOGLE_GENAI_USE_VERTEXAI=true.
-    - If Vertex ends up enabled without a region, default to us-west1 (Oregon).
+    The Gemini CLI accepts exactly:
+      - GEMINI_API_KEY                       → AI Studio (API keys WORK here)
+      - GOOGLE_GENAI_USE_VERTEXAI=true + ADC → Vertex (API keys are REJECTED;
+                                               needs OAuth / service account)
+      - GOOGLE_GENAI_USE_GCA=true            → OAuth / Code Assist
 
-    Values already saved in ~/.gemini/.env are respected (substring check —
-    keys are uppercase and on their own lines, so false positives don't occur).
+    A bare API key must therefore go to AI Studio, never Vertex. We switch to
+    Vertex only on real intent: the flag is in *this* paste, or a service
+    account / ADC file is configured. Otherwise an API key (pasted as either
+    GEMINI_API_KEY or GOOGLE_API_KEY) is routed to AI Studio — and any stale
+    GOOGLE_GENAI_USE_VERTEXAI from a previous paste is turned back off so the
+    user isn't trapped on the Vertex path.
     """
     out = dict(gemini_vals)
     existing = ""
@@ -993,20 +1014,27 @@ def finalize_gemini_vals(gemini_vals: dict[str, str]) -> dict[str, str]:
             pass
 
     def present(key: str) -> bool:
-        return key in out or key in existing
+        return key in out or _env_file_value(existing, key) != ""
 
-    has_mode = any(present(k) for k in
-                   ("GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI",
-                    "GOOGLE_GENAI_USE_GCA"))
-    wants_gcloud = any(present(k) for k in
-                       ("GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"))
-    if wants_gcloud and not has_mode:
+    flag_in_paste = str(gemini_vals.get("GOOGLE_GENAI_USE_VERTEXAI", "")) \
+        .strip().lower() in ("1", "true", "yes")
+    vertex_intent = flag_in_paste or present("GOOGLE_APPLICATION_CREDENTIALS")
+
+    if vertex_intent:
         out["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-    uses_vertex = (str(out.get("GOOGLE_GENAI_USE_VERTEXAI", "")).strip().lower()
-                   in ("1", "true", "yes")
-                   or "GOOGLE_GENAI_USE_VERTEXAI" in existing)
-    if uses_vertex and not present("GOOGLE_CLOUD_LOCATION"):
-        out["GOOGLE_CLOUD_LOCATION"] = DEFAULT_VERTEX_LOCATION
+        if not present("GOOGLE_CLOUD_LOCATION"):
+            out["GOOGLE_CLOUD_LOCATION"] = DEFAULT_VERTEX_LOCATION
+    elif present("GOOGLE_GENAI_USE_GCA"):
+        pass  # OAuth / Code Assist — nothing to inject
+    else:
+        # API-key path → AI Studio. The CLI reads AI Studio keys from
+        # GEMINI_API_KEY, so map GOOGLE_API_KEY onto it, and make sure Vertex
+        # isn't (still) forced on.
+        gkey = out.get("GOOGLE_API_KEY") or _env_file_value(existing, "GOOGLE_API_KEY")
+        if not present("GEMINI_API_KEY") and gkey:
+            out["GEMINI_API_KEY"] = gkey
+        if present("GEMINI_API_KEY") or gkey:
+            out["GOOGLE_GENAI_USE_VERTEXAI"] = "false"
     return out
 
 
@@ -1139,10 +1167,11 @@ class CredsEntryScreen(ModalScreen[bool]):
             body.mount(Label(
                 "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
                 "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
-                "For Gemini, use GEMINI_API_KEY (from aistudio.google.com/apikey); "
-                "or for Vertex/Google Cloud paste GOOGLE_API_KEY + "
-                "GOOGLE_CLOUD_PROJECT and Vertex mode + us-west1/Oregon are set "
-                "for you. Saved to ~/.gemini/.env."
+                "For Gemini, paste an API key (GEMINI_API_KEY or GOOGLE_API_KEY "
+                "from aistudio.google.com/apikey) — it's routed to AI Studio, no "
+                "OAuth. Vertex (needs a service account) is used only if you paste "
+                "GOOGLE_GENAI_USE_VERTEXAI=true / GOOGLE_APPLICATION_CREDENTIALS. "
+                "Saved to ~/.gemini/.env."
             ))
             body.mount(TextArea("", id="creds-text",
                                 language=None, show_line_numbers=False))

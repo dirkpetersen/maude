@@ -10,6 +10,11 @@ export PIP_BREAK_SYSTEM_PACKAGES=1
 # missing under WSL. TERM stays xterm-256color (don't change it).
 export COLORTERM=truecolor
 
+# Trust the sandbox workspace for the Gemini CLI so it runs headless without
+# the "untrusted directory" gate (exit 55). Safe here — the whole sandbox is
+# already permissive. The gemini skill also passes --skip-trust as a backstop.
+export GEMINI_CLI_TRUST_WORKSPACE=true
+
 # Maude PS1: show user@_ instead of user@hostname
 PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]_\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 

@@ -8,13 +8,16 @@ description: Consult Google's Gemini model from the command line via the pre-ins
 `gemini` (Google's official `@google/gemini-cli`) is installed in Maude and on
 PATH. Use it to get answers from Google's Gemini models.
 
+Always pass `--skip-trust` (the CLI refuses to run headless in an "untrusted"
+directory otherwise, exiting 55).
+
 ## Step 0: confirm credentials BEFORE doing anything else
 
 Gemini only works if working credentials are present. Do a cheap probe first:
 
 ```bash
 printf 'reply with the single word: ok\n' > /tmp/gemini-probe-$$.txt
-gemini < /tmp/gemini-probe-$$.txt; echo "exit=$?"
+gemini --skip-trust < /tmp/gemini-probe-$$.txt; echo "exit=$?"
 rm -f /tmp/gemini-probe-$$.txt
 ```
 
@@ -40,10 +43,10 @@ the prompt to Gemini through a file on **stdin** instead. Every single time:
 3. **Run Gemini by feeding the file on stdin** — the prompt never touches the shell
    parser:
    ```bash
-   gemini < /tmp/gemini-query-<random>.txt
+   gemini --skip-trust < /tmp/gemini-query-<random>.txt
    ```
    For long answers, capture to a file and Read it:
-   `gemini < /tmp/gemini-query-<random>.txt > /tmp/gemini-out-<random>.txt 2>&1`
+   `gemini --skip-trust < /tmp/gemini-query-<random>.txt > /tmp/gemini-out-<random>.txt 2>&1`
    Optional: `-m gemini-2.5-pro` selects a model.
 4. **Read the result** (from the Bash stdout, or from the output file with the Read
    tool).
@@ -63,14 +66,16 @@ the prompt to Gemini through a file on **stdin** instead. Every single time:
 Gemini reads credentials from the environment. Any one of these is enough:
 
 - `GEMINI_API_KEY` — Google AI Studio key (simplest; get one at
-  https://aistudio.google.com/apikey). On its own this is enough.
+  https://aistudio.google.com/apikey). On its own this is enough, and **API keys
+  work here without any OAuth.** A `GOOGLE_API_KEY` pasted via Set Creds is mapped
+  onto `GEMINI_API_KEY` and routed here too.
 - Vertex AI / Google Cloud: `GOOGLE_GENAI_USE_VERTEXAI=true` plus
-  `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, and EITHER `GOOGLE_API_KEY`
-  (express mode) OR `GOOGLE_APPLICATION_CREDENTIALS` (path to a service-account
-  JSON) / `gcloud` Application Default Credentials. Note: `GOOGLE_API_KEY` alone,
-  without `GOOGLE_GENAI_USE_VERTEXAI=true`, does nothing — but if you paste
-  `GOOGLE_API_KEY`/`GOOGLE_CLOUD_PROJECT` via Set Creds, Maude turns on Vertex
-  mode and defaults `GOOGLE_CLOUD_LOCATION` to `us-west1` (Oregon) for you.
+  `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` AND real OAuth credentials —
+  a service-account JSON via `GOOGLE_APPLICATION_CREDENTIALS`, or `gcloud`
+  Application Default Credentials. **Vertex rejects plain API keys** for
+  `generateContent`, so use AI Studio (above) unless you specifically need Vertex.
+  Maude only enables Vertex when you paste the flag or a service-account path,
+  and then defaults `GOOGLE_CLOUD_LOCATION` to `us-west1` (Oregon).
 - Gemini Code Assist / OAuth: `GOOGLE_GENAI_USE_GCA=true`.
 
 There is no `GOOGLE_KEY` variable — that name is not recognised.
@@ -83,7 +88,7 @@ on every run — so future sessions pick them up automatically.
 
 Ask Gemini to review a large file (Write the query file, then):
 ```bash
-gemini < /tmp/gemini-query-7f3a.txt > /tmp/gemini-out-7f3a.txt 2>&1
+gemini --skip-trust < /tmp/gemini-query-7f3a.txt > /tmp/gemini-out-7f3a.txt 2>&1
 # Read /tmp/gemini-out-7f3a.txt, then:
 rm -f /tmp/gemini-query-7f3a.txt /tmp/gemini-out-7f3a.txt
 ```
