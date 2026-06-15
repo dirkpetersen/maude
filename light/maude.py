@@ -973,6 +973,43 @@ def merge_gemini_env(values: dict[str, str]) -> None:
         pass
 
 
+def finalize_gemini_vals(gemini_vals: dict[str, str]) -> dict[str, str]:
+    """Fill in Gemini-CLI defaults so a partial paste still authenticates.
+
+    - If Google Cloud creds (GOOGLE_API_KEY / GOOGLE_CLOUD_PROJECT) are present
+      but no auth *mode* is chosen, enable Vertex AI — those vars do nothing to
+      the Gemini CLI without GOOGLE_GENAI_USE_VERTEXAI=true.
+    - If Vertex ends up enabled without a region, default to us-west1 (Oregon).
+
+    Values already saved in ~/.gemini/.env are respected (substring check —
+    keys are uppercase and on their own lines, so false positives don't occur).
+    """
+    out = dict(gemini_vals)
+    existing = ""
+    if GEMINI_ENV_PATH.exists():
+        try:
+            existing = GEMINI_ENV_PATH.read_text()
+        except OSError:
+            pass
+
+    def present(key: str) -> bool:
+        return key in out or key in existing
+
+    has_mode = any(present(k) for k in
+                   ("GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI",
+                    "GOOGLE_GENAI_USE_GCA"))
+    wants_gcloud = any(present(k) for k in
+                       ("GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"))
+    if wants_gcloud and not has_mode:
+        out["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    uses_vertex = (str(out.get("GOOGLE_GENAI_USE_VERTEXAI", "")).strip().lower()
+                   in ("1", "true", "yes")
+                   or "GOOGLE_GENAI_USE_VERTEXAI" in existing)
+    if uses_vertex and not present("GOOGLE_CLOUD_LOCATION"):
+        out["GOOGLE_CLOUD_LOCATION"] = DEFAULT_VERTEX_LOCATION
+    return out
+
+
 def write_aws_credentials(access_key: str, secret_key: str, region: str) -> None:
     """Persist AWS creds to ~/.aws/credentials and ~/.aws/config so that
     boto3 / claude-wrapper / kanna can pick them up.
@@ -1102,10 +1139,10 @@ class CredsEntryScreen(ModalScreen[bool]):
             body.mount(Label(
                 "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
                 "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
-                "For Gemini, use GEMINI_API_KEY (from aistudio.google.com/apikey) "
-                "or, for Vertex/Google Cloud, GOOGLE_GENAI_USE_VERTEXAI=true with "
-                "GOOGLE_CLOUD_PROJECT + GOOGLE_API_KEY (location defaults to "
-                "us-west1/Oregon) — saved to ~/.gemini/.env."
+                "For Gemini, use GEMINI_API_KEY (from aistudio.google.com/apikey); "
+                "or for Vertex/Google Cloud paste GOOGLE_API_KEY + "
+                "GOOGLE_CLOUD_PROJECT and Vertex mode + us-west1/Oregon are set "
+                "for you. Saved to ~/.gemini/.env."
             ))
             body.mount(TextArea("", id="creds-text",
                                 language=None, show_line_numbers=False))
@@ -1197,19 +1234,11 @@ class CredsEntryScreen(ModalScreen[bool]):
         if other_vals:
             merge_clauderc(other_vals)
         if gemini_vals:
-            # Vertex needs a region. If the user turned Vertex on but didn't
-            # name one (and none is already saved), default to Oregon.
-            uses_vertex = str(gemini_vals.get("GOOGLE_GENAI_USE_VERTEXAI", "")) \
-                .strip().lower() in ("1", "true", "yes")
-            have_loc = bool(gemini_vals.get("GOOGLE_CLOUD_LOCATION"))
-            if not have_loc and GEMINI_ENV_PATH.exists():
-                try:
-                    have_loc = "GOOGLE_CLOUD_LOCATION" in GEMINI_ENV_PATH.read_text()
-                except OSError:
-                    pass
-            if uses_vertex and not have_loc:
-                gemini_vals["GOOGLE_CLOUD_LOCATION"] = DEFAULT_VERTEX_LOCATION
-                values = {**values, "GOOGLE_CLOUD_LOCATION": DEFAULT_VERTEX_LOCATION}
+            # Infer Vertex mode + Oregon region from a partial Google Cloud
+            # paste so it actually authenticates.
+            gemini_vals = finalize_gemini_vals(gemini_vals)
+            # Reflect injected vars into this session too.
+            values = {**values, **gemini_vals}
             merge_gemini_env(gemini_vals)
         os.environ.update(values)
 
