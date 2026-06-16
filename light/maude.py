@@ -939,9 +939,10 @@ def merge_clauderc(values: dict[str, str]) -> None:
     write_clauderc(existing)
 
 
-def merge_gemini_env(values: dict[str, str]) -> None:
+def merge_gemini_env(values: dict[str, str], remove=None) -> None:
     """Merge `values` into ~/.gemini/.env (dotenv format), the file the
     Gemini CLI auto-loads. Preserves existing keys; `values` win on collision.
+    Any key in `remove` is deleted from the result.
     """
     existing: dict[str, str] = {}
     if GEMINI_ENV_PATH.exists():
@@ -962,6 +963,8 @@ def merge_gemini_env(values: dict[str, str]) -> None:
         except OSError:
             pass
     existing.update(values)
+    for k in (remove or ()):
+        existing.pop(k, None)
     GEMINI_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     # dotenv format — plain KEY="VALUE", no `export` (the CLI's loader
     # does not strip it).
@@ -989,7 +992,7 @@ def _env_file_value(text: str, key: str) -> str:
     return ""
 
 
-def finalize_gemini_vals(gemini_vals: dict[str, str]) -> dict[str, str]:
+def finalize_gemini_vals(gemini_vals: dict[str, str]):
     """Pick a Gemini-CLI auth mode that will actually authenticate.
 
     The Gemini CLI accepts exactly:
@@ -1004,8 +1007,11 @@ def finalize_gemini_vals(gemini_vals: dict[str, str]) -> dict[str, str]:
     GEMINI_API_KEY or GOOGLE_API_KEY) is routed to AI Studio — and any stale
     GOOGLE_GENAI_USE_VERTEXAI from a previous paste is turned back off so the
     user isn't trapped on the Vertex path.
+
+    Returns (values_to_set, keys_to_remove).
     """
     out = dict(gemini_vals)
+    drop: set[str] = set()
     existing = ""
     if GEMINI_ENV_PATH.exists():
         try:
@@ -1035,7 +1041,12 @@ def finalize_gemini_vals(gemini_vals: dict[str, str]) -> dict[str, str]:
             out["GEMINI_API_KEY"] = gkey
         if present("GEMINI_API_KEY") or gkey:
             out["GOOGLE_GENAI_USE_VERTEXAI"] = "false"
-    return out
+            # Standardise on GEMINI_API_KEY: drop GOOGLE_API_KEY so the CLI
+            # doesn't warn "Both ... set. Using GOOGLE_API_KEY" and pick the
+            # wrong one.
+            out.pop("GOOGLE_API_KEY", None)
+            drop.add("GOOGLE_API_KEY")
+    return out, drop
 
 
 def write_aws_credentials(access_key: str, secret_key: str, region: str) -> None:
@@ -1263,12 +1274,15 @@ class CredsEntryScreen(ModalScreen[bool]):
         if other_vals:
             merge_clauderc(other_vals)
         if gemini_vals:
-            # Infer Vertex mode + Oregon region from a partial Google Cloud
-            # paste so it actually authenticates.
-            gemini_vals = finalize_gemini_vals(gemini_vals)
-            # Reflect injected vars into this session too.
+            # Infer the right auth mode (AI Studio vs Vertex) and standardise
+            # on GEMINI_API_KEY so a partial paste actually authenticates.
+            gemini_vals, drop = finalize_gemini_vals(gemini_vals)
+            merge_gemini_env(gemini_vals, remove=drop)
+            # Reflect into this session too: set the kept vars, clear dropped.
             values = {**values, **gemini_vals}
-            merge_gemini_env(gemini_vals)
+            for k in drop:
+                values.pop(k, None)
+                os.environ.pop(k, None)
         os.environ.update(values)
 
     def _save_bedrock(self) -> None:
