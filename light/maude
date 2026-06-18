@@ -534,7 +534,9 @@ update_all() {
     if [[ -z "$cur_ver" ]]; then
         cur_ver=$(curl -fsSL --max-time 5 \
             "https://api.github.com/repos/dirkpetersen/maude/commits/main" \
-            2>/dev/null | grep -oP '"sha":\s*"\K[0-9a-f]{7}' | head -1 || true)
+            2>/dev/null | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d['sha'][:7])" \
+            2>/dev/null || true)
     fi
     mkdir -p "$(dirname "$ver_stamp")"
     printf '%s\n' "${cur_ver:-dev}" > "$ver_stamp"
