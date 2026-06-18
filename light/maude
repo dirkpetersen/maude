@@ -225,14 +225,12 @@ launch_tui() {
         }
     fi
 
+    maude_maybe_update
     purge_pycache
     python3 "$MAUDE_PY"
     echo ""
     echo -e "  Please type ${BOLD}menu${NC} <Enter> to get back to the TUI or type ${BOLD}maude help${NC} <Enter>"
     echo ""
-    # Run weekly update AFTER the TUI exits — not before, so it doesn't
-    # interrupt the SSH key prompt or the startup experience.
-    maude_maybe_update
 }
 
 # ── Update everything: maude CLI, Claude Code, the maude TUI, kanna ───
