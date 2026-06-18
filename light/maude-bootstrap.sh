@@ -123,6 +123,18 @@ fi
 MAUDE_RAW="$GH_RAW" refresh_claude_md
 echo "Claude Code: MAUDE.md installed."
 
+# ── Ensure key env vars are in ~/.bashrc ─────────────────────────────
+for _ev in \
+    "export COLORTERM=truecolor" \
+    "export PYTHONDONTWRITEBYTECODE=1" \
+    "export GEMINI_CLI_TRUST_WORKSPACE=true"; do
+    _key=$(echo "$_ev" | sed 's/export //;s/=.*//')
+    if ! grep -q "export ${_key}=" "$HOME/.bashrc" 2>/dev/null; then
+        printf '\n%s\n' "$_ev" >> "$HOME/.bashrc"
+    fi
+done
+unset _ev _key
+
 # ── Write initial version stamp ──────────────────────────────────────
 # 'maude update' will overwrite this with the real commit SHA; 'dev' is
 # the right default for a fresh install that hasn't updated yet.

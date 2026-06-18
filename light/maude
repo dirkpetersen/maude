@@ -360,6 +360,30 @@ update_all() {
     fi
     echo ""
 
+    # Ensure key env vars are in ~/.bashrc so they apply to every shell,
+    # including cases where profile.d is not re-sourced on existing installs.
+    echo -e "${BOLD}Checking shell environment exports...${NC}"
+    local changed=0
+    local ev
+    for ev in \
+        "export COLORTERM=truecolor" \
+        "export PYTHONDONTWRITEBYTECODE=1" \
+        "export GEMINI_CLI_TRUST_WORKSPACE=true"; do
+        local key; key=$(echo "$ev" | grep -oP 'export \K[A-Z_]+')
+        if ! grep -q "export ${key}=" "$HOME/.bashrc" 2>/dev/null; then
+            printf '\n%s\n' "$ev" >> "$HOME/.bashrc"
+            # Apply to current session immediately.
+            eval "$ev"
+            changed=$((changed + 1))
+        fi
+    done
+    if [[ $changed -gt 0 ]]; then
+        echo -e "${GREEN}  ✓ added $changed export(s) to ~/.bashrc${NC}"
+    else
+        echo -e "${GREEN}  ✓ shell exports already present${NC}"
+    fi
+    echo ""
+
     # Repair the orphan-fi artefact in ~/.bashrc left by an older buggy
     # `maude github` step 4. Uses the now-refreshed maude.py.
     echo -e "${BOLD}Checking ~/.bashrc for stale keychain artefacts...${NC}"
