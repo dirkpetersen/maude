@@ -53,6 +53,7 @@ UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 MODELS        = ("fable", "opus", "sonnet", "haiku")
 DEFAULT_MODEL = "opus"
 MODEL_FILE    = Path.home() / ".maude-model"
+VERSION_FILE  = Path.home() / ".local" / "share" / "maude" / "version"
 
 LOGO = (
     "  __  __                 _      \n"
@@ -64,6 +65,31 @@ LOGO = (
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+def get_maude_version() -> str:
+    """Return the current maude version string.
+
+    Priority: git describe (dev machines) → VERSION_FILE stamp written by
+    'maude update' → 'dev'.
+    """
+    import subprocess as _sp
+    try:
+        v = _sp.check_output(
+            ["git", "-C", str(Path(__file__).parent), "describe", "--tags", "--always"],
+            stderr=_sp.DEVNULL, text=True, timeout=2,
+        ).strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    try:
+        v = VERSION_FILE.read_text().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    return "dev"
+
 
 def maybe_self_update() -> None:
     """Refresh maude.py from GitHub once per day, at or after noon local time.
@@ -2420,12 +2446,18 @@ class MaudeApp(App):
 
     #autostart-label {
         color: #c09898;
-        margin-top: 1;
+        margin-top: 0;
         margin-bottom: 0;
     }
 
     #autostart {
         margin-top: 0;
+        margin-bottom: 0;
+    }
+
+    #maude-version {
+        color: #6a5058;
+        margin-top: 1;
     }
 
     #fresh-label {
@@ -2909,9 +2941,6 @@ class MaudeApp(App):
             with Vertical(id="sidebar"):
                 yield Static(LOGO, id="logo", markup=False)
                 yield Static("─" * 28, id="divider")
-                yield Label("Start TUI with Maude", id="autostart-label")
-                yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
-                yield Static("─" * 28, id="divider2")
                 yield Label("Tips", id="tips-title")
                 yield Static(
                     "Screen split:  Alt+Shift+Plus | Minus\n"
@@ -2919,13 +2948,17 @@ class MaudeApp(App):
                     "Voice dictate: Win+H (Windows mic)",
                     id="tips",
                 )
-                yield Static("─" * 28, id="divider3")
+                yield Static("─" * 28, id="divider2")
                 yield Label("Claude model", id="model-label")
                 with RadioSet(id="model-select"):
                     for m in MODELS:
                         yield RadioButton(m, value=(m == self._model))
                 yield Label("Clear context (no history)", id="fresh-label")
                 yield Checkbox("", value=False, id="fresh-context")
+                yield Static("─" * 28, id="divider3")
+                yield Label("Start TUI with Maude", id="autostart-label")
+                yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
+                yield Static(f"maude {get_maude_version()}", id="maude-version")
             with Vertical(id="main"):
                 yield Label("Projects", id="section-title")
                 yield DataTable(id="projects-table", cursor_type="row",
