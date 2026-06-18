@@ -8,19 +8,30 @@
 
 update_gemini() {
     local rc=0
+    local cli_status="unchanged" skill_status="unchanged"
 
     # ── Gemini CLI (installed globally via Bun, like kanna) ──
     if command -v bun >/dev/null 2>&1; then
+        local ver_before ver_after
+        ver_before=$(gemini --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
         if bun install -g @google/gemini-cli >/dev/null 2>&1; then
             # Symlink into ~/.local/bin: child processes (Claude Code's Bash
             # tool) don't get Bun's PATH injection, the same reason kanna is
             # linked in ensure-tools.sh.
             [[ -x "$HOME/.bun/bin/gemini" ]] && \
                 ln -sfn "$HOME/.bun/bin/gemini" "$HOME/.local/bin/gemini"
+            ver_after=$(gemini --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
+            if [[ -n "$ver_after" && "$ver_before" != "$ver_after" ]]; then
+                cli_status="updated (${ver_before:-?} → ${ver_after})"
+            else
+                cli_status="up to date${ver_after:+ (v${ver_after})}"
+            fi
         else
+            cli_status="failed"
             rc=1
         fi
     else
+        cli_status="skipped (bun not found)"
         rc=1
     fi
 
@@ -30,11 +41,22 @@ update_gemini() {
     local tmp; tmp=$(mktemp)
     if curl -fsSL --max-time 10 "$MAUDE_RAW/skills/gemini/SKILL.md" -o "$tmp" 2>/dev/null \
        && [[ -s "$tmp" ]] && head -1 "$tmp" | grep -q '^---'; then
-        mv "$tmp" "$skill_dir/SKILL.md"
+        local existing="$skill_dir/SKILL.md"
+        if [[ ! -f "$existing" ]]; then
+            skill_status="installed (new)"
+        elif ! diff -q "$existing" "$tmp" >/dev/null 2>&1; then
+            skill_status="updated"
+        else
+            skill_status="up to date"
+        fi
+        mv "$tmp" "$existing"
     else
         rm -f "$tmp"
+        skill_status="failed"
         rc=1
     fi
 
+    # Print status lines for the caller (update_all reads them).
+    printf '%s\n' "cli:$cli_status" "skill:$skill_status"
     return $rc
 }

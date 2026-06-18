@@ -395,10 +395,18 @@ update_all() {
 
     echo -e "${BOLD}Updating Gemini CLI + skill...${NC}"
     if declare -F update_gemini >/dev/null; then
-        if update_gemini; then
-            echo -e "${GREEN}  ✓ Gemini CLI + skill updated${NC}"
+        local gemini_out cli_line skill_line
+        gemini_out=$(update_gemini)
+        if [[ $? -eq 0 ]]; then
+            cli_line=$(grep '^cli:'   <<< "$gemini_out" | cut -d: -f2-)
+            skill_line=$(grep '^skill:' <<< "$gemini_out" | cut -d: -f2-)
+            echo -e "${GREEN}  ✓ CLI:   ${cli_line}${NC}"
+            echo -e "${GREEN}  ✓ skill: ${skill_line}${NC}"
         else
-            echo -e "${YELLOW}  ✗ Gemini CLI/skill update had problems${NC}"
+            cli_line=$(grep '^cli:'   <<< "$gemini_out" | cut -d: -f2-)
+            skill_line=$(grep '^skill:' <<< "$gemini_out" | cut -d: -f2-)
+            [[ -n "$cli_line"   ]] && echo -e "${YELLOW}  CLI:   ${cli_line}${NC}"
+            [[ -n "$skill_line" ]] && echo -e "${YELLOW}  skill: ${skill_line}${NC}"
             rc=1
         fi
     else
