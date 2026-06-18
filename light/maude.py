@@ -50,8 +50,8 @@ UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
 UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 
-MODELS        = ("fable", "opus", "sonnet", "haiku")
-DEFAULT_MODEL = "fable"
+MODELS        = ("opus", "fable", "sonnet", "haiku")
+DEFAULT_MODEL = "opus"
 MODEL_FILE    = Path.home() / ".maude-model"
 
 LOGO = (

@@ -163,7 +163,7 @@ The TUI is a full-screen Textual interface that replaces the command-line workfl
 | Control | Description |
 |---------|-------------|
 | *Start TUI with Maude* checkbox | TUI auto-launch (default ON). Unchecking creates `~/.maude-tui-disabled` so future logins drop straight to the shell with the text banner. |
-| *Claude model* radio buttons | Choose which Claude model opens for your projects: `fable` (default), `opus`, `sonnet`, or `haiku`. The selection is saved to `~/.maude-model` and persists across sessions. |
+| *Claude model* radio buttons | Choose which Claude model opens for your projects: `opus` (default), `fable`, `sonnet`, or `haiku`. The selection is saved to `~/.maude-model` and persists across sessions. |
 
 **Project list (right panel)**
 

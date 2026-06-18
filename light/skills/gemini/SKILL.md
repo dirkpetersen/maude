@@ -1,96 +1,132 @@
 ---
 name: gemini
-description: Consult Google's Gemini model from the command line via the pre-installed `gemini` CLI. Use when the user explicitly asks to "ask Gemini", "check with Gemini", "use gemini-cli", get a second model's opinion, cross-check Claude's own reasoning, or when a task benefits from Gemini's very large context window (analysing big files or whole codebases in one pass) or Google Search grounding. SKIP when the user has not asked for Gemini and the task is squarely within Claude's own capability.
+description: Wield Google's Gemini CLI as a powerful auxiliary tool for code generation, review, analysis, and web research. Use when tasks benefit from a second AI perspective, current web information via Google Search, codebase architecture analysis with the codebase_investigator tool, or parallel code generation. Also use when the user explicitly asks to "ask Gemini", "check with Gemini", or "use gemini-cli". SKIP for simple quick tasks where Claude's own capability suffices.
 ---
 
 # Gemini CLI
 
-`gemini` (Google's official `@google/gemini-cli`) is installed in Maude and on
-PATH. Use it to get answers from Google's Gemini models.
+`gemini` (Google's `@google/gemini-cli` v0.46+) is pre-installed in Maude and on PATH.
+The default model is **gemini-2.5-pro** (aliased as `gemini-3-pro`); use
+`-m gemini-2.5-flash` for faster/cheaper tasks.
 
-Always pass `--skip-trust` (the CLI refuses to run headless in an "untrusted"
-directory otherwise, exiting 55).
-
-## Step 0: confirm credentials BEFORE doing anything else
-
-Gemini only works if working credentials are present. Do a cheap probe first:
+## Step 0: credential probe (always run first)
 
 ```bash
-printf 'reply with the single word: ok\n' > /tmp/gemini-probe-$$.txt
-gemini --skip-trust < /tmp/gemini-probe-$$.txt; echo "exit=$?"
-rm -f /tmp/gemini-probe-$$.txt
+gemini --skip-trust -p "reply with the single word: ok" -o text 2>&1; echo "exit=$?"
 ```
 
-If that errors or reports it is not authenticated, STOP and tell the user to add a
-key via the Maude TUI: **Set Creds → Paste exports**, pasting e.g.
-`export GEMINI_API_KEY=...` (the Paste-exports tab recognises `GEMINI_*` and
-`GOOGLE_*` variables and stores them so future sessions pick them up). Do NOT ask
-for keys in chat, and do not retry blindly.
+If exit ≠ 0 or you see an auth error, STOP and tell the user to add a key via the
+Maude TUI: **Set Creds → Paste exports** with `GEMINI_API_KEY=<key from aistudio.google.com/apikey>`.
+Do NOT retry blindly on a broken auth.
 
-## CRITICAL: always use file-based handoff — never put the prompt on the command line
+## Basic invocation pattern
 
-Passing prompt/code text as a shell argument causes quoting-and-escaping bugs
-(backticks, quotes, `$`, and newlines all break the shell parser). You MUST hand
-the prompt to Gemini through a file on **stdin** instead. Every single time:
-
-1. **Pick a fresh, unique temp file path under `/tmp`** — NEVER inside the project
-   or any git working tree. Choose a new name on each call, e.g.
-   `/tmp/gemini-query-<random>.txt`.
-2. **Write the full prompt and any context to that file using the Write tool.**
-   Do not interpolate the prompt into a command string. To include code, paste the
-   file contents into the query file as part of what you Write (or `cat` files into
-   it). Do not pass file paths expecting Gemini to open them.
-3. **Run Gemini by feeding the file on stdin** — the prompt never touches the shell
-   parser:
-   ```bash
-   gemini --skip-trust < /tmp/gemini-query-<random>.txt
-   ```
-   For long answers, capture to a file and Read it:
-   `gemini --skip-trust < /tmp/gemini-query-<random>.txt > /tmp/gemini-out-<random>.txt 2>&1`
-   Optional: `-m gemini-2.5-pro` selects a model.
-4. **Read the result** (from the Bash stdout, or from the output file with the Read
-   tool).
-5. **Delete the temp files** when done — always, even if Gemini errored:
-   ```bash
-   rm -f /tmp/gemini-query-<random>.txt /tmp/gemini-out-<random>.txt
-   ```
-
-### Rules (do not deviate)
-- NEVER write `gemini -p "..."` with the prompt inline. NEVER `echo "..." | gemini`.
-- NEVER create the temp file inside `~/Maude/Projects/...` or any git working tree —
-  always under `/tmp`. These files must never be committed.
-- ALWAYS use a fresh, unique temp filename per invocation; ALWAYS `rm -f` it after.
-
-## Authentication details
-
-Gemini reads credentials from the environment. Any one of these is enough:
-
-- `GEMINI_API_KEY` — Google AI Studio key (simplest; get one at
-  https://aistudio.google.com/apikey). On its own this is enough, and **API keys
-  work here without any OAuth.** A `GOOGLE_API_KEY` pasted via Set Creds is mapped
-  onto `GEMINI_API_KEY` and routed here too.
-- Vertex AI / Google Cloud: `GOOGLE_GENAI_USE_VERTEXAI=true` plus
-  `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` AND real OAuth credentials —
-  a service-account JSON via `GOOGLE_APPLICATION_CREDENTIALS`, or `gcloud`
-  Application Default Credentials. **Vertex rejects plain API keys** for
-  `generateContent`, so use AI Studio (above) unless you specifically need Vertex.
-  Maude only enables Vertex when you paste the flag or a service-account path,
-  and then defaults `GOOGLE_CLOUD_LOCATION` to `us-west1` (Oregon).
-- Gemini Code Assist / OAuth: `GOOGLE_GENAI_USE_GCA=true`.
-
-There is no `GOOGLE_KEY` variable — that name is not recognised.
-
-These are set through **Set Creds → Paste exports** in the Maude TUI, which stores
-`GEMINI_*`/`GOOGLE_*` vars in `~/.gemini/.env` — the file the Gemini CLI auto-loads
-on every run — so future sessions pick them up automatically.
-
-## Example
-
-Ask Gemini to review a large file (Write the query file, then):
 ```bash
-gemini --skip-trust < /tmp/gemini-query-7f3a.txt > /tmp/gemini-out-7f3a.txt 2>&1
-# Read /tmp/gemini-out-7f3a.txt, then:
-rm -f /tmp/gemini-query-7f3a.txt /tmp/gemini-out-7f3a.txt
+gemini --skip-trust -p "your prompt here" --yolo -o text 2>&1
 ```
-where `/tmp/gemini-query-7f3a.txt` was written (via the Write tool) as the review
-instruction followed by the full file contents.
+
+Key flags:
+- `--skip-trust` — required for headless/automated use in Maude (bypasses trusted-folder gate)
+- `-p "prompt"` — non-interactive prompt (the CLI reads it as an argument, no quoting issues for normal prose)
+- `--yolo` / `-y` — auto-approve all tool calls
+- `-o text` — human-readable output; use `-o json` for structured parsing
+- `-m gemini-2.5-flash` — faster/cheaper model for simple tasks
+- `-m gemini-2.5-flash-lite` — fastest, trivial tasks only
+
+## When prompt contains special characters or multi-line code
+
+If the prompt contains backticks, `$`, heredocs, or many newlines, write it to a
+temp file under `/tmp` and feed via stdin instead to avoid any shell-escaping issues:
+
+```bash
+# Write to unique temp file via Write tool, then:
+gemini --skip-trust --yolo -o text < /tmp/gemini-query-$$.txt 2>&1
+rm -f /tmp/gemini-query-$$.txt
+```
+
+Never create temp files inside the project directory — use `/tmp` only.
+
+## Reference files with @
+
+Pass file contents to Gemini without quoting them by using the `@path` syntax:
+
+```bash
+gemini --skip-trust -p "Review @./src/main.py for bugs and security issues" -o text 2>&1
+gemini --skip-trust -p "Based on @./package.json and @./src/index.js, suggest improvements" -o text 2>&1
+```
+
+For large files or multiple files, this is cleaner than embedding content in the prompt.
+
+## Model selection
+
+| Model | Flag | Best for |
+|-------|------|----------|
+| gemini-2.5-pro (default) | *(omit `-m`)* | Complex analysis, multi-file, architecture |
+| gemini-2.5-flash | `-m gemini-2.5-flash` | Quick tasks, lower latency |
+| gemini-2.5-flash-lite | `-m gemini-2.5-flash-lite` | Trivial one-liners |
+
+## Quick reference patterns
+
+### Web research (Google Search grounding)
+```bash
+gemini --skip-trust -p "What are the latest changes in [topic]? Use Google Search." -o text 2>&1
+```
+
+### Code review
+```bash
+gemini --skip-trust -p "Review @./path/to/file.py for bugs, security issues, and improvements" -o text 2>&1
+```
+
+### Codebase architecture analysis
+```bash
+gemini --skip-trust -p "Use the codebase_investigator tool to analyze this project's architecture" -o text 2>&1
+```
+
+### Code generation
+```bash
+gemini --skip-trust -p "Create [description]. Apply now." --yolo -o text 2>&1
+```
+
+### Test generation
+```bash
+gemini --skip-trust -p "Generate pytest tests for @./src/utils.py focusing on edge cases. Apply now." --yolo -o text 2>&1
+```
+
+### JSON output for programmatic parsing
+```bash
+gemini --skip-trust -p "prompt" -o json 2>&1
+# Parse: result.response = content, result.stats.models, result.stats.tools
+```
+
+### Session resumption (multi-turn workflows)
+```bash
+# First turn (session saved automatically)
+gemini --skip-trust -p "Analyze this codebase architecture" -o text 2>&1
+
+# List sessions
+gemini --list-sessions
+
+# Continue
+echo "What patterns did you find?" | gemini --skip-trust -r latest -o text 2>&1
+```
+
+## Gemini's unique tools
+
+These are available only through the Gemini CLI:
+
+- **google_web_search** — real-time Google Search; use for current events, latest versions, recent docs
+- **codebase_investigator** — deep architectural analysis, cross-file dependency mapping, pattern detection
+- **save_memory** — cross-session persistent memory for recurring project context
+
+## Authentication
+
+Credentials are stored in `~/.gemini/.env` (auto-loaded by the CLI). One of:
+- `GEMINI_API_KEY` — Google AI Studio key, no OAuth needed (simplest)
+- `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` — Vertex AI (needs OAuth/service account; **plain API keys don't work on Vertex**)
+- `GOOGLE_GENAI_USE_GCA=true` — OAuth / Code Assist
+
+Set these via **Maude TUI → Set Creds → Paste exports**. Pasting a bare `GEMINI_API_KEY` or `GOOGLE_API_KEY` is all you need for AI Studio.
+
+## Validation
+
+Always verify Gemini's generated code before using it — check for security issues (XSS, injection, eval), test functionality, and review dependencies.
