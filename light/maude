@@ -225,6 +225,8 @@ launch_tui() {
         }
     fi
 
+    maude_maybe_update
+    purge_pycache
     python3 "$MAUDE_PY"
     echo ""
     echo -e "  Please type ${BOLD}menu${NC} <Enter> to get back to the TUI or type ${BOLD}maude help${NC} <Enter>"
@@ -717,6 +719,29 @@ claude_maybe_update() {
     fi
 }
 
+# ── Auto-run 'maude update' once a week ──────────────────────────────
+maude_maybe_update() {
+    local stamp="$HOME/.local/share/maude/.last-maude-update"
+    local now
+    now=$(date +%s)
+    local last=0
+    if [[ -f "$stamp" ]]; then
+        last=$(cat "$stamp" 2>/dev/null || echo 0)
+    fi
+    local week=$((7 * 24 * 60 * 60))
+    if [[ $((now - last)) -ge $week ]]; then
+        echo -e "${CYAN}Running weekly maude update...${NC}"
+        mkdir -p "$(dirname "$stamp")"
+        echo "$now" > "$stamp"
+        update_all
+    fi
+}
+
+# ── Purge stale Python bytecache for maude.py ────────────────────────
+purge_pycache() {
+    rm -rf "$(dirname "$MAUDE_PY")/__pycache__" 2>/dev/null || true
+}
+
 # Resolve which `claude` to launch. Maude installs a wrapper at ~/bin/claude
 # that sets auth env vars per provider; if the wrapper is broken (e.g. dead
 # symlink from a partial dev-station install), fall back to the next claude
@@ -743,6 +768,7 @@ resolve_claude_cmd() {
 if [[ -d "$PROJECT_PATH" ]]; then
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
     warn_if_suspicious_repo "$PROJECT_PATH"
+    maude_maybe_update
     claude_maybe_update
     refresh_claude_md
     cd "$PROJECT_PATH"
