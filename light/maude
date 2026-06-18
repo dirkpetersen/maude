@@ -511,8 +511,8 @@ update_all() {
         describe --tags --always 2>/dev/null || true)
     if [[ -z "$cur_ver" ]]; then
         cur_ver=$(curl -fsSL --max-time 5 \
-            "https://api.github.com/repos/dirkpetersen/maude/releases/latest" \
-            2>/dev/null | grep -oP '"tag_name":\s*"\K[^"]+' | head -1 || true)
+            "https://api.github.com/repos/dirkpetersen/maude/commits/main" \
+            2>/dev/null | grep -oP '"sha":\s*"\K[0-9a-f]{7}' | head -1 || true)
     fi
     if [[ -n "$cur_ver" ]]; then
         mkdir -p "$(dirname "$ver_stamp")"
