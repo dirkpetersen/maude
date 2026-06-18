@@ -5,6 +5,11 @@
 # Allow `pip install` without a venv (safe inside the sandbox)
 export PIP_BREAK_SYSTEM_PACKAGES=1
 
+# Prevent Python from writing .pyc bytecache files. Without this, a stale
+# __pycache__/maude.cpython-*.pyc next to maude.py can cause 'maude update'
+# to silently run the old version despite the source being replaced.
+export PYTHONDONTWRITEBYTECODE=1
+
 # Advertise 24-bit color so apps (vim, tmux, fzf, …) emit true-color
 # escapes. Windows Terminal renders them natively; only this hint was
 # missing under WSL. TERM stays xterm-256color (don't change it).

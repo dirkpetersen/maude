@@ -327,6 +327,8 @@ update_all() {
         # Mark today's daily-update stamp so maude.py's own self-update doesn't
         # re-fetch on the next launch.
         date +%Y-%m-%d > "$HOME/.maude-tui-last-update"
+        # Purge stale bytecache so Python executes the new source immediately.
+        rm -rf "$(dirname "$MAUDE_PY")/__pycache__"
         echo -e "${GREEN}  ✓ maude.py refreshed${NC}"
     else
         echo -e "${YELLOW}  ✗ could not fetch maude.py${NC}"
