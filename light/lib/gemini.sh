@@ -56,6 +56,21 @@ update_gemini() {
         rc=1
     fi
 
+    # ── Ensure ~/.gemini/.env has COLORTERM and trust vars ──
+    # The Gemini CLI loads this file on every run, including when spawned as a
+    # non-interactive subprocess by Claude Code's Bash tool (which doesn't
+    # source ~/.bashrc, so the profile-level exports are never seen).
+    local gemini_env="$HOME/.gemini/.env"
+    mkdir -p "$(dirname "$gemini_env")"
+    touch "$gemini_env"
+    local line
+    for line in "COLORTERM=truecolor" "GEMINI_CLI_TRUST_WORKSPACE=true"; do
+        local key="${line%%=*}"
+        if ! grep -q "^${key}=" "$gemini_env" 2>/dev/null; then
+            printf '%s\n' "$line" >> "$gemini_env"
+        fi
+    done
+
     # Print status lines for the caller (update_all reads them).
     printf '%s\n' "cli:$cli_status" "skill:$skill_status"
     return $rc
