@@ -564,6 +564,8 @@ update_all() {
     fi
     mkdir -p "$(dirname "$ver_stamp")"
     printf '%s\n' "${cur_ver:-dev}" > "$ver_stamp"
+    echo -e "${GREEN}maude version: ${cur_ver:-dev}${NC}"
+    echo ""
 
     if [[ $rc -eq 0 ]]; then
         echo -e "${GREEN}All updates complete.${NC}"
