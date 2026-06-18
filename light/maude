@@ -503,11 +503,17 @@ update_all() {
     echo -e "${CYAN}  • shell: run 'claude opus' (without --continue) once.${NC}"
     echo ""
 
-    # Write version stamp so the TUI can display it without needing git.
+    # Write version stamp so the TUI can display it.
+    # Try git first (dev machines), then the GitHub API (installed distros).
     local ver_stamp="$HOME/.local/share/maude/version"
     local cur_ver
     cur_ver=$(git -C "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" \
         describe --tags --always 2>/dev/null || true)
+    if [[ -z "$cur_ver" ]]; then
+        cur_ver=$(curl -fsSL --max-time 5 \
+            "https://api.github.com/repos/dirkpetersen/maude/releases/latest" \
+            2>/dev/null | grep -oP '"tag_name":\s*"\K[^"]+' | head -1 || true)
+    fi
     if [[ -n "$cur_ver" ]]; then
         mkdir -p "$(dirname "$ver_stamp")"
         printf '%s\n' "$cur_ver" > "$ver_stamp"
