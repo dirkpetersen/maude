@@ -514,10 +514,8 @@ update_all() {
             "https://api.github.com/repos/dirkpetersen/maude/commits/main" \
             2>/dev/null | grep -oP '"sha":\s*"\K[0-9a-f]{7}' | head -1 || true)
     fi
-    if [[ -n "$cur_ver" ]]; then
-        mkdir -p "$(dirname "$ver_stamp")"
-        printf '%s\n' "$cur_ver" > "$ver_stamp"
-    fi
+    mkdir -p "$(dirname "$ver_stamp")"
+    printf '%s\n' "${cur_ver:-dev}" > "$ver_stamp"
 
     if [[ $rc -eq 0 ]]; then
         echo -e "${GREEN}All updates complete.${NC}"

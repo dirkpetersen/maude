@@ -123,4 +123,14 @@ fi
 MAUDE_RAW="$GH_RAW" refresh_claude_md
 echo "Claude Code: MAUDE.md installed."
 
+# ── Write initial version stamp ──────────────────────────────────────
+# 'maude update' will overwrite this with the real commit SHA; 'dev' is
+# the right default for a fresh install that hasn't updated yet.
+_ver_stamp="$HOME/.local/share/maude/version"
+if [[ ! -f "$_ver_stamp" ]]; then
+    mkdir -p "$(dirname "$_ver_stamp")"
+    printf 'dev\n' > "$_ver_stamp"
+fi
+unset _ver_stamp
+
 echo "=== User bootstrap complete ==="
