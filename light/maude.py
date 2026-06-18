@@ -50,8 +50,8 @@ UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
 UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 
-MODELS        = ("opus-1m", "opus", "sonnet-1m", "sonnet", "haiku")
-DEFAULT_MODEL = "opus-1m"
+MODELS        = ("fable", "opus", "sonnet", "haiku")
+DEFAULT_MODEL = "fable"
 MODEL_FILE    = Path.home() / ".maude-model"
 
 LOGO = (
@@ -3215,6 +3215,13 @@ class MaudeApp(App):
             fresh = False
         with self.suspend():
             open_project(path, self._model, fresh=fresh)
+        # Auto-clear the checkbox after use — fresh-context is a one-shot
+        # exception; the default is always to resume with history.
+        if fresh:
+            try:
+                self.query_one("#fresh-context", Checkbox).value = False
+            except Exception:
+                pass
         self._refresh_table()
         self._select_project(name)
 

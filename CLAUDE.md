@@ -158,7 +158,7 @@ Key implementation details:
 - The `maude` CLI auto-updates Claude Code weekly (stamp file: `~/.claude/.last-update-check`)
 - **Sandbox instructions split**: `~/.claude/MAUDE.md` is always overwritten on each `maude` launch (sandbox rules, not user-editable); `~/.claude/CLAUDE.md` is created once if missing and user-owned. `CLAUDE.md` includes sandbox rules via `@MAUDE.md`
 - `maude delete <name>` is a soft-delete — moves to `Projects/.deleted/`, not permanent
-- The `maude` CLI launches Claude Code with `claude opus-1m` (uses the latest Opus model with extended context)
+- The `maude` CLI launches Claude Code with `claude fable`
 
 ## Maude TUI (`maude tui`)
 
@@ -178,9 +178,8 @@ A Textual-based full-screen TUI which is the default welcome experience for new 
 │   Voice  Win+H              │                                        │
 │  ──────────────             │                                        │
 │  Claude model               │                                        │
-│   ( ) opus-1m  ( ) opus     │                                        │
-│   ( ) sonnet-1m  ( ) sonnet │                                        │
-│   ( ) haiku                 │                                        │
+│   ( ) fable  ( ) opus       │                                        │
+│   ( ) sonnet  ( ) haiku     │                                        │
 ├─────────────────────────────┴────────────────────────────────────────┤
 │ [Open Project] [+ New] [Web UI] [Setup Git] [Set Credentials] [CLI]  │
 └──────────────────────────────────────────────────────────────────────┘
@@ -194,7 +193,7 @@ A Textual-based full-screen TUI which is the default welcome experience for new 
 - **Setup Git**: opens `GitSetupWizard`, a 4-step modal for first-run users. Step 1 looks up the GitHub username via `api.github.com/users/<name>` to pre-fill name/email. Step 2 detects/generates an ed25519 SSH key + verifies via `ssh -T git@github.com`. Step 3 detects/generates a GPG key (ed25519 + cv25519 subkey) and round-trips a clearsign to verify. Step 4 sets `git config user.name/email/init.defaultBranch=main`, runs `mom install -y keychain`, and appends a keychain block to `~/.bashrc`. All key uploads are manual paste flows — no `gh` auth required
 - **Command Line**: exits TUI, returns to shell prompt
 - **"Start TUI with Maude" checkbox**: TUI auto-launches by default for every new terminal session. Unchecking the box creates `~/.maude-tui-disabled` (an *opt-out* flag); `maude-welcome.sh` skips the auto-launch when that file is present and shows the text banner instead. `maude tui` is invoked (not `exec`) so the shell survives after TUI exit
-- **Claude model picker**: 5-button radio (`opus-1m` default, `opus`, `sonnet-1m`, `sonnet`, `haiku`). Selection persists to `~/.maude-model` and is passed to `claude <model> --continue` when opening projects
+- **Claude model picker**: 4-button radio (`fable` default, `opus`, `sonnet`, `haiku`). Selection persists to `~/.maude-model` and is passed to `claude <model> --continue` when opening projects
 - **Credential gate**: `CredsEntryScreen` modal blocks TUI startup if no LLM credentials are configured (checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials`, `~/.azure/clauderc`). The user can paste shell-style `export` lines; the modal parses recognised credential vars (ANTHROPIC_*/CLAUDE_*/AWS_*/AZURE_*) and writes them to `~/.azure/clauderc` (mode 0600). Also reachable from the **Set Credentials** bottom-bar button and triggered automatically when the user clicks **Web UI** without credentials
 - **Status line**: `~/.claude/statusline.sh` (installed by `maude-bootstrap.sh`) renders Claude Code's status line as `~/cwd  [NN% free]`. The bootstrap merges this into `~/.claude/settings.json` `statusLine.command` while preserving any existing user customisations
 - **Exit hint**: after quitting the TUI, prints "Please type menu \<Enter\> to get back to the TUI or type maude help \<Enter\>"

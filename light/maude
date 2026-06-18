@@ -488,7 +488,7 @@ update_all() {
     echo -e "${CYAN}Note: new/updated skills load only in a fresh Claude session.${NC}"
     echo -e "${CYAN}  A resumed 'claude --continue' won't see them. To pick them up:${NC}"
     echo -e "${CYAN}  • TUI: tick 'Clear context (no history)' when opening a project, or${NC}"
-    echo -e "${CYAN}  • shell: run 'claude opus-1m' (without --continue) once.${NC}"
+    echo -e "${CYAN}  • shell: run 'claude fable' (without --continue) once.${NC}"
     echo ""
 
     if [[ $rc -eq 0 ]]; then
@@ -728,7 +728,7 @@ if [[ -d "$PROJECT_PATH" ]]; then
     cd "$PROJECT_PATH"
     echo ""
     CLAUDE_CMD=$(resolve_claude_cmd)
-    "$CLAUDE_CMD" opus-1m --continue || exec "$CLAUDE_CMD" opus-1m
+    "$CLAUDE_CMD" fable --continue || exec "$CLAUDE_CMD" fable
 else
     # New project → create, git init, fresh start
     echo -e "${CYAN}Creating new project:${NC} $PROJECT_NAME"
@@ -740,5 +740,5 @@ else
     refresh_claude_md
     echo ""
     CLAUDE_CMD=$(resolve_claude_cmd)
-    cd "$PROJECT_PATH" && exec "$CLAUDE_CMD" opus-1m
+    cd "$PROJECT_PATH" && exec "$CLAUDE_CMD" fable
 fi
