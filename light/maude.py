@@ -2705,10 +2705,16 @@ class MaudeApp(App):
         padding: 1 2;
     }
 
+    #main-header {
+        height: auto;
+        margin-bottom: 1;
+        align: left middle;
+    }
+
     #section-title {
         color: #d4a0a0;
         text-style: bold;
-        margin-bottom: 1;
+        width: auto;
     }
 
     #projects-table {
@@ -2751,9 +2757,9 @@ class MaudeApp(App):
 
     #kanna-url {
         color: #72c09a;
-        margin-left: 2;
-        content-align: left middle;
-        height: 100%;
+        width: 1fr;
+        content-align: right middle;
+        height: 1;
     }
 
     /* Modal: confirm delete */
@@ -3138,7 +3144,9 @@ class MaudeApp(App):
                     id="maude-version",
                 )
             with Vertical(id="main"):
-                yield Label("Projects", id="section-title")
+                with Horizontal(id="main-header"):
+                    yield Label("Projects", id="section-title")
+                    yield Static("", id="kanna-url")
                 yield DataTable(id="projects-table", cursor_type="row",
                                 zebra_stripes=True)
         with Horizontal(id="bottom-bar"):
@@ -3150,7 +3158,6 @@ class MaudeApp(App):
             yield Button("Set Creds",       id="btn-creds")
             yield Button("Update Maude",   id="btn-update")
             yield Button("Command Line",    id="btn-cli")
-            yield Static("", id="kanna-url")
         yield Footer()
 
     def on_mount(self) -> None:
