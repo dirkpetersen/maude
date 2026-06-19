@@ -3519,11 +3519,10 @@ if __name__ == "__main__":
     maybe_self_update()
     while True:
         app = MaudeApp()
-        app.run()
-        # Exit code 42 = "Reload UI" was clicked after an update.
-        # Re-exec this script directly so the fresh maude.py takes over
-        # without touching the shell — no 'menu' needed.
-        if app.return_code == 42:
+        rv = app.run()           # app.run() returns the value passed to self.exit()
+        # 42 = "Reload UI" clicked after update. Re-exec this script so the
+        # fresh maude.py takes over without touching the shell.
+        if rv == 42:
             script = Path(__file__).resolve()
             os.execv(sys.executable, [sys.executable, str(script)] + sys.argv[1:])
         break
