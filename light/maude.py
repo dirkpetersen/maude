@@ -4,6 +4,7 @@ maude.py — Textual TUI for the Maude sandbox.
 Always launched via:  maude tui
 """
 
+import asyncio
 import json
 import os
 import re
@@ -2398,6 +2399,95 @@ class DetachFromGithubScreen(ModalScreen[bool]):
         self.dismiss(True)
 
 
+# ── Update modal ───────────────────────────────────────────────────────────
+
+class UpdateMaudeScreen(ModalScreen[None]):
+    """Modal that runs 'maude update' and streams all output with backscroll."""
+
+    BINDINGS = [Binding("escape", "close", "Close", show=False)]
+
+    DEFAULT_CSS = """
+    UpdateMaudeScreen {
+        align: center middle;
+    }
+    #update-box {
+        width: 90%;
+        height: 85%;
+        background: #1a1a1a;
+        border: solid #b87878;
+        padding: 1 2;
+    }
+    #update-title {
+        color: #d4a0a0;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #update-log {
+        height: 1fr;
+        background: #111111;
+        border: solid #3a3a3a;
+        padding: 0 1;
+    }
+    #update-status {
+        color: #a09090;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+    #btn-update-close {
+        margin-top: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Container(id="update-box"):
+            yield Label("Update Maude", id="update-title")
+            yield Log(id="update-log", auto_scroll=True, highlight=False)
+            yield Label("Running...", id="update-status")
+            yield Button("Close", id="btn-update-close", variant="primary",
+                         disabled=True)
+
+    def on_mount(self) -> None:
+        self.run_worker(self._run_update(), exclusive=True)
+
+    async def _run_update(self) -> None:
+        log = self.query_one("#update-log", Log)
+        status = self.query_one("#update-status", Label)
+        close_btn = self.query_one("#btn-update-close", Button)
+
+        maude_bin = shutil.which("maude") or str(Path.home() / "bin" / "maude")
+        ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                maude_bin, "update",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={**os.environ, "TERM": "dumb"},
+            )
+            async for raw in proc.stdout:
+                line = ansi_re.sub("", raw.decode(errors="replace")).rstrip()
+                log.write_line(line)
+            await proc.wait()
+            rc = proc.returncode
+            if rc == 0:
+                status.update("✓ Update complete. Run 'maude update' once more to apply the new script.")
+            else:
+                status.update(f"⚠ Update finished with errors (exit {rc}).")
+        except Exception as exc:
+            log.write_line(f"Error: {exc}")
+            status.update("✗ Update failed.")
+        finally:
+            close_btn.disabled = False
+            close_btn.focus()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#btn-update-close")
+    def close_pressed(self) -> None:
+        self.dismiss(None)
+
+
 # ── Main app ───────────────────────────────────────────────────────────────
 
 class MaudeApp(App):
@@ -2970,6 +3060,7 @@ class MaudeApp(App):
             yield Button("To Github",       id="btn-togithub")
             yield Button("Setup Git(hub)",  id="btn-github")
             yield Button("Set Creds",       id="btn-creds")
+            yield Button("Update Maude",   id="btn-update")
             yield Button("Command Line",    id="btn-cli")
             yield Static("", id="kanna-url")
         yield Footer()
@@ -3193,6 +3284,10 @@ class MaudeApp(App):
     def _on_detach_done(self, detached: bool) -> None:
         if detached:
             self._refresh_table()
+
+    @on(Button.Pressed, "#btn-update")
+    def btn_update(self) -> None:
+        self.push_screen(UpdateMaudeScreen())
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
