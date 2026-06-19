@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from rich.text import Text
+from rich.color import Color
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from textual.widgets import (
     Input,
     Label,
     Log,
+    RichLog,
     RadioButton,
     RadioSet,
     Static,
@@ -63,6 +65,23 @@ LOGO = (
     " | |  | | (_| | |_| | (_| |  __/\n"
     " |_|  |_|\\__,_|\\__,_|\\__,_|\\___|"
 )
+
+# Truecolor gradient: each row of the logo gets its own hex colour,
+# sweeping from bright spring-green at the top to deep teal at the bottom.
+_LOGO_GRADIENT = [
+    "#7de8b0",  # row 0 — bright spring green
+    "#52cfa0",  # row 1
+    "#30b898",  # row 2
+    "#18a090",  # row 3
+    "#0a8880",  # row 4 — deep teal
+]
+
+def make_gradient_logo() -> Text:
+    text = Text()
+    for i, line in enumerate(LOGO.splitlines()):
+        colour = _LOGO_GRADIENT[i] if i < len(_LOGO_GRADIENT) else _LOGO_GRADIENT[-1]
+        text.append(line + "\n", style=f"bold {colour}")
+    return text
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -2424,7 +2443,7 @@ class UpdateMaudeScreen(ModalScreen[None]):
     }
     #update-log {
         height: 1fr;
-        background: #111111;
+        background: #0e0e0e;
         border: solid #3a3a3a;
         padding: 0 1;
     }
@@ -2441,7 +2460,7 @@ class UpdateMaudeScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Container(id="update-box"):
             yield Label("Update Maude", id="update-title")
-            yield Log(id="update-log", auto_scroll=True, highlight=False)
+            yield RichLog(id="update-log", auto_scroll=True, markup=True)
             yield Label("Running...", id="update-status")
             yield Button("Close", id="btn-update-close", variant="primary",
                          disabled=True)
@@ -2449,8 +2468,31 @@ class UpdateMaudeScreen(ModalScreen[None]):
     def on_mount(self) -> None:
         self.run_worker(self._run_update(), exclusive=True)
 
+    @staticmethod
+    def _colorize(line: str) -> Text:
+        """Apply truecolor styling to a stripped update output line."""
+        stripped = line.strip()
+        if stripped.startswith("✓") or stripped.startswith("✓"):
+            return Text(line, style="#72c09a")          # green — success
+        if stripped.startswith("✗") or stripped.startswith("✗"):
+            return Text(line, style="#e07070")          # red — failure
+        if stripped.startswith("⚠") or stripped.startswith("WARNING"):
+            return Text(line, style="#e8a040")          # amber — warning
+        if stripped.startswith("maude version:"):
+            return Text.assemble(
+                (line.split(":")[0] + ": ", "#a09090"),
+                (line.split(":", 1)[1].strip(), "bold #c8f0e0"),
+            )
+        # Section headers end with "..." and are bold
+        if stripped.endswith("...") and len(stripped) < 60:
+            return Text(line, style="bold #d4a0a0")
+        # Note/info lines
+        if stripped.startswith("Note:") or stripped.startswith("Running weekly"):
+            return Text(line, style="#7090b0")
+        return Text(line, style="#909090")
+
     async def _run_update(self) -> None:
-        log = self.query_one("#update-log", Log)
+        log = self.query_one("#update-log", RichLog)
         status = self.query_one("#update-status", Label)
         close_btn = self.query_one("#btn-update-close", Button)
 
@@ -2466,16 +2508,16 @@ class UpdateMaudeScreen(ModalScreen[None]):
             )
             async for raw in proc.stdout:
                 line = ansi_re.sub("", raw.decode(errors="replace")).rstrip()
-                log.write_line(line)
+                log.write(self._colorize(line))
             await proc.wait()
             rc = proc.returncode
             if rc == 0:
-                status.update("✓ Update complete. Run 'maude update' once more to apply the new script.")
+                status.update("[#72c09a]✓ Update complete — run once more to apply the new script.[/#72c09a]")
             else:
-                status.update(f"⚠ Update finished with errors (exit {rc}).")
+                status.update(f"[#e07070]⚠ Update finished with errors (exit {rc}).[/#e07070]")
         except Exception as exc:
-            log.write_line(f"Error: {exc}")
-            status.update("✗ Update failed.")
+            log.write(Text(f"Error: {exc}", style="#e07070"))
+            status.update("[#e07070]✗ Update failed.[/#e07070]")
         finally:
             close_btn.disabled = False
             close_btn.focus()
@@ -2618,9 +2660,17 @@ class MaudeApp(App):
         color: #d4a0a0;
     }
 
-    Checkbox.-on > .toggle--button,
-    RadioButton.-on > .toggle--button {
+    Checkbox.-on > .toggle--button {
         color: #72c09a;
+    }
+
+    RadioButton.-on > .toggle--button {
+        color: #e8a040;
+    }
+
+    RadioButton.-on {
+        color: #f8d090;
+        text-style: bold;
     }
 
     #main {
@@ -2643,8 +2693,8 @@ class MaudeApp(App):
     }
 
     DataTable > .datatable--cursor {
-        background: #383030;
-        color: #f0d8d8;
+        background: #3a2a10;
+        color: #f8e8c0;
     }
 
     #bottom-bar {
@@ -2662,10 +2712,14 @@ class MaudeApp(App):
         min-width: 14;
     }
 
-    #btn-open { color: #f0c8c8; }
-    #btn-new  { color: #d0b8b8; }
-    #btn-web  { color: #c0a8a8; }
-    #btn-cli  { color: #b09898; }
+    #btn-open   { color: #7de8b0; border: tall #3a6a50; }
+    #btn-new    { color: #70c8e8; border: tall #305870; }
+    #btn-web    { color: #c8b070; border: tall #605030; }
+    #btn-update { color: #e8a040; border: tall #704818; }
+    #btn-cli    { color: #908080; border: tall #504040; }
+    #btn-github { color: #d0b8e8; border: tall #604878; }
+    #btn-togithub { color: #b8d0e8; border: tall #486078; }
+    #btn-creds  { color: #e8c8b0; border: tall #785840; }
 
     #kanna-url {
         color: #72c09a;
@@ -3029,7 +3083,7 @@ class MaudeApp(App):
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
             with Vertical(id="sidebar"):
-                yield Static(LOGO, id="logo", markup=False)
+                yield Static(make_gradient_logo(), id="logo")
                 yield Static("─" * 28, id="divider")
                 yield Label("Tips", id="tips-title")
                 yield Static(
@@ -3048,7 +3102,13 @@ class MaudeApp(App):
                 yield Static("─" * 28, id="divider3")
                 yield Label("Start TUI with Maude", id="autostart-label")
                 yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
-                yield Static(f"maude {get_maude_version()}", id="maude-version")
+                yield Static(
+                    Text.assemble(
+                        ("  maude ", "#505050"),
+                        (f" {get_maude_version()} ", "bold #c8f0e0 on #1a3a2a"),
+                    ),
+                    id="maude-version",
+                )
             with Vertical(id="main"):
                 yield Label("Projects", id="section-title")
                 yield DataTable(id="projects-table", cursor_type="row",
@@ -3123,11 +3183,26 @@ class MaudeApp(App):
         table = self.query_one("#projects-table", DataTable)
         table.clear(columns=True)
         table.add_columns("  Project", "Last modified", "GitHub")
+        now = time.time()
         for proj in list_projects():
+            age = now - proj["mtime"] if proj["mtime"] else float("inf")
+            if age < 86400:            # today
+                name_style  = "bold #f0f0f0"
+                time_style  = "#72c09a"
+            elif age < 7 * 86400:      # this week
+                name_style  = "#d8d0d0"
+                time_style  = "#a0b898"
+            elif age < 30 * 86400:     # this month
+                name_style  = "#b0a8a8"
+                time_style  = "#808880"
+            else:                      # older
+                name_style  = "#786868"
+                time_style  = "#605858"
+            gh_style = "#72c09a" if proj["github"] else "#504040"
             table.add_row(
-                f"  {proj['name']}",
-                proj["modified"],
-                "yes" if proj["github"] else "",
+                Text(f"  {proj['name']}", style=name_style),
+                Text(proj["modified"],    style=time_style),
+                Text("yes" if proj["github"] else "·", style=gh_style),
                 key=proj["name"],
             )
 
