@@ -70,10 +70,10 @@ LOGO = (
 # sweeping from bright spring-green at the top to deep teal at the bottom.
 _LOGO_GRADIENT = [
     "#7de8b0",  # row 0 — bright spring green
-    "#52cfa0",  # row 1
-    "#30b898",  # row 2
-    "#18a090",  # row 3
-    "#0a8880",  # row 4 — deep teal
+    "#5ccda2",  # row 1
+    "#3fb294",  # row 2
+    "#249886",  # row 3
+    "#148177",  # row 4 — deep teal (brighter than #0a8880 for contrast)
 ]
 
 def make_gradient_logo() -> Text:
@@ -2452,8 +2452,13 @@ class UpdateMaudeScreen(ModalScreen[None]):
         margin-top: 1;
         margin-bottom: 1;
     }
-    #btn-update-close {
+    #update-buttons {
+        height: auto;
         margin-top: 1;
+    }
+
+    #update-buttons Button {
+        margin-right: 2;
     }
     """
 
@@ -2462,8 +2467,11 @@ class UpdateMaudeScreen(ModalScreen[None]):
             yield Label("Update Maude", id="update-title")
             yield RichLog(id="update-log", auto_scroll=True, markup=True)
             yield Label("Running...", id="update-status")
-            yield Button("Close", id="btn-update-close", variant="primary",
-                         disabled=True)
+            with Horizontal(id="update-buttons"):
+                yield Button("Reload UI", id="btn-update-reload",
+                             variant="success", disabled=True)
+                yield Button("Close",     id="btn-update-close",
+                             variant="primary", disabled=True)
 
     def on_mount(self) -> None:
         self.run_worker(self._run_update(), exclusive=True)
@@ -2489,7 +2497,7 @@ class UpdateMaudeScreen(ModalScreen[None]):
         # Note/info lines
         if stripped.startswith("Note:") or stripped.startswith("Running weekly"):
             return Text(line, style="#7090b0")
-        return Text(line, style="#909090")
+        return Text(line, style="#a8a8a8")
 
     async def _run_update(self) -> None:
         log = self.query_one("#update-log", RichLog)
@@ -2512,22 +2520,28 @@ class UpdateMaudeScreen(ModalScreen[None]):
             await proc.wait()
             rc = proc.returncode
             if rc == 0:
-                status.update("[#72c09a]✓ Update complete — run once more to apply the new script.[/#72c09a]")
+                status.update("[#72c09a]✓ Update complete. Reload to run the new version.[/#72c09a]")
             else:
                 status.update(f"[#e07070]⚠ Update finished with errors (exit {rc}).[/#e07070]")
         except Exception as exc:
             log.write(Text(f"Error: {exc}", style="#e07070"))
             status.update("[#e07070]✗ Update failed.[/#e07070]")
         finally:
+            reload_btn = self.query_one("#btn-update-reload", Button)
             close_btn.disabled = False
-            close_btn.focus()
+            reload_btn.disabled = False
+            reload_btn.focus()
 
     def action_close(self) -> None:
-        self.dismiss(None)
+        self.dismiss(False)
 
     @on(Button.Pressed, "#btn-update-close")
     def close_pressed(self) -> None:
-        self.dismiss(None)
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#btn-update-reload")
+    def reload_pressed(self) -> None:
+        self.dismiss(True)
 
 
 # ── Main app ───────────────────────────────────────────────────────────────
@@ -2671,6 +2685,20 @@ class MaudeApp(App):
     RadioButton.-on {
         color: #f8d090;
         text-style: bold;
+        background: #2b221a;
+    }
+
+    ScrollBar {
+        color: #b87878;
+        background: #1a1a1a;
+    }
+
+    ScrollBar:hover {
+        color: #d4a0a0;
+    }
+
+    Input:focus, TextArea:focus {
+        border: double #b87878;
     }
 
     #main {
@@ -3195,14 +3223,14 @@ class MaudeApp(App):
             elif age < 30 * 86400:     # this month
                 name_style  = "#b0a8a8"
                 time_style  = "#808880"
-            else:                      # older
-                name_style  = "#786868"
-                time_style  = "#605858"
+            else:                      # older — use dim+italic so text stays readable
+                name_style  = "dim #a09090"
+                time_style  = "italic #888080"
             gh_style = "#72c09a" if proj["github"] else "#504040"
             table.add_row(
                 Text(f"  {proj['name']}", style=name_style),
                 Text(proj["modified"],    style=time_style),
-                Text("yes" if proj["github"] else "·", style=gh_style),
+                Text("⎇ yes" if proj["github"] else "·", style=gh_style),
                 key=proj["name"],
             )
 
@@ -3362,7 +3390,10 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-update")
     def btn_update(self) -> None:
-        self.push_screen(UpdateMaudeScreen())
+        def _after_update(reload: bool) -> None:
+            if reload:
+                self.exit(42)  # 42 = reload signal; launch_tui() in bash re-execs
+        self.push_screen(UpdateMaudeScreen(), _after_update)
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:

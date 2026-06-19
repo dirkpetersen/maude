@@ -249,7 +249,17 @@ launch_tui() {
 
     maude_maybe_update
     purge_pycache
-    python3 "$MAUDE_PY"
+    # Exit code 42 = "Reload UI" was clicked after an update. Re-exec with
+    # the freshly downloaded maude.py so the user gets the new version without
+    # returning to the shell. Any other exit code breaks out of the loop.
+    local _tui_rc
+    while true; do
+        python3 "$MAUDE_PY"
+        _tui_rc=$?
+        [[ $_tui_rc -eq 42 ]] || break
+        purge_pycache
+        echo -e "${CYAN}Reloading UI with updated version...${NC}"
+    done
     echo ""
     echo -e "  Please type ${BOLD}menu${NC} <Enter> to get back to the TUI or type ${BOLD}maude help${NC} <Enter>"
     echo ""
