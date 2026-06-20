@@ -6,13 +6,13 @@ description: Wield Google's Gemini CLI as a powerful auxiliary tool for code gen
 # Gemini CLI
 
 `gemini` (Google's `@google/gemini-cli` v0.46+) is pre-installed in Maude and on PATH.
-The default model is **gemini-2.5-pro** (aliased as `gemini-3-pro`); use
-`-m gemini-2.5-flash` for faster/cheaper tasks.
+**Always use `-m gemini-2.5-pro-latest`** — this pins to the latest stable Pro model and
+avoids the CLI defaulting to an older or experimental version.
 
 ## Step 0: credential probe (always run first)
 
 ```bash
-gemini --skip-trust -p "reply with the single word: ok" -o text 2>&1; echo "exit=$?"
+gemini --skip-trust -m gemini-2.5-pro-latest -p "reply with the single word: ok" -o text 2>&1; echo "exit=$?"
 ```
 
 If exit ≠ 0 or you see an auth error, STOP and tell the user to add a key via the
@@ -22,16 +22,16 @@ Do NOT retry blindly on a broken auth.
 ## Basic invocation pattern
 
 ```bash
-gemini --skip-trust -p "your prompt here" --yolo -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "your prompt here" --yolo -o text 2>&1
 ```
 
 Key flags:
 - `--skip-trust` — required for headless/automated use in Maude (bypasses trusted-folder gate)
+- `-m gemini-2.5-pro-latest` — **always include this**; pins to latest Pro model
 - `-p "prompt"` — non-interactive prompt (the CLI reads it as an argument, no quoting issues for normal prose)
 - `--yolo` / `-y` — auto-approve all tool calls
 - `-o text` — human-readable output; use `-o json` for structured parsing
-- `-m gemini-2.5-flash` — faster/cheaper model for simple tasks
-- `-m gemini-2.5-flash-lite` — fastest, trivial tasks only
+- `-m gemini-2.5-flash` — faster/cheaper model for simple tasks only
 
 ## When prompt contains special characters or multi-line code
 
@@ -40,7 +40,7 @@ temp file under `/tmp` and feed via stdin instead to avoid any shell-escaping is
 
 ```bash
 # Write to unique temp file via Write tool, then:
-gemini --skip-trust --yolo -o text < /tmp/gemini-query-$$.txt 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest --yolo -o text < /tmp/gemini-query-$$.txt 2>&1
 rm -f /tmp/gemini-query-$$.txt
 ```
 
@@ -51,8 +51,8 @@ Never create temp files inside the project directory — use `/tmp` only.
 Pass file contents to Gemini without quoting them by using the `@path` syntax:
 
 ```bash
-gemini --skip-trust -p "Review @./src/main.py for bugs and security issues" -o text 2>&1
-gemini --skip-trust -p "Based on @./package.json and @./src/index.js, suggest improvements" -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Review @./src/main.py for bugs and security issues" -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Based on @./package.json and @./src/index.js, suggest improvements" -o text 2>&1
 ```
 
 For large files or multiple files, this is cleaner than embedding content in the prompt.
@@ -61,53 +61,53 @@ For large files or multiple files, this is cleaner than embedding content in the
 
 | Model | Flag | Best for |
 |-------|------|----------|
-| gemini-2.5-pro (default) | *(omit `-m`)* | Complex analysis, multi-file, architecture |
-| gemini-2.5-flash | `-m gemini-2.5-flash` | Quick tasks, lower latency |
-| gemini-2.5-flash-lite | `-m gemini-2.5-flash-lite` | Trivial one-liners |
+| gemini-2.5-pro-latest | `-m gemini-2.5-pro-latest` | **Default — always use this** |
+| gemini-2.5-flash | `-m gemini-2.5-flash` | Quick tasks, lower latency, simple lookups |
+| gemini-2.5-flash-lite | `-m gemini-2.5-flash-lite` | Trivial one-liners only |
 
 ## Quick reference patterns
 
 ### Web research (Google Search grounding)
 ```bash
-gemini --skip-trust -p "What are the latest changes in [topic]? Use Google Search." -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "What are the latest changes in [topic]? Use Google Search." -o text 2>&1
 ```
 
 ### Code review
 ```bash
-gemini --skip-trust -p "Review @./path/to/file.py for bugs, security issues, and improvements" -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Review @./path/to/file.py for bugs, security issues, and improvements" -o text 2>&1
 ```
 
 ### Codebase architecture analysis
 ```bash
-gemini --skip-trust -p "Use the codebase_investigator tool to analyze this project's architecture" -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Use the codebase_investigator tool to analyze this project's architecture" -o text 2>&1
 ```
 
 ### Code generation
 ```bash
-gemini --skip-trust -p "Create [description]. Apply now." --yolo -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Create [description]. Apply now." --yolo -o text 2>&1
 ```
 
 ### Test generation
 ```bash
-gemini --skip-trust -p "Generate pytest tests for @./src/utils.py focusing on edge cases. Apply now." --yolo -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Generate pytest tests for @./src/utils.py focusing on edge cases. Apply now." --yolo -o text 2>&1
 ```
 
 ### JSON output for programmatic parsing
 ```bash
-gemini --skip-trust -p "prompt" -o json 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "prompt" -o json 2>&1
 # Parse: result.response = content, result.stats.models, result.stats.tools
 ```
 
 ### Session resumption (multi-turn workflows)
 ```bash
 # First turn (session saved automatically)
-gemini --skip-trust -p "Analyze this codebase architecture" -o text 2>&1
+gemini --skip-trust -m gemini-2.5-pro-latest -p "Analyze this codebase architecture" -o text 2>&1
 
 # List sessions
 gemini --list-sessions
 
 # Continue
-echo "What patterns did you find?" | gemini --skip-trust -r latest -o text 2>&1
+echo "What patterns did you find?" | gemini --skip-trust -m gemini-2.5-pro-latest -r latest -o text 2>&1
 ```
 
 ## Gemini's unique tools
