@@ -56,18 +56,40 @@ Key flags:
 - `-o text` — human-readable output; use `-o json` for structured parsing
 - `-m gemini-2.5-flash` — faster/cheaper model for simple tasks only
 
-## When prompt contains special characters or multi-line code
+## Passing large or non-trivial content: ALWAYS use a /tmp file via stdin
 
-If the prompt contains backticks, `$`, heredocs, or many newlines, write it to a
-temp file under `/tmp` and feed via stdin instead to avoid any shell-escaping issues:
+If the prompt contains backticks, `$`, quotes, heredocs, many newlines, OR any file
+content (diffs, source code, logs), you MUST write it to a temp file under `/tmp` and
+feed it via stdin redirect. This is the conduit — not the command line.
 
 ```bash
-# Write to unique temp file via Write tool, then:
-gemini --skip-trust -m gemini-pro-latest --yolo -o text < /tmp/gemini-query-$$.txt 2>&1
-rm -f /tmp/gemini-query-$$.txt
+# 1. Write the full prompt+content to a /tmp file using the Write tool, with a
+#    unique literal filename you choose (e.g. /tmp/gemini-query-review1.txt).
+#    Do NOT put shell variables like $$ in the Write-tool path — the Write tool
+#    does not expand them; it would create a file literally named "$$".
+# 2. Feed that exact file via stdin redirect:
+gemini --skip-trust -m gemini-pro-latest --yolo -o text < /tmp/gemini-query-review1.txt 2>&1
+rm -f /tmp/gemini-query-review1.txt
 ```
 
-Never create temp files inside the project directory — use `/tmp` only.
+**PROHIBITED — never do any of these.** They route content through the shell, where
+metacharacters (`$`, backticks, quotes) corrupt or truncate the payload:
+
+```bash
+gemini ... -p "Review this: $(cat file.diff)"      # NO — command substitution into -p
+gemini ... -p "$(< file.txt)"                       # NO — same thing, shorter
+gemini ... -p "review $VAR with $(some command)"    # NO — any $() / backticks in -p
+gemini ... -p "$(cat <<'EOF' ... EOF)"              # NO — heredoc into -p
+echo "$content" | gemini ...                         # NO — echo still exposes it to the shell
+gemini ... <<< "$(cat file.diff)"                    # NO — here-string interpolates via the shell
+```
+
+The ONLY two acceptable input methods:
+1. A short, literal, hand-typed prose prompt in `-p "..."` (no `$()`, no file content).
+2. A `/tmp` file fed via `< /tmp/file` stdin redirect (use this for everything else).
+
+Reference small files with `@path` (next section); pipe large/dynamic content via the
+`/tmp` file. Never create temp files inside the project directory — use `/tmp` only.
 
 ## Reference files with @
 
