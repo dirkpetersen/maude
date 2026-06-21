@@ -2,6 +2,10 @@
 # Installs/updates Google's Gemini CLI (@google/gemini-cli) and refreshes the
 # bundled `gemini` skill into ~/.claude/skills/gemini, so Claude Code can drive
 # Gemini via the file-based handoff documented in that SKILL.md.
+#
+# The canonical skill lives at the repository ROOT (.claude/skills/gemini/SKILL.md),
+# alongside any other shared skills — NOT under light/. We derive the repo-root
+# raw URL by stripping the trailing /light from MAUDE_RAW.
 
 # Default URL for the raw repo. Allow override via MAUDE_RAW for testing.
 : "${MAUDE_RAW:=https://raw.githubusercontent.com/dirkpetersen/maude/main/light}"
@@ -36,10 +40,13 @@ update_gemini() {
     fi
 
     # ── Gemini skill (our own SKILL.md, fetched from GitHub) ──
+    # Pulled from the repo root .claude/skills/, not light/. Strip the trailing
+    # /light from MAUDE_RAW so fork/branch overrides still resolve correctly.
+    local repo_raw="${MAUDE_RAW%/light}"
     local skill_dir="$HOME/.claude/skills/gemini"
     mkdir -p "$skill_dir"
     local tmp; tmp=$(mktemp)
-    if curl -fsSL --max-time 10 "$MAUDE_RAW/skills/gemini/SKILL.md" -o "$tmp" 2>/dev/null \
+    if curl -fsSL --max-time 10 "$repo_raw/.claude/skills/gemini/SKILL.md" -o "$tmp" 2>/dev/null \
        && [[ -s "$tmp" ]] && head -1 "$tmp" | grep -q '^---'; then
         local existing="$skill_dir/SKILL.md"
         if [[ ! -f "$existing" ]]; then

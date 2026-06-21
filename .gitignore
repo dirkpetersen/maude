@@ -1,5 +1,8 @@
-# Per-developer Claude Code state
-.claude/
+# Per-developer Claude Code state — ignore everything except the shared,
+# version-controlled skills (the Gemini skill is fetched from GitHub raw by
+# Maude's update scripts, so it must be committed).
+.claude/*
+!.claude/skills/
 
 # Internal cybersecurity review (not for public repo)
 Maude-review.docx
