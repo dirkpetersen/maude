@@ -9,19 +9,42 @@ description: Wield Google's Gemini CLI as a powerful auxiliary tool for code gen
 **Always use `-m gemini-pro-latest`** — this pins to the latest stable Pro model and
 avoids the CLI defaulting to an older or experimental version.
 
+## Credentials: ALWAYS source `~/.gemini/.env` first
+
+The API key already lives in `~/.gemini/.env` (written by the Maude TUI). The CLI is
+*supposed* to auto-load it, but Claude Code's Bash tool spawns a fresh, non-interactive
+shell that does **not** reliably pick it up — which is why `gemini` falsely complains
+"Please set an Auth method … GEMINI_API_KEY" even though the key is right there.
+
+**Fix: prefix every `gemini` call with a source of that file, in the same command:**
+
+```bash
+set -a; [ -f ~/.gemini/.env ] && . ~/.gemini/.env; set +a
+```
+
+The examples below omit this prefix for brevity, but you MUST include it in the same
+`bash` invocation as the `gemini` command (each Bash tool call is a fresh shell, so the
+source does not carry over between calls). Only treat auth as genuinely broken if a call
+**still** fails *after* sourcing `~/.gemini/.env` and confirming `GEMINI_API_KEY` is set.
+
 ## Step 0: credential probe (always run first)
 
 ```bash
+set -a; [ -f ~/.gemini/.env ] && . ~/.gemini/.env; set +a
+[ -n "$GEMINI_API_KEY$GOOGLE_API_KEY$GOOGLE_GENAI_USE_VERTEXAI$GOOGLE_GENAI_USE_GCA" ] \
+    || { echo "NO CREDS in ~/.gemini/.env"; }
 gemini --skip-trust -m gemini-pro-latest -p "reply with the single word: ok" -o text 2>&1; echo "exit=$?"
 ```
 
-If exit ≠ 0 or you see an auth error, STOP and tell the user to add a key via the
-Maude TUI: **Set Creds → Paste exports** with `GEMINI_API_KEY=<key from aistudio.google.com/apikey>`.
-Do NOT retry blindly on a broken auth.
+If the probe prints `NO CREDS` (the env file truly has no key), STOP and tell the user to
+add one via the Maude TUI: **Set Creds → Paste exports** with
+`GEMINI_API_KEY=<key from aistudio.google.com/apikey>`. If a key IS present but the call
+still errors, report the actual error — do NOT retry blindly on a broken auth.
 
 ## Basic invocation pattern
 
 ```bash
+set -a; [ -f ~/.gemini/.env ] && . ~/.gemini/.env; set +a
 gemini --skip-trust -m gemini-pro-latest -p "your prompt here" --yolo -o text 2>&1
 ```
 
@@ -120,7 +143,9 @@ These are available only through the Gemini CLI:
 
 ## Authentication
 
-Credentials are stored in `~/.gemini/.env` (auto-loaded by the CLI). One of:
+Credentials are stored in `~/.gemini/.env`. The CLI is meant to auto-load this file, but
+in Claude Code's non-interactive Bash shells you must source it yourself (see
+**Credentials: ALWAYS source `~/.gemini/.env` first** above). The file holds one of:
 - `GEMINI_API_KEY` — Google AI Studio key, no OAuth needed (simplest)
 - `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` — Vertex AI (needs OAuth/service account; **plain API keys don't work on Vertex**)
 - `GOOGLE_GENAI_USE_GCA=true` — OAuth / Code Assist
