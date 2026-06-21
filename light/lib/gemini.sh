@@ -40,14 +40,28 @@ update_gemini() {
     fi
 
     # ── Gemini skill (our own SKILL.md, fetched from GitHub) ──
-    # Pulled from the repo root .claude/skills/, not light/. Strip the trailing
-    # /light from MAUDE_RAW so fork/branch overrides still resolve correctly.
+    # Canonical location is the repo root .claude/skills/ (a global Claude Code
+    # skill in the user's home), NOT light/. Strip the trailing /light from
+    # MAUDE_RAW so fork/branch overrides still resolve correctly. We try the
+    # canonical URL first, then fall back to the legacy light/ path so a machine
+    # mid-migration still gets *a* skill; the exact URL + curl exit is reported
+    # on total failure so this never fails silently again.
     local repo_raw="${MAUDE_RAW%/light}"
     local skill_dir="$HOME/.claude/skills/gemini"
     mkdir -p "$skill_dir"
     local tmp; tmp=$(mktemp)
-    if curl -fsSL --max-time 10 "$repo_raw/.claude/skills/gemini/SKILL.md" -o "$tmp" 2>/dev/null \
-       && [[ -s "$tmp" ]] && head -1 "$tmp" | grep -q '^---'; then
+    local url got_url="" tried=""
+    for url in "$repo_raw/.claude/skills/gemini/SKILL.md" \
+               "$MAUDE_RAW/skills/gemini/SKILL.md"; do
+        : > "$tmp"   # clear any garbage a prior failed attempt may have left
+        tried="${tried:+$tried, }$url"
+        if curl -fsSL --max-time 10 "$url" -o "$tmp" 2>/dev/null \
+           && [[ -s "$tmp" ]] && head -n 1 "$tmp" | grep -q '^---'; then
+            got_url="$url"
+            break
+        fi
+    done
+    if [[ -n "$got_url" ]]; then
         local existing="$skill_dir/SKILL.md"
         if [[ ! -f "$existing" ]]; then
             skill_status="installed (new)"
@@ -59,7 +73,7 @@ update_gemini() {
         mv "$tmp" "$existing"
     else
         rm -f "$tmp"
-        skill_status="failed"
+        skill_status="failed (all urls failed: $tried)"
         rc=1
     fi
 
