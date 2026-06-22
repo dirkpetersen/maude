@@ -7,7 +7,8 @@ Maude creates a single `Maude` subfolder inside `%LOCALAPPDATA%\Maude\Data\Maude
 Beyond security, Maude addresses **manageability**: IT departments are often concerned about another OS to manage. Maude is narrow in scope and stores all relevant settings in the `Maude` folder under `%LOCALAPPDATA%`, so the sandbox can be torn down and reinstalled at any time without losing configuration or project data.
 
 Use a TUI
-<img width="1330" height="1075" alt="image" src="https://github.com/user-attachments/assets/5c97eecf-d4c7-48af-a2e3-6f3de060f743" />
+
+<img width="1094" height="833" alt="image" src="https://github.com/user-attachments/assets/ac27008c-d242-4f43-9fca-7cb3daffd592" />
 
 
 or a simple CLI
