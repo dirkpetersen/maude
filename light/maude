@@ -181,9 +181,15 @@ load_lib ensure-tools.sh || ensure_tool_symlinks() { _inline_ensure_tool_symlink
 load_lib refresh-md.sh   || true   # refresh_claude_md falls through if not loaded
 load_lib update-skills.sh || true
 
+# Pin rationale: 8.2.3 (and only 8.2.3) crashes the Set Creds modal with
+# KeyError 'text-area--gutter' (textual#6528); every other 8.x is verified
+# fine against maude.py. <9 shields auto-updating end-user machines from an
+# unknown future major-version break.
+TEXTUAL_PIN='textual>=8.2.4,<9'
+
 _pip_install_textual() {
-    pip install --quiet --break-system-packages 'textual<8' 2>/dev/null && return 0
-    pip install --quiet 'textual<8' 2>/dev/null && return 0
+    pip install --quiet --break-system-packages "$TEXTUAL_PIN" 2>/dev/null && return 0
+    pip install --quiet "$TEXTUAL_PIN" 2>/dev/null && return 0
     return 1
 }
 
@@ -196,14 +202,17 @@ ensure_textual() {
         }
         return 0
     fi
-    # Already installed — downgrade if the version is broken.
+    # Already installed — reinstall only if the version is outside the pin:
+    # anything below 8.2.4 (including the old <8 pin era) or 9+.
     local ver
     ver=$(python3 -c 'import textual,sys; sys.stdout.write(textual.__version__)' 2>/dev/null)
     case "$ver" in
-        8.*|9.*|1[0-9].*)
-            echo -e "${YELLOW}Downgrading textual ($ver → <8) to avoid a known crash...${NC}"
+        8.2.[4-9]*|8.2.[1-9][0-9]*|8.[3-9].*|8.[1-9][0-9]*.*)
+            ;;  # inside the pin — nothing to do
+        *)
+            echo -e "${YELLOW}Reinstalling textual ($ver → $TEXTUAL_PIN) to avoid a known crash...${NC}"
             _pip_install_textual || {
-                echo -e "${RED}Failed to downgrade textual — TUI may crash.${NC}" >&2
+                echo -e "${RED}Failed to reinstall textual — TUI may crash.${NC}" >&2
                 return 1
             }
             ;;
@@ -436,7 +445,7 @@ update_all() {
     [[ $session_ok -eq 1 ]] && echo -e "${GREEN}  ✓ systemd user session OK${NC}"
     echo ""
 
-    echo -e "${BOLD}Checking textual version (auto-downgrades 8.x to <8)...${NC}"
+    echo -e "${BOLD}Checking textual version (pin: >=8.2.4,<9)...${NC}"
     ensure_textual
     echo ""
 

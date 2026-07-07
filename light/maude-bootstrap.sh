@@ -23,9 +23,10 @@ set -e
 
 # ── Install textual (Maude TUI dependency) ───────────────────────────
 echo "Installing textual..."
-# Pin <8 — Textual 8.2.x has a 'text-area--gutter' regression that
-# crashes the Set Creds modal. Drop the cap when fixed upstream.
-pip install --quiet --break-system-packages 'textual<8'
+# 8.2.3 (and only 8.2.3) crashes the Set Creds modal with KeyError
+# 'text-area--gutter' (textual#6528); >=8.2.4 is verified fine against
+# maude.py. <9 shields against an unknown future major-version break.
+pip install --quiet --break-system-packages 'textual>=8.2.4,<9'
 
 # ── Source maude shell libraries ──────────────────────────────────────
 mkdir -p "$HOME/.local/lib/maude"
