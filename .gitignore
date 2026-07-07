@@ -7,6 +7,9 @@
 # Internal cybersecurity review (not for public repo)
 Maude-review.docx
 
+# Intune/PSADT deployment packaging (OSU-internal, staged copy of light/)
+intune/
+
 # Python bytecode caches
 __pycache__/
 *.pyc
