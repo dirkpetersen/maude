@@ -184,8 +184,35 @@ def kanna_env() -> dict[str, str]:
     return extra
 
 
+def have_claude_login() -> bool:
+    """Return True if a valid native claude.ai OAuth login exists.
+
+    Mirrors _is_claude_logged_in() in the dok claude-wrapper: a non-empty
+    claudeAiOauth.accessToken in ~/.claude/.credentials.json whose expiresAt
+    (ms epoch) is in the future. A missing/malformed expiresAt means "can't
+    tell", not "expired".
+    """
+    creds = Path.home() / ".claude" / ".credentials.json"
+    try:
+        data = json.loads(creds.read_text())
+    except (OSError, ValueError):
+        return False
+    oauth = data.get("claudeAiOauth") or {}
+    if not oauth.get("accessToken"):
+        return False
+    expires_ms = oauth.get("expiresAt")
+    # type() not isinstance(): bool is a subclass of int, and a JSON `true`
+    # here must mean "can't tell", not "expired at 1ms epoch".
+    if type(expires_ms) in (int, float) and expires_ms > 0:
+        return expires_ms > time.time() * 1000
+    return True
+
+
 def check_credentials() -> bool:
     """Return True if Claude Code credentials are configured."""
+    # Native claude.ai login (claude /login)
+    if have_claude_login():
+        return True
     # Azure AI Foundry
     if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
         return True
@@ -1147,6 +1174,11 @@ class CredsEntryScreen(ModalScreen[bool]):
       • Paste exports — original `export FOO=bar` paste flow
       • AWS Bedrock  — three named fields (access key / secret / region)
       • Azure Foundry — base URL + API key
+    Plus a fourth tab-row button that is an action, not a mode:
+      • Claude Login — suspends the TUI and runs the unwrapped
+        ~/.local/bin/claude /login for native claude.ai OAuth; dismisses
+        the modal as saved when a valid token lands in
+        ~/.claude/.credentials.json.
     All modes save to ~/.azure/clauderc (merged) so existing creds
     survive across modes; AWS Bedrock additionally writes
     ~/.aws/credentials + ~/.aws/config under the [bedrock] profile.
@@ -1180,6 +1212,8 @@ class CredsEntryScreen(ModalScreen[bool]):
                              variant="default")
                 yield Button("Azure Foundry", id="btn-creds-mode-foundry",
                              variant="default")
+                yield Button("Claude Login", id="btn-creds-login",
+                             variant="default")
             yield Container(id="creds-body")
             yield Label("", id="creds-status")
             yield Checkbox("Default to AWS Bedrock (uncheck → Foundry)",
@@ -1205,6 +1239,39 @@ class CredsEntryScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#btn-creds-mode-foundry")
     async def mode_foundry(self) -> None:
         await self._switch_mode(self.MODE_FOUNDRY)
+
+    @on(Button.Pressed, "#btn-creds-login")
+    def claude_login(self) -> None:
+        """Native claude.ai OAuth login (subscription, no API key).
+
+        Runs the UNWRAPPED binary: with no cloud creds configured, the
+        ~/bin/claude wrapper exits with "No valid configuration found"
+        before Claude Code ever starts, so /login can't complete through
+        it. Interop is disabled in the sandbox, so Claude Code prints the
+        OAuth URL for the user to open in a Windows browser manually.
+        """
+        claude_bin = Path.home() / ".local" / "bin" / "claude"
+        if not claude_bin.exists():
+            self._set_status(
+                "[bold red]~/.local/bin/claude not found — "
+                "is Claude Code installed?[/]")
+            return
+        with self.app.suspend():
+            print("Starting Claude Code for /login — copy the OAuth URL "
+                  "into a Windows browser, then paste the code back here.\n"
+                  "Exit Claude Code when done.", flush=True)
+            try:
+                subprocess.run([str(claude_bin), "/login"])
+            except KeyboardInterrupt:
+                pass  # user Ctrl+C'd out of claude — not an error
+            except OSError as err:
+                print(f"Could not run claude: {err}")
+        if have_claude_login():
+            self.dismiss(True)
+        else:
+            self._set_status(
+                "[bold yellow]Login not completed — no valid token found. "
+                "Try again, or use one of the other methods.[/]")
 
     async def _switch_mode(self, mode: str) -> None:
         self.mode = mode
