@@ -60,7 +60,7 @@ if dpkg -s mom >/dev/null 2>&1 && ! dpkg -s mom-inst >/dev/null 2>&1; then
 fi
 if ! dpkg -s mom-inst >/dev/null 2>&1; then
     _arch=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
-    _ver="0.2.20"
+    _ver="0.2.21"
     # Detect Ubuntu version to pick the right .deb asset (2204, 2404, 2604).
     # Fall back to 2404 for anything unrecognised.
     _ubuntu_ver=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID}" | tr -d '.')
