@@ -1128,15 +1128,21 @@ if ($wtSettingsPath -and (Test-Path -LiteralPath $wtSettingsPath)) {
         $src = if ($p.PSObject.Properties['source']) { $p.source } else { '' }
 
         if ($nm -eq $DistroName) {
-            if ($src -ne '' -and -not $hasAutoProfile) {
-                if ($wtIconPath) {
-                    $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
+            if ($src -ne '') {
+                # WT auto-generated Maude profile: keep the first, drop duplicates.
+                if (-not $hasAutoProfile) {
+                    if ($wtIconPath) {
+                        $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
+                    }
+                    $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
+                    $hasAutoProfile = $true
+                } else {
+                    continue
                 }
-                $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
-                $hasAutoProfile = $true
-            } else {
-                continue
             }
+            # A user-created static profile (no 'source') is preserved as-is,
+            # not dropped — otherwise a hand-made "Maude" profile disappears and
+            # leaves a "profile no longer detected" orphan in WT settings.
         }
 
         if ($nm -eq $templateDistro) {
