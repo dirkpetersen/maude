@@ -46,11 +46,16 @@ if (-not $json.profiles.PSObject.Properties['list']) {
     $json.profiles | Add-Member -NotePropertyName list -NotePropertyValue @() -Force
 }
 
-# 5. Reuse a Maude icon if an install left one behind.
+# 5. Reuse a Maude icon if an install left one behind. Both installers copy the
+#    PNG into the distro install dir (...\OS\maude.png); the Intune build also
+#    drops a .ico into the shared data folder.
 $icon = @(
-    "$env:LOCALAPPDATA\OSU\Maude\maude.png"
+    "$env:LOCALAPPDATA\OSU\Maude\OS\maude.png"          # Intune install
+    "$env:LOCALAPPDATA\Maude\OS\maude.png"              # light install
+    "$env:LOCALAPPDATA\OSU\Maude\Data\Maude\maude.ico"  # Intune (fallback .ico)
+    "$env:LOCALAPPDATA\Maude\OS\maude.ico"              # light (fallback .ico)
+    "$env:LOCALAPPDATA\OSU\Maude\maude.png"             # legacy layouts
     "$env:LOCALAPPDATA\Maude\maude.png"
-    "$env:LOCALAPPDATA\Maude\Data\Maude\maude.png"
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
 # 6. Drop generator/stub/stale "Maude" entries (the ones that orphan). A
