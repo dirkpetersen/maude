@@ -3498,29 +3498,39 @@ class MaudeApp(App):
 
     # ── Callbacks ─────────────────────────────────────────────────────
 
-    def _launch_project(self, path: Path) -> None:
+    def _launch_project(self, path: Path, *, fresh: bool | None = None) -> None:
         # Gate on credentials so we don't drop the user into a Claude Code
         # session that immediately fails on first turn.
+        # `fresh=None` means "read the sidebar checkbox"; callers that know
+        # there is no history (e.g. a brand-new project) pass fresh=True so we
+        # skip `claude --continue` — otherwise it errors ("No conversation to
+        # continue"), flashes on screen, and only then falls back to a fresh
+        # launch.
         if not check_credentials():
             self._pending_project = path
+            self._pending_fresh = fresh
             self.push_screen(CredsEntryScreen(), self._on_creds_for_project)
             return
-        self._launch_project_now(path)
+        self._launch_project_now(path, fresh=fresh)
 
     def _on_creds_for_project(self, saved: bool) -> None:
         path = getattr(self, "_pending_project", None)
+        fresh = getattr(self, "_pending_fresh", None)
         self._pending_project = None
+        self._pending_fresh = None
         if saved and path is not None:
-            self._launch_project_now(path)
+            self._launch_project_now(path, fresh=fresh)
 
-    def _launch_project_now(self, path: Path) -> None:
+    def _launch_project_now(self, path: Path, *, fresh: bool | None = None) -> None:
         name = path.name
-        # Honour the sidebar checkbox: when checked, skip --continue so
-        # Claude starts with a clean conversation.
-        try:
-            fresh = self.query_one("#fresh-context", Checkbox).value
-        except Exception:
-            fresh = False
+        # Honour the sidebar checkbox when the caller didn't force a value:
+        # when checked, skip --continue so Claude starts with a clean
+        # conversation.
+        if fresh is None:
+            try:
+                fresh = self.query_one("#fresh-context", Checkbox).value
+            except Exception:
+                fresh = False
         with self.suspend():
             open_project(path, self._model, fresh=fresh)
         # Auto-clear the checkbox after use — fresh-context is a one-shot
@@ -3551,7 +3561,9 @@ class MaudeApp(App):
         path.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "-C", str(path), "init", "--quiet"], check=False)
         self._refresh_table()
-        self._launch_project(path)
+        # A just-created project has no prior session, so launch fresh and
+        # skip `claude --continue` (which would error + flash on screen).
+        self._launch_project(path, fresh=True)
 
     def _on_confirm_delete(self, confirmed: bool) -> None:
         if not confirmed:
