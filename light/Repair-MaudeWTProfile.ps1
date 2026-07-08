@@ -79,8 +79,8 @@ $json.profiles.list = $kept
 # 8. Write back.
 $json | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
 
+$suffix = if ($removed -eq 1) { 'y' } else { 'ies' }
 Write-Host ""
-Write-Host ("Done. Removed {0} stale/orphan entr{1}; added 1 working '{2}' profile." -f `
-    $removed, $(if ($removed -eq 1) {'y'} else {'ies'}), $DistroName) -ForegroundColor Green
-Write-Host "Fully close Windows Terminal (every window) and reopen it — '$DistroName' will be in the dropdown." -ForegroundColor Yellow
+Write-Host "Done. Removed $removed stale/orphan entr$suffix; added 1 working '$DistroName' profile." -ForegroundColor Green
+Write-Host "Fully close Windows Terminal (every window) and reopen it - '$DistroName' will be in the dropdown." -ForegroundColor Yellow
 Write-Host "Undo if needed:  Copy-Item '$backup' '$settingsPath' -Force" -ForegroundColor DarkGray
