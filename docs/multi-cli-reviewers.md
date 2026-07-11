@@ -1,7 +1,7 @@
 # Multi-CLI Reviewer Architecture — Codex, OpenCode, Grok
 
-**Status:** PROPOSED (architecture approved pending review; credential application is a
-separate follow-up phase)
+**Status:** IMPLEMENTED 2026-07-10 (libs, skills, pipeline wiring, tests — see §6;
+credential application remains a separate follow-up phase)
 **Date:** 2026-07-10
 **Scope:** Maude Light (`light/`). The full appliance inherits later via the same libs.
 

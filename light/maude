@@ -334,10 +334,10 @@ update_all() {
     fi
     echo ""
 
-    echo -e "${BOLD}Refreshing maude libraries (ensure-tools, refresh-md, update-skills)...${NC}"
+    echo -e "${BOLD}Refreshing maude libraries (ensure-tools, refresh-md, update-skills, reviewers)...${NC}"
     mkdir -p "$MAUDE_LIB_DIR"
     local lib_rc=0
-    for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh; do
+    for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh; do
         local lib_tmp; lib_tmp=$(mktemp)
         if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
            && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
@@ -357,6 +357,15 @@ update_all() {
     . "$MAUDE_LIB_DIR/update-skills.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/gemini.sh" 2>/dev/null || true
+    # llm-mode.sh must load before the per-tool reviewer libs (shared helpers).
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/llm-mode.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/codex.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/opencode.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/grok.sh" 2>/dev/null || true
     if [[ $lib_rc -eq 0 ]]; then
         echo -e "${GREEN}  ✓ libraries refreshed${NC}"
     else
@@ -483,6 +492,30 @@ update_all() {
         rc=1
     fi
     echo ""
+
+    # Reviewer CLIs — right below Gemini, same status-line protocol
+    # (cli:/skill:/config: lines printed by each update_<tool> function).
+    local _rtool _rout _rrc _rline
+    for _rtool in codex opencode grok; do
+        echo -e "${BOLD}Updating ${_rtool} CLI + skill...${NC}"
+        if declare -F "update_${_rtool}" >/dev/null; then
+            _rout=$("update_${_rtool}")
+            _rrc=$?
+            while IFS= read -r _rline; do
+                [[ -z "$_rline" ]] && continue
+                if [[ $_rrc -eq 0 ]]; then
+                    echo -e "${GREEN}  ✓ ${_rline}${NC}"
+                else
+                    echo -e "${YELLOW}  ${_rline}${NC}"
+                fi
+            done <<< "$_rout"
+            [[ $_rrc -ne 0 ]] && rc=1
+        else
+            echo -e "${YELLOW}  ${_rtool}.sh library not loaded — skipping${NC}"
+            rc=1
+        fi
+        echo ""
+    done
 
     echo -e "${BOLD}Refreshing tool symlinks (bun, kanna, node, npm, npx, python, pip)...${NC}"
     ensure_tool_symlinks

@@ -11,6 +11,12 @@ ensure_tool_symlinks() {
     [[ -x "$HOME/.bun/bin/bun"   ]] && ln -sfn "$HOME/.bun/bin/bun"   "$bin/bun"
     [[ -x "$HOME/.bun/bin/kanna" ]] && ln -sfn "$HOME/.bun/bin/kanna" "$bin/kanna"
 
+    # Reviewer CLIs (installed by lib/{codex,opencode,grok}.sh) — belt-and-braces
+    # re-link of the known installer targets; the libs also link on install.
+    [[ -x "$HOME/.bun/bin/opencode" ]] && ln -sfn "$HOME/.bun/bin/opencode" "$bin/opencode"
+    [[ -x "$HOME/.codex/bin/codex"  ]] && ln -sfn "$HOME/.codex/bin/codex"  "$bin/codex"
+    [[ -x "$HOME/.grok/bin/grok"    ]] && ln -sfn "$HOME/.grok/bin/grok"    "$bin/grok"
+
     # python / pip → python3 / pip3 (Ubuntu 26.04 ships only the versioned names)
     local _py _pip
     _py=$(command -v python3 2>/dev/null)

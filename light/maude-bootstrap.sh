@@ -29,13 +29,25 @@ echo "Installing textual..."
 pip install --quiet --break-system-packages 'textual>=8.2.4,<9'
 
 # ── Source maude shell libraries ──────────────────────────────────────
+# Warn-and-continue like update_all: one transient fetch failure (or a
+# corporate proxy returning HTML) must not abort the whole bootstrap under
+# set -e. Content-validate before sourcing; keep a cached copy if present.
 mkdir -p "$HOME/.local/lib/maude"
-for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh; do
-    curl -fsSL "$GH_RAW/lib/$_lib" -o "$HOME/.local/lib/maude/$_lib"
-    # shellcheck source=/dev/null
-    . "$HOME/.local/lib/maude/$_lib"
+for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh; do
+    _lib_dst="$HOME/.local/lib/maude/$_lib"
+    if curl -fsSL "$GH_RAW/lib/$_lib" -o "$_lib_dst.tmp" 2>/dev/null \
+       && grep -q '^[a-z_]*()' "$_lib_dst.tmp"; then
+        mv "$_lib_dst.tmp" "$_lib_dst"
+    else
+        rm -f "$_lib_dst.tmp"
+        echo "WARNING: could not fetch lib/$_lib (kept cached copy if any)"
+    fi
+    if [[ -f "$_lib_dst" ]]; then
+        # shellcheck source=/dev/null
+        . "$_lib_dst" || echo "WARNING: failed to source $_lib"
+    fi
 done
-unset _lib
+unset _lib _lib_dst
 
 # ── Install Bun + kanna-code ──────────────────────────────────────────
 if ! command -v bun >/dev/null 2>&1; then
@@ -46,7 +58,7 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "Installing kanna-code..."
 bun install -g kanna-code
-ensure_tool_symlinks
+declare -F ensure_tool_symlinks >/dev/null && ensure_tool_symlinks
 echo "Tool symlinks updated in ~/.local/bin"
 
 # ── Symlink ~/.claude → ~/Maude/.claude (settings stored on host) ────
@@ -118,10 +130,27 @@ else
     echo "  WARNING: Gemini CLI/skill install had problems — continuing."
 fi
 
+# ── Install reviewer CLIs (Codex, OpenCode, Grok) + skills ───────────
+# Same warn-and-continue posture as Gemini: a reviewer failing to install
+# must never abort the bootstrap.
+for _tool in codex opencode grok; do
+    echo "Installing ${_tool} CLI + skill..."
+    if "update_${_tool}"; then
+        echo "  ${_tool} CLI + skill installed."
+    else
+        echo "  WARNING: ${_tool} install had problems — continuing."
+    fi
+done
+unset _tool
+
 # ── Claude Code: project instructions (MAUDE.md + CLAUDE.md template) ─
 # Uses refresh_claude_md() from refresh-md.sh, which validates the download
 # and populates the local cache for subsequent project opens.
-MAUDE_RAW="$GH_RAW" refresh_claude_md
+if declare -F refresh_claude_md >/dev/null; then
+    MAUDE_RAW="$GH_RAW" refresh_claude_md
+else
+    echo "WARNING: refresh-md.sh not loaded — MAUDE.md refresh skipped."
+fi
 echo "Claude Code: MAUDE.md installed."
 
 # ── Ensure key env vars are in ~/.bashrc ─────────────────────────────
