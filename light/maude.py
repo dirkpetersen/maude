@@ -3548,7 +3548,11 @@ class MaudeApp(App):
         table = self.query_one("#projects-table", DataTable)
         try:
             index = table.get_row_index(name)
-        except KeyError:
+        except Exception:
+            # DataTable raises its own RowDoesNotExist (a plain Exception,
+            # NOT a KeyError) when the row is missing — e.g. the project was
+            # deleted (by this session or another) while it was open in
+            # Claude. Best-effort cursor restore; just leave it unmoved.
             index = -1
         if index >= 0:
             table.move_cursor(row=index)
