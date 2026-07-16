@@ -279,35 +279,60 @@ update_all() {
     local ts rc=0
     ts=$(date +%s)
 
-    # Update the maude CLI first. Linux/bash keeps the running script's
-    # open inode valid across rename(2), so the current invocation finishes
-    # with the OLD content and the new code only takes effect next time.
-    echo -e "${BOLD}Updating the maude CLI...${NC}"
-    local self_path tmp_path
-    self_path=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$HOME/.local/bin/maude")
-    tmp_path="${self_path}.new.$$"
-    if curl -fsSL "${MAUDE_BIN_URL}?cache=${ts}" -o "$tmp_path"; then
-        # Sanity check: must look like a non-trivial bash script.
-        if head -n1 "$tmp_path" | grep -q '^#!/bin/bash' && [[ $(wc -c < "$tmp_path") -gt 1024 ]]; then
-            chmod +x "$tmp_path"
-            if mv "$tmp_path" "$self_path"; then
-                echo -e "${GREEN}  ✓ maude wrapper updated (effective on next 'maude' invocation)${NC}"
+    # Update the maude CLI first. Linux/bash keeps the running script's open
+    # inode valid across rename(2), so the current invocation can safely mv a
+    # new version over itself mid-run. Rather than stopping there and making
+    # the user run 'maude update' a second time to actually execute the new
+    # code, re-exec into the freshly written file immediately: same PID, same
+    # terminal, `update_all` picks up right where the old process left off,
+    # but running the NEW script — so one `maude update` fully converges.
+    # _MAUDE_UPDATE_STAGE2 guards against re-exec'ing more than once even if
+    # something odd happens downstream (e.g. a second update triggered mid-run).
+    if [[ "${_MAUDE_UPDATE_STAGE2:-0}" != "1" ]]; then
+        echo -e "${BOLD}Updating the maude CLI...${NC}"
+        local self_path tmp_path
+        self_path=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$HOME/.local/bin/maude")
+        tmp_path="${self_path}.new.$$"
+        if curl -fsSL "${MAUDE_BIN_URL}?cache=${ts}" -o "$tmp_path"; then
+            # Sanity check: must look like a non-trivial bash script.
+            if head -n1 "$tmp_path" | grep -q '^#!/bin/bash' && [[ $(wc -c < "$tmp_path") -gt 1024 ]]; then
+                chmod +x "$tmp_path"
+                if diff -q "$tmp_path" "$self_path" >/dev/null 2>&1; then
+                    # Already current — nothing to re-exec into.
+                    rm -f "$tmp_path"
+                    echo -e "${GREEN}  ✓ maude wrapper already up to date${NC}"
+                elif mv "$tmp_path" "$self_path"; then
+                    echo -e "${GREEN}  ✓ maude wrapper updated — continuing this update with the new version...${NC}"
+                    echo ""
+                    _MAUDE_UPDATE_STAGE2=1 exec "$self_path" update
+                    # Only reached if exec itself failed to launch the new
+                    # binary (e.g. permissions) — fall back to finishing this
+                    # run with the OLD code, same as before this change.
+                    echo -e "${YELLOW}  ✗ could not switch to the updated wrapper — finishing with the old version (run 'maude update' again to pick up the rest)${NC}"
+                    rc=1
+                else
+                    rm -f "$tmp_path"
+                    echo -e "${YELLOW}  ✗ could not replace $self_path${NC}"
+                    rc=1
+                fi
             else
                 rm -f "$tmp_path"
-                echo -e "${YELLOW}  ✗ could not replace $self_path${NC}"
+                echo -e "${YELLOW}  ✗ downloaded wrapper failed sanity check${NC}"
                 rc=1
             fi
         else
             rm -f "$tmp_path"
-            echo -e "${YELLOW}  ✗ downloaded wrapper failed sanity check${NC}"
+            echo -e "${YELLOW}  ✗ could not fetch maude wrapper${NC}"
             rc=1
         fi
+        echo ""
     else
-        rm -f "$tmp_path"
-        echo -e "${YELLOW}  ✗ could not fetch maude wrapper${NC}"
-        rc=1
+        echo -e "${CYAN}Continuing update with the newly downloaded maude wrapper...${NC}"
+        echo ""
     fi
-    echo ""
+    # Don't let this leak into child processes spawned below (claude update,
+    # npm, etc.) — it has done its job of preventing a repeat re-exec.
+    unset _MAUDE_UPDATE_STAGE2
 
     echo -e "${BOLD}Updating Claude Code...${NC}"
     if command -v claude >/dev/null 2>&1; then
