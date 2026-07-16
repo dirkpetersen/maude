@@ -38,7 +38,16 @@ update_codex() {
     local _bak_before
     _bak_before=$(ls "$HOME"/.bashrc.bak.* 2>/dev/null)
     local installed=0
-    if curl -fsSL --max-time 300 https://chatgpt.com/codex/install.sh | sh >/dev/null 2>&1; then
+    # CODEX_NON_INTERACTIVE=true is required: the installer opens /dev/tty
+    # directly to ask "Start Codex now?" / "Uninstall the existing ...
+    # Codex now?" whenever a controlling terminal is present — a redirect
+    # of THIS process's stdout/stderr does not touch /dev/tty, so without
+    # this the prompt blocks forever when run from an interactive shell
+    # (e.g. a real `maude update`), even though it looked fine when tested
+    # from a shell with no controlling tty. `timeout` is defense-in-depth:
+    # curl's --max-time only bounds the curl leg of the pipe, not `sh`.
+    if timeout 300 env CODEX_NON_INTERACTIVE=true \
+        sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' >/dev/null 2>&1; then
         installed=1
     elif command -v npm >/dev/null 2>&1 && npm install -g @openai/codex >/dev/null 2>&1; then
         installed=1
