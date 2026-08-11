@@ -527,6 +527,27 @@ update_all() {
     fi
     echo ""
 
+    echo -e "${BOLD}Refreshing the login welcome (welcome.sh)...${NC}"
+    local welcome_dst="$MAUDE_LIB_DIR/welcome.sh"
+    local welcome_tmp="$welcome_dst.new.$$"
+    mkdir -p "$MAUDE_LIB_DIR"
+    if curl -fsSL --max-time 10 "$GH_RAW/welcome.sh?cache=${ts}" -o "$welcome_tmp" \
+       && [[ -s "$welcome_tmp" ]] && grep -q 'MAUDE_WELCOMED' "$welcome_tmp"; then
+        mv "$welcome_tmp" "$welcome_dst"
+        echo -e "${GREEN}  ✓ welcome.sh refreshed${NC}"
+    else
+        rm -f "$welcome_tmp"
+        echo -e "${YELLOW}  ✗ welcome.sh download missing or invalid (kept existing copy)${NC}"
+        rc=1
+    fi
+    if [[ -f /etc/profile.d/maude-welcome.sh ]] \
+       && ! grep -q '\.local/lib/maude/welcome\.sh' /etc/profile.d/maude-welcome.sh 2>/dev/null; then
+        echo -e "${YELLOW}  Note: your login still uses the old welcome script; the refresh above won't${NC}"
+        echo -e "${YELLOW}  show until the one-time stub is installed as root. From Windows PowerShell:${NC}"
+        echo -e "${CYAN}    wsl -d Maude -u root -- bash -c 't=\$(mktemp); curl -fsSL --max-time 20 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/welcome-stub.sh -o \$t && grep -q .local/lib/maude/welcome.sh \$t && install -m 644 \$t /etc/profile.d/maude-welcome.sh; rm -f \$t'${NC}"
+    fi
+    echo ""
+
     # Ensure key env vars are in ~/.bashrc so they apply to every shell,
     # including cases where profile.d is not re-sourced on existing installs.
     echo -e "${BOLD}Checking shell environment exports...${NC}"

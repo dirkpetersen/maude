@@ -1,6 +1,7 @@
-# /etc/profile.d/maude-welcome.sh — installed by root-bootstrap.sh.
-# Sourced by login shells. Bootstraps keychain, then either auto-launches
-# the TUI or prints the static welcome banner.
+# User-owned welcome logic, installed to ~/.local/lib/maude/welcome.sh and
+# loaded by the thin /etc/profile.d/maude-welcome.sh stub. Refreshed by
+# 'maude update' -- sourced by login shells. Bootstraps keychain, then either
+# auto-launches the TUI or prints the static welcome banner.
 
 # ── Ensure DANGER-ZONE.txt is present on the shared mount ────────────
 if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then

@@ -152,7 +152,7 @@ The `light/` directory contains the WSL2 sandbox implementation:
 |--------|---------|---------|
 | `setup-wsl-maude.ps1` | Admin (PowerShell) | 7-step orchestrator: WSL, WT, host folder, template, import, bootstrap |
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
-| `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom-inst (.deb), PATH, welcome screen, Claude Code |
+| `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom-inst (.deb), PATH, welcome stub + user-owned welcome copy, Claude Code |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, reviewer CLIs (Gemini, Codex, OpenCode, Grok — see `docs/multi-cli-reviewers.md`), Claude Code config, yolo-mode marker |
 | `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`, `maude github`, `maude update`) |
 | `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`) |

@@ -220,15 +220,42 @@ install_profile_script() {
     if [[ -f "$local_src" ]]; then
         install -m 644 "$local_src" "$dest"
     else
-        curl -fsSL "$url" -o "$dest"
-        chmod 644 "$dest"
+        local _tmp; _tmp=$(mktemp)
+        if curl -fsSL --max-time 20 "$url" -o "$_tmp" && [[ -s "$_tmp" ]]; then
+            install -m 644 "$_tmp" "$dest"
+            rm -f "$_tmp"
+        else
+            rm -f "$_tmp"
+            echo "ERROR: could not fetch $url -> $dest" >&2
+            return 1
+        fi
     fi
     # /etc/profile.d/*.sh need to be sourceable; chmod +x is a Debian convention.
     chmod +x "$dest"
 }
 
-install_profile_script /tmp/maude-welcome.sh "$GH_RAW/welcome.sh"     /etc/profile.d/maude-welcome.sh
-install_profile_script /tmp/maude-shell.sh   "$GH_RAW/maude-shell.sh" /etc/profile.d/maude-shell.sh
+# Seed the user-owned welcome copy BEFORE installing the profile.d stub below.
+# The stub is sourced by every later `su - "$USERNAME"` login shell during
+# bootstrap; if it were installed first, its self-heal could fire (a wasted,
+# unverified fetch from `main`) before this seed ever runs.
+# Prefer the piped /tmp copy; fall back to GH_RAW, validated before use.
+su - "$USERNAME" -c 'mkdir -p "$HOME/.local/lib/maude"'
+if [[ -f /tmp/maude-welcome.sh ]]; then
+    install -m 644 -o "$USERNAME" -g "$USERNAME" \
+        /tmp/maude-welcome.sh "/home/$USERNAME/.local/lib/maude/welcome.sh"
+else
+    su - "$USERNAME" -c '
+        _t="$HOME/.local/lib/maude/welcome.sh.new.$$"
+        if curl -fsSL --max-time 20 "'"$GH_RAW"'/welcome.sh" -o "$_t" \
+           && [ -s "$_t" ] && grep -q MAUDE_WELCOMED "$_t"; then
+            mv "$_t" "$HOME/.local/lib/maude/welcome.sh"
+        else
+            rm -f "$_t"
+        fi' || true
+fi
+
+install_profile_script /tmp/maude-welcome-stub.sh "$GH_RAW/welcome-stub.sh" /etc/profile.d/maude-welcome.sh
+install_profile_script /tmp/maude-shell.sh        "$GH_RAW/maude-shell.sh"  /etc/profile.d/maude-shell.sh
 
 # Hook the profile.d scripts into both /etc/skel/.bashrc (future users)
 # and the active user's .bashrc (profile.d only auto-runs for login shells).
