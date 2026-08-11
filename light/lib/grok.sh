@@ -34,14 +34,35 @@ update_grok() {
     local ver_before ver_after
     _grok_resolve
     ver_before=$([[ -n "$grok_bin" ]] && "$grok_bin" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
-    # Snapshot the installer's ~/.bashrc backup files so we can remove only
-    # the ones this run creates (see the PATH-block strip below).
+    local installed=0
+    # Serialize the whole install+strip against update_codex — the only other
+    # ~/.bashrc writer. The vendor installer APPENDS its own PATH block, which
+    # we can't lock directly, so acquire the shared ~/.bashrc.lock BEFORE the
+    # installer and hold it through our strip + backup sweep. Both tools take
+    # this same advisory lock (fd 200) before their installer, so codex's and
+    # grok's installers never run concurrently and their appends/sed strips
+    # can never interleave on ~/.bashrc. Released after the install block below.
+    # (Lock order note: fd 200 here is always taken before the fd-9
+    # pkg-install lock in the npm fallback; nothing that holds fd 9 ever wants
+    # fd 200, so there is no deadlock cycle.)
+    exec 200>"$HOME/.bashrc.lock"
+    flock -w 1800 200 2>/dev/null \
+        || echo "WARNING: timed out waiting for ~/.bashrc.lock — proceeding without it; ~/.bashrc PATH edits may race with the other reviewer CLI." >&2
+    # Snapshot the installer's ~/.bashrc backup files INSIDE the lock, so a
+    # concurrent peer holding it can't create a bak between our snapshot and
+    # our sweep (which deletes any bak not in this snapshot) — that would wipe
+    # the peer's pre-damage backup of ~/.bashrc.
     local _bak_before
     _bak_before=$(ls "$HOME"/.bashrc.bak.* 2>/dev/null)
-    local installed=0
-    if curl -fsSL --max-time 300 https://x.ai/cli/install.sh | bash >/dev/null 2>&1; then
+    # `timeout 300` bounds the whole `curl | bash`, not just curl (--max-time
+    # only bounds curl's leg of the pipe). This matters more now that we hold
+    # the shared ~/.bashrc.lock across the installer: a hung install would
+    # otherwise pin the lock and block update_codex until its own timeout.
+    if timeout 300 bash -c 'curl -fsSL --max-time 300 https://x.ai/cli/install.sh | bash' >/dev/null 2>&1; then
         installed=1
-    elif command -v npm >/dev/null 2>&1 && npm install -g @xai-official/grok >/dev/null 2>&1; then
+    # flock serializes global package installs across the concurrent
+    # `maude update` jobs (npm's global prefix is shared).
+    elif command -v npm >/dev/null 2>&1 && ( flock -w 600 9 2>/dev/null || true; timeout 300 npm install -g @xai-official/grok >/dev/null 2>&1 ) 9>"$HOME/.maude-pkg-install.lock"; then
         installed=1
     fi
     if [[ $installed -eq 1 ]]; then
@@ -53,12 +74,17 @@ update_grok() {
         # Only strip when BOTH markers are present — with the end marker
         # missing (interrupted install), the sed range would eat everything
         # to EOF, including user content.
+        # 'maude update' can run this concurrently with update_codex (both
+        # edit ~/.bashrc) — the whole install+strip is serialized against
+        # codex via the function-level flock held above, so the two sed -i
+        # calls can't race and clobber each other's rename(2).
         if grep -q '^# >>> grok installer >>>$' "$HOME/.bashrc" 2>/dev/null \
            && grep -q '^# <<< grok installer <<<$' "$HOME/.bashrc" 2>/dev/null; then
             sed -i '/^# >>> grok installer >>>$/,/^# <<< grok installer <<<$/d' "$HOME/.bashrc" 2>/dev/null
         fi
-        # If any installer start-marker survives (vendor renamed its sentinel,
-        # or an interrupted append), PATH order may now be broken — say so.
+        # If any installer start-marker survives (vendor renamed its
+        # sentinel, or an interrupted append), PATH order may now be
+        # broken — say so.
         if grep -q 'installer >>>' "$HOME/.bashrc" 2>/dev/null; then
             echo "WARNING: an installer PATH block remains in ~/.bashrc — verify ~/bin stays first on PATH." >&2
         fi
@@ -91,6 +117,11 @@ update_grok() {
         cli_status="failed"
         rc=1
     fi
+
+    # Done touching ~/.bashrc — release the serialization lock so update_codex
+    # (or a later run) can proceed.
+    flock -u 200 2>/dev/null || true
+    exec 200>&- 2>/dev/null || true
 
     # ── Grok skill ──
     if declare -F maude_fetch_skill >/dev/null; then

@@ -33,11 +33,26 @@ update_codex() {
     local ver_before ver_after
     _codex_resolve
     ver_before=$([[ -n "$codex_bin" ]] && "$codex_bin" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
-    # Snapshot the installer's ~/.bashrc backup files so we can remove only
-    # the ones this run creates (see the PATH-block strip below).
+    local installed=0
+    # Serialize the whole install+strip against update_grok — the only other
+    # ~/.bashrc writer. The vendor installer APPENDS its own PATH block, which
+    # we can't lock directly, so acquire the shared ~/.bashrc.lock BEFORE the
+    # installer and hold it through our strip + backup sweep. Both tools take
+    # this same advisory lock (fd 200) before their installer, so codex's and
+    # grok's installers never run concurrently and their appends/sed strips
+    # can never interleave on ~/.bashrc. Released after the install block below.
+    # (Lock order note: fd 200 here is always taken before the fd-9
+    # pkg-install lock in the npm fallback; nothing that holds fd 9 ever wants
+    # fd 200, so there is no deadlock cycle.)
+    exec 200>"$HOME/.bashrc.lock"
+    flock -w 1800 200 2>/dev/null \
+        || echo "WARNING: timed out waiting for ~/.bashrc.lock — proceeding without it; ~/.bashrc PATH edits may race with the other reviewer CLI." >&2
+    # Snapshot the installer's ~/.bashrc backup files INSIDE the lock, so a
+    # concurrent peer holding it can't create a bak between our snapshot and
+    # our sweep (which deletes any bak not in this snapshot) — that would wipe
+    # the peer's pre-damage backup of ~/.bashrc.
     local _bak_before
     _bak_before=$(ls "$HOME"/.bashrc.bak.* 2>/dev/null)
-    local installed=0
     # CODEX_NON_INTERACTIVE=true is required: the installer opens /dev/tty
     # directly to ask "Start Codex now?" / "Uninstall the existing ...
     # Codex now?" whenever a controlling terminal is present — a redirect
@@ -49,7 +64,9 @@ update_codex() {
     if timeout 300 env CODEX_NON_INTERACTIVE=true \
         sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' >/dev/null 2>&1; then
         installed=1
-    elif command -v npm >/dev/null 2>&1 && npm install -g @openai/codex >/dev/null 2>&1; then
+    # flock serializes global package installs across the concurrent
+    # `maude update` jobs (npm's global prefix is shared).
+    elif command -v npm >/dev/null 2>&1 && ( flock -w 600 9 2>/dev/null || true; timeout 300 npm install -g @openai/codex >/dev/null 2>&1 ) 9>"$HOME/.maude-pkg-install.lock"; then
         installed=1
     fi
     if [[ $installed -eq 1 ]]; then
@@ -61,12 +78,17 @@ update_codex() {
         # Only strip when BOTH markers are present — with the end marker
         # missing (interrupted install), the sed range would eat everything
         # to EOF, including user content.
+        # 'maude update' can run this concurrently with update_grok (both
+        # edit ~/.bashrc) — the whole install+strip is serialized against
+        # grok via the function-level flock held above, so the two sed -i
+        # calls can't race and clobber each other's rename(2).
         if grep -q '^# >>> Codex installer >>>$' "$HOME/.bashrc" 2>/dev/null \
            && grep -q '^# <<< Codex installer <<<$' "$HOME/.bashrc" 2>/dev/null; then
             sed -i '/^# >>> Codex installer >>>$/,/^# <<< Codex installer <<<$/d' "$HOME/.bashrc" 2>/dev/null
         fi
-        # If any installer start-marker survives (vendor renamed its sentinel,
-        # or an interrupted append), PATH order may now be broken — say so.
+        # If any installer start-marker survives (vendor renamed its
+        # sentinel, or an interrupted append), PATH order may now be
+        # broken — say so.
         if grep -q 'installer >>>' "$HOME/.bashrc" 2>/dev/null; then
             echo "WARNING: an installer PATH block remains in ~/.bashrc — verify ~/bin stays first on PATH." >&2
         fi
@@ -104,6 +126,11 @@ update_codex() {
         cli_status="failed"
         rc=1
     fi
+
+    # Done touching ~/.bashrc — release the serialization lock so update_grok
+    # (or a later run) can proceed.
+    flock -u 200 2>/dev/null || true
+    exec 200>&- 2>/dev/null || true
 
     # ── Codex skill (our own SKILL.md, fetched from the repo root) ──
     if declare -F maude_fetch_skill >/dev/null; then

@@ -334,46 +334,115 @@ update_all() {
     # npm, etc.) — it has done its job of preventing a repeat re-exec.
     unset _MAUDE_UPDATE_STAGE2
 
-    echo -e "${BOLD}Updating Claude Code...${NC}"
-    if command -v claude >/dev/null 2>&1; then
-        claude update || { echo -e "${YELLOW}  Claude Code update failed${NC}"; rc=1; }
-    else
-        echo -e "${YELLOW}  claude is not installed; skipping${NC}"
-        rc=1
-    fi
+    # ── Kick off independent, network-bound updates in parallel ─────────
+    # Each job writes to its own capture file, but two resources are shared
+    # and guarded by locks in the libs: (1) ~/.bashrc — codex.sh and grok.sh
+    # both run a vendor installer that appends a PATH block and then strip it
+    # back out, so they serialize their whole install+strip on ~/.bashrc.lock
+    # (fd 200); (2) the bun/npm global package store — kanna, gemini, opencode
+    # and the codex/grok npm fallbacks serialize their installs on
+    # ~/.maude-pkg-install.lock (fd 9). Deliberately NOT parallelized:
+    # mom upgrade -y (the Ubuntu package manager step, further below) —
+    # apt/dpkg operations don't compose safely with concurrent runs and always
+    # run solo.
+    declare -A JPID=() JRC=() JOUT=() JERR=()
+    local _eline
+    # Per-job stdout/stderr capture files. Cleaned up with `rm -f` at the
+    # single return below — no temp directory (so nothing here can become a
+    # recursive delete) and no RETURN trap (bash fires RETURN on every
+    # `.`/source too, which would wipe these mid-run).
+    _alloc_job() {
+        # Fall back to a deterministic path if mktemp fails (e.g. /tmp full) so
+        # the job's redirect never becomes `> ""` — that would misattribute the
+        # mktemp failure to the component being updated.
+        JOUT[$1]=$(mktemp "${TMPDIR:-/tmp}/maude-update.XXXXXX" 2>/dev/null) \
+            || JOUT[$1]="${TMPDIR:-/tmp}/maude-update.$$.$1.out"
+        JERR[$1]=$(mktemp "${TMPDIR:-/tmp}/maude-update.XXXXXX" 2>/dev/null) \
+            || JERR[$1]="${TMPDIR:-/tmp}/maude-update.$$.$1.err"
+    }
+
+    echo -e "${BOLD}Starting parallel updates (Claude Code, statusline, maude TUI, kanna, libraries)...${NC}"
     echo ""
 
-    echo -e "${BOLD}Refreshing statusline.sh...${NC}"
-    local statusline="$HOME/.claude/statusline.sh"
-    local statusline_tmp; statusline_tmp=$(mktemp)
-    if curl -fsSL --max-time 10 "$GH_RAW/statusline.sh?cache=${ts}" -o "$statusline_tmp" \
-       && head -n1 "$statusline_tmp" | grep -q '^#!/bin/bash' \
-       && grep -q 'context_window' "$statusline_tmp"; then
-        chmod +x "$statusline_tmp"
-        mv "$statusline_tmp" "$statusline"
-        echo -e "${GREEN}  ✓ statusline.sh updated${NC}"
-    else
-        rm -f "$statusline_tmp"
-        echo -e "${YELLOW}  ✗ statusline download missing or invalid (kept existing copy)${NC}"
-        rc=1
-    fi
-    echo ""
+    _alloc_job claude
+    ( if command -v claude >/dev/null 2>&1; then
+          claude update
+      else
+          echo "claude is not installed; skipping"
+          exit 1
+      fi
+    ) > "${JOUT[claude]}" 2>&1 &
+    JPID[claude]=$!
 
-    echo -e "${BOLD}Refreshing maude libraries (ensure-tools, refresh-md, update-skills, reviewers)...${NC}"
+    _alloc_job statusline
+    ( statusline="$HOME/.claude/statusline.sh"
+      statusline_tmp=$(mktemp)
+      if curl -fsSL --max-time 10 "$GH_RAW/statusline.sh?cache=${ts}" -o "$statusline_tmp" \
+         && head -n1 "$statusline_tmp" | grep -q '^#!/bin/bash' \
+         && grep -q 'context_window' "$statusline_tmp"; then
+          chmod +x "$statusline_tmp"
+          mv "$statusline_tmp" "$statusline"
+      else
+          rm -f "$statusline_tmp"
+          echo "statusline download missing or invalid (kept existing copy)"
+          exit 1
+      fi
+    ) > "${JOUT[statusline]}" 2>&1 &
+    JPID[statusline]=$!
+
+    _alloc_job maudepy
+    ( mkdir -p "$(dirname "$MAUDE_PY")"
+      if curl -fsSL "${MAUDE_PY_URL}?cache=${ts}" -o "$MAUDE_PY"; then
+          # Mark today's daily-update stamp so maude.py's own self-update
+          # doesn't re-fetch on the next launch.
+          date +%Y-%m-%d > "$HOME/.maude-tui-last-update"
+          # Purge stale bytecache so Python executes the new source immediately.
+          rm -rf "$(dirname "$MAUDE_PY")/__pycache__"
+      else
+          echo "could not fetch maude.py"
+          exit 1
+      fi
+    ) > "${JOUT[maudepy]}" 2>&1 &
+    JPID[maudepy]=$!
+
+    _alloc_job kanna
+    ( if command -v bun >/dev/null 2>&1; then
+          # flock serializes global package installs across the concurrent
+          # `maude update` jobs (bun/npm share a global store).
+          ( flock -w 600 9 2>/dev/null || true; bun install -g kanna-code ) 9>"$HOME/.maude-pkg-install.lock"
+      else
+          echo "bun is not installed; skipping kanna update"
+          exit 1
+      fi
+    ) > "${JOUT[kanna]}" 2>&1 &
+    JPID[kanna]=$!
+
     mkdir -p "$MAUDE_LIB_DIR"
-    local lib_rc=0
-    for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh; do
-        local lib_tmp; lib_tmp=$(mktemp)
-        if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
-           && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
-            mv "$lib_tmp" "$MAUDE_LIB_DIR/$lib"
-        else
-            rm -f "$lib_tmp"
-            echo -e "${YELLOW}  ✗ could not fetch $lib (kept cached copy)${NC}"
-            lib_rc=1
-        fi
-    done
-    # Re-source the freshly-downloaded copies.
+    _alloc_job libs
+    ( lib_rc=0
+      for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh; do
+          lib_tmp=$(mktemp)
+          if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
+             && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
+              mv "$lib_tmp" "$MAUDE_LIB_DIR/$lib"
+          else
+              rm -f "$lib_tmp"
+              echo "could not fetch $lib (kept cached copy)"
+              lib_rc=1
+          fi
+      done
+      exit $lib_rc
+    ) > "${JOUT[libs]}" 2>&1 &
+    JPID[libs]=$!
+
+    # The reviewer-CLI jobs below need update_gemini/update_codex/etc, which
+    # live in the libs just fetched — wait for that ONE job. The other jobs
+    # started above keep running in the background regardless.
+    wait "${JPID[libs]}"; JRC[libs]=$?
+
+    # Re-source the freshly-downloaded copies (or the prior cached ones, if
+    # the fetch above failed) so this shell — and the jobs about to launch —
+    # see the latest functions.
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/ensure-tools.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
@@ -391,24 +460,69 @@ update_all() {
     . "$MAUDE_LIB_DIR/opencode.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/grok.sh" 2>/dev/null || true
-    if [[ $lib_rc -eq 0 ]]; then
+
+    if declare -F update_skills >/dev/null; then
+        _alloc_job skills
+        ( update_skills ) > "${JOUT[skills]}" 2> "${JERR[skills]}" &
+        JPID[skills]=$!
+    fi
+    if declare -F update_gemini >/dev/null; then
+        _alloc_job gemini
+        ( update_gemini ) > "${JOUT[gemini]}" 2> "${JERR[gemini]}" &
+        JPID[gemini]=$!
+    fi
+    local _rtool
+    for _rtool in codex opencode grok; do
+        if declare -F "update_${_rtool}" >/dev/null; then
+            _alloc_job "$_rtool"
+            ( "update_${_rtool}" ) > "${JOUT[$_rtool]}" 2> "${JERR[$_rtool]}" &
+            JPID[$_rtool]=$!
+        fi
+    done
+    unset _rtool
+
+    local _jname
+    for _jname in "${!JPID[@]}"; do
+        [[ -n "${JRC[$_jname]+x}" ]] && continue   # libs already waited on above
+        wait "${JPID[$_jname]}"; JRC[$_jname]=$?
+    done
+    unset _jname
+
+    # ── Print results, in the same order the old sequential run used ────
+    echo -e "${BOLD}Updating Claude Code...${NC}"
+    if [[ "${JRC[claude]:-1}" -eq 0 ]]; then
+        cat "${JOUT[claude]}"
+    else
+        echo -e "${YELLOW}  Claude Code update failed${NC}"
+        [[ -s "${JOUT[claude]}" ]] && cat "${JOUT[claude]}"
+        rc=1
+    fi
+    echo ""
+
+    echo -e "${BOLD}Refreshing statusline.sh...${NC}"
+    if [[ "${JRC[statusline]:-1}" -eq 0 ]]; then
+        echo -e "${GREEN}  ✓ statusline.sh updated${NC}"
+    else
+        echo -e "${YELLOW}  ✗ $(cat "${JOUT[statusline]}")${NC}"
+        rc=1
+    fi
+    echo ""
+
+    echo -e "${BOLD}Refreshing maude libraries (ensure-tools, refresh-md, update-skills, reviewers)...${NC}"
+    if [[ "${JRC[libs]:-1}" -eq 0 ]]; then
         echo -e "${GREEN}  ✓ libraries refreshed${NC}"
     else
+        local _l
+        while IFS= read -r _l; do [[ -n "$_l" ]] && echo -e "${YELLOW}  ✗ $_l${NC}"; done < "${JOUT[libs]}"
         rc=1
     fi
     echo ""
 
     echo -e "${BOLD}Updating the Maude TUI (maude.py)...${NC}"
-    mkdir -p "$(dirname "$MAUDE_PY")"
-    if curl -fsSL "${MAUDE_PY_URL}?cache=${ts}" -o "$MAUDE_PY"; then
-        # Mark today's daily-update stamp so maude.py's own self-update doesn't
-        # re-fetch on the next launch.
-        date +%Y-%m-%d > "$HOME/.maude-tui-last-update"
-        # Purge stale bytecache so Python executes the new source immediately.
-        rm -rf "$(dirname "$MAUDE_PY")/__pycache__"
+    if [[ "${JRC[maudepy]:-1}" -eq 0 ]]; then
         echo -e "${GREEN}  ✓ maude.py refreshed${NC}"
     else
-        echo -e "${YELLOW}  ✗ could not fetch maude.py${NC}"
+        echo -e "${YELLOW}  ✗ $(cat "${JOUT[maudepy]}")${NC}"
         rc=1
     fi
     echo ""
@@ -484,33 +598,33 @@ update_all() {
     echo ""
 
     echo -e "${BOLD}Updating kanna-code...${NC}"
-    if command -v bun >/dev/null 2>&1; then
-        if bun install -g kanna-code; then
-            echo -e "${GREEN}  ✓ kanna updated${NC}"
-        else
-            echo -e "${YELLOW}  ✗ kanna update failed${NC}"
-            rc=1
-        fi
+    if [[ "${JRC[kanna]:-1}" -eq 0 ]]; then
+        echo -e "${GREEN}  ✓ kanna updated${NC}"
     else
-        echo -e "${YELLOW}  bun is not installed; skipping kanna update${NC}"
+        echo -e "${YELLOW}  ✗ kanna update failed${NC}"
+        [[ -s "${JOUT[kanna]}" ]] && cat "${JOUT[kanna]}"
         rc=1
     fi
+    echo ""
 
     echo -e "${BOLD}Updating Gemini CLI + skill...${NC}"
-    if declare -F update_gemini >/dev/null; then
+    if [[ -n "${JPID[gemini]:-}" ]]; then
         local gemini_out cli_line skill_line
-        gemini_out=$(update_gemini)
-        if [[ $? -eq 0 ]]; then
-            cli_line=$(grep '^cli:'   <<< "$gemini_out" | cut -d: -f2-)
-            skill_line=$(grep '^skill:' <<< "$gemini_out" | cut -d: -f2-)
+        gemini_out=$(cat "${JOUT[gemini]}")
+        cli_line=$(grep '^cli:'   <<< "$gemini_out" | cut -d: -f2-)
+        skill_line=$(grep '^skill:' <<< "$gemini_out" | cut -d: -f2-)
+        if [[ "${JRC[gemini]:-1}" -eq 0 ]]; then
             echo -e "${GREEN}  ✓ CLI:   ${cli_line}${NC}"
             echo -e "${GREEN}  ✓ skill: ${skill_line}${NC}"
         else
-            cli_line=$(grep '^cli:'   <<< "$gemini_out" | cut -d: -f2-)
-            skill_line=$(grep '^skill:' <<< "$gemini_out" | cut -d: -f2-)
             [[ -n "$cli_line"   ]] && echo -e "${YELLOW}  CLI:   ${cli_line}${NC}"
             [[ -n "$skill_line" ]] && echo -e "${YELLOW}  skill: ${skill_line}${NC}"
             rc=1
+        fi
+        if [[ -s "${JERR[gemini]}" ]]; then
+            while IFS= read -r _eline; do
+                [[ -n "$_eline" ]] && echo -e "${YELLOW}  ! ${_eline}${NC}"
+            done < "${JERR[gemini]}"
         fi
     else
         echo -e "${YELLOW}  gemini.sh library not loaded — skipping${NC}"
@@ -520,27 +634,33 @@ update_all() {
 
     # Reviewer CLIs — right below Gemini, same status-line protocol
     # (cli:/skill:/config: lines printed by each update_<tool> function).
-    local _rtool _rout _rrc _rline
+    # These already ran (in parallel with everything above) — this loop
+    # only reads back the captured output.
+    local _rtool _rline
     for _rtool in codex opencode grok; do
         echo -e "${BOLD}Updating ${_rtool} CLI + skill...${NC}"
-        if declare -F "update_${_rtool}" >/dev/null; then
-            _rout=$("update_${_rtool}")
-            _rrc=$?
+        if [[ -n "${JPID[$_rtool]:-}" ]]; then
             while IFS= read -r _rline; do
                 [[ -z "$_rline" ]] && continue
-                if [[ $_rrc -eq 0 ]]; then
+                if [[ "${JRC[$_rtool]:-1}" -eq 0 ]]; then
                     echo -e "${GREEN}  ✓ ${_rline}${NC}"
                 else
                     echo -e "${YELLOW}  ${_rline}${NC}"
                 fi
-            done <<< "$_rout"
-            [[ $_rrc -ne 0 ]] && rc=1
+            done < "${JOUT[$_rtool]}"
+            if [[ -s "${JERR[$_rtool]}" ]]; then
+                while IFS= read -r _eline; do
+                    [[ -n "$_eline" ]] && echo -e "${YELLOW}  ! ${_eline}${NC}"
+                done < "${JERR[$_rtool]}"
+            fi
+            [[ "${JRC[$_rtool]:-1}" -ne 0 ]] && rc=1
         else
             echo -e "${YELLOW}  ${_rtool}.sh library not loaded — skipping${NC}"
             rc=1
         fi
         echo ""
     done
+    unset _rtool
 
     echo -e "${BOLD}Refreshing tool symlinks (bun, kanna, node, npm, npx, python, pip)...${NC}"
     ensure_tool_symlinks
@@ -602,13 +722,18 @@ update_all() {
     echo ""
 
     echo -e "${BOLD}Updating Anthropic skills...${NC}"
-    if declare -F update_skills >/dev/null; then
-        local count
-        if count=$(update_skills); then
-            echo -e "${GREEN}  ✓ $count skills updated${NC}"
+    if [[ -n "${JPID[skills]:-}" ]]; then
+        if [[ "${JRC[skills]:-1}" -eq 0 ]]; then
+            local count; count=$(cat "${JOUT[skills]}")
+            echo -e "${GREEN}  ✓ ${count:-0} skills updated${NC}"
         else
             echo -e "${YELLOW}  ✗ could not clone skills repo — skipping${NC}"
             rc=1
+        fi
+        if [[ -s "${JERR[skills]}" ]]; then
+            while IFS= read -r _eline; do
+                [[ -n "$_eline" ]] && echo -e "${YELLOW}  ! ${_eline}${NC}"
+            done < "${JERR[skills]}"
         fi
     else
         echo -e "${YELLOW}  update-skills.sh library not loaded — skipping${NC}"
@@ -649,6 +774,10 @@ update_all() {
     else
         echo -e "${YELLOW}Updates finished with one or more skipped/failed steps.${NC}"
     fi
+
+    # Clean up the per-job capture files (individual files, never a dir).
+    [[ ${#JOUT[@]} -gt 0 ]] && rm -f "${JOUT[@]}"
+    [[ ${#JERR[@]} -gt 0 ]] && rm -f "${JERR[@]}"
     return $rc
 }
 

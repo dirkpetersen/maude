@@ -22,7 +22,9 @@ update_opencode() {
         local oc_bin="${BUN_INSTALL:-$HOME/.bun}/bin/opencode"
         local ver_before ver_after
         ver_before=$([[ -x "$oc_bin" ]] && "$oc_bin" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
-        if bun install -g opencode-ai >/dev/null 2>&1; then
+        # flock serializes global package installs across the concurrent
+        # `maude update` jobs (bun's global store is shared).
+        if ( flock -w 600 9 2>/dev/null || true; bun install -g opencode-ai >/dev/null 2>&1 ) 9>"$HOME/.maude-pkg-install.lock"; then
             if [[ -x "$oc_bin" ]]; then
                 mkdir -p "$HOME/.local/bin"
                 ln -sfn "$oc_bin" "$HOME/.local/bin/opencode"

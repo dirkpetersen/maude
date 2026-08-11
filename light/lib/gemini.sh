@@ -18,7 +18,9 @@ update_gemini() {
     if command -v bun >/dev/null 2>&1; then
         local ver_before ver_after
         ver_before=$(gemini --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
-        if bun install -g @google/gemini-cli >/dev/null 2>&1; then
+        # flock serializes global package installs across the concurrent
+        # `maude update` jobs (bun's global store is shared).
+        if ( flock -w 600 9 2>/dev/null || true; bun install -g @google/gemini-cli >/dev/null 2>&1 ) 9>"$HOME/.maude-pkg-install.lock"; then
             # Symlink into ~/.local/bin: child processes (Claude Code's Bash
             # tool) don't get Bun's PATH injection, the same reason kanna is
             # linked in ensure-tools.sh.
