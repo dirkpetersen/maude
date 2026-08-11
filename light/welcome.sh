@@ -31,7 +31,7 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]] && command -v keychain >/dev/null 2>
             printf '  %s%s%s\n' "$D" "--------------------------------------------" "$N"
             printf '  Enter the passphrase you set in %smaude github%s\n' "$C" "$N"
             printf '  to load %s%s%s into ssh-agent for this session.\n' "$B" "$_maude_key" "$N"
-            printf '  %s(Press Enter on a blank line to skip — you can unlock later from the TUI.)%s\n' "$D" "$N"
+            printf '  %s(Press Enter on a blank line to skip -- you can unlock later from the TUI.)%s\n' "$D" "$N"
             printf '\n'
             eval "$(keychain --quiet --eval --agents ssh "$_maude_key")" 2>/dev/null || true
         fi
