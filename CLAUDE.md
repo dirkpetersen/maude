@@ -4,6 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **Active implementation**: `light/` — Maude Light (Windows WSL2 only). This is the only production-ready target today; start here for any user-facing work. The full-appliance code (`scripts/`, `Dockerfile`, `packer/`) is the foundation for the long-term roadmap: macOS support, Linux VM-hosted sandboxes, and Proxmox appliances — but those targets are not yet production. See [`light/CLAUDE.md`](light/CLAUDE.md) for self-contained guidance when working inside `light/`.
 
+## Development Workflow: Agent Delegation (HIGH PRIORITY — standing instruction)
+
+**All code and documentation in this repository must be written by background Sonnet agents and all code changes must be reviewed by a background Fable agent.** This applies every session, not just when the user restates it — including when the orchestrating/main-loop session is itself already running Sonnet.
+
+- **Authoring**: For any non-trivial code or doc change (new/edited `.sh`, `.py`, `.ps1`, `.md`, workflow YAML, etc.), delegate the actual writing to a background agent pinned to Sonnet: `Agent({ description: ..., prompt: <full context — files, line numbers, what to change and why>, model: "sonnet", run_in_background: true })`. Brief it like a colleague with no context on the conversation (per the Agent tool's own guidance) — don't just say "fix the bug," give it the file paths, the root cause, and the specific change.
+- **Reviewing**: Before any code change (not docs-only) is presented as complete or committed, run it through a separate background agent pinned to Fable for review: `Agent({ description: ..., prompt: <diff or files to review, what to check for>, model: "fable", run_in_background: true })`. The review agent must be a distinct spawn from the authoring agent — an agent must never review its own work — and should look for correctness bugs, security issues, and unrequested scope creep, not just style.
+- Do not skip the Fable review step to save time, especially on anything user-facing or production-bound (`light/`). This is the point of the policy, not an optional nicety.
+- Use foreground-vs-background judgment as usual: prefer backgrounding both authoring and review agents unless the very next step in the conversation genuinely depends on the result.
+- Judgment calls that don't need this ceremony: trivial one-line/config edits, answering questions, pure research/investigation with no code output. When in doubt on a real code or doc change, delegate.
+
 ## Project Overview
 
 **maude** -- A ready-to-run sandbox appliance for agentic coding, deployable as a VM (VMware/KVM), WSL image, Proxmox appliance, or Docker container. It integrates three upstream projects to create a multi-user Ubuntu environment where users get browser-based terminal access and can rapidly deploy web apps.
