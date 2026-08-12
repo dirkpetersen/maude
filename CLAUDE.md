@@ -15,6 +15,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Use foreground-vs-background judgment as usual: prefer backgrounding both authoring and review agents unless the very next step in the conversation genuinely depends on the result.
 - Judgment calls that don't need this ceremony: trivial one-line/config edits, answering questions, pure research/investigation with no code output. When in doubt on a real code or doc change, delegate.
 
+### Test/scratch code safety (HARD RULE — never violate)
+
+**Never write test, scratch, or verification code that runs `rm -rf "$HOME"`, or `rm -rf` on any variable that can expand to a home or other critical path** — including a `HOME` that has been reassigned to a temp dir (e.g. `export HOME=/tmp/x; rm -rf "$HOME"`). The safety guard evaluates the *variable*, sees `$HOME`/critical paths, and blocks the user with a permission prompt. That is unacceptable and must never happen.
+
+- To make a scratch/fake-HOME dir: `d=$(mktemp -d)` and delete it with **`rm -rf "$d"`** — the literal `mktemp` path, never via `$HOME`.
+- When a test needs a fake home, set `HOME="$d"` for the test *scope* (subshell/env prefix), but the cleanup must target `"$d"`, never `"$HOME"`.
+- Prefer scoping with an env prefix that doesn't reassign the outer shell's HOME: `( HOME="$d"; ...tests... )` then `rm -rf "$d"`.
+- This applies to **every subagent too** — include this constraint verbatim in any authoring/review brief where the agent may write or run test harnesses. Review agents in particular tend to write sandbox-HOME harnesses; tell them explicitly to `rm -rf` only a `mktemp` path.
+- Same principle for any destructive command (`rm -rf`, `find -delete`, `git clean -fdx`, `chmod -R`): target an explicit `mktemp` path, never a variable that could be a real user path.
+
 ## Project Overview
 
 **maude** -- A ready-to-run sandbox appliance for agentic coding, deployable as a VM (VMware/KVM), WSL image, Proxmox appliance, or Docker container. It integrates three upstream projects to create a multi-user Ubuntu environment where users get browser-based terminal access and can rapidly deploy web apps.
