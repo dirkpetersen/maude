@@ -338,6 +338,82 @@ update_all() {
     # npm, etc.) — it has done its job of preventing a repeat re-exec.
     unset _MAUDE_UPDATE_STAGE2
 
+    # ── Migrate the claude wrapper to ~/bin/claude-wrapper.sh ────────────
+    # Older sandboxes installed it under ~/.local/bin, which breaks the
+    # wrapper's own self-update (it writes to ~/bin/claude-wrapper.sh — a path
+    # ~/bin/claude did not point to). Relocate + relink so self-update works,
+    # validating any file before trusting it so a truncated/partial wrapper
+    # can never replace a working one.
+    echo -e "${BOLD}Checking claude wrapper location...${NC}"
+    local _oldw="$HOME/.local/bin/claude-wrapper.sh"
+    local _neww="$HOME/bin/claude-wrapper.sh"
+    local _wrapper_url="https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/claude-wrapper.sh"
+    # A real wrapper is a ~40KB bash script; guard against empty/truncated files.
+    _wrapper_valid() {
+        [[ -s "$1" ]] || return 1
+        head -n1 "$1" 2>/dev/null | grep -q '^#!' || return 1
+        [[ $(wc -c < "$1" 2>/dev/null || echo 0) -gt 1024 ]]
+    }
+    mkdir -p "$HOME/bin"
+    if [[ -f "$_oldw" ]]; then
+        if [[ ! -e "$_neww" ]]; then
+            # Only the old copy exists (the running wrapper — known good): move it.
+            if mv "$_oldw" "$_neww"; then
+                chmod +x "$_neww" 2>/dev/null
+                ln -sfn claude-wrapper.sh "$HOME/bin/claude"
+                echo -e "${GREEN}  ✓ moved wrapper to ~/bin/claude-wrapper.sh and relinked ~/bin/claude${NC}"
+            else
+                echo -e "${YELLOW}  ✗ could not move wrapper to ~/bin (left as-is)${NC}"
+                rc=1
+            fi
+        elif _wrapper_valid "$_neww"; then
+            # Both present and the correct-path copy is valid: prefer it.
+            chmod +x "$_neww" 2>/dev/null
+            ln -sfn claude-wrapper.sh "$HOME/bin/claude"
+            rm -f "$_oldw"
+            echo -e "${GREEN}  ✓ relinked ~/bin/claude to ~/bin/claude-wrapper.sh; removed stale ~/.local/bin copy${NC}"
+        else
+            # Correct-path copy is invalid/truncated: the old copy wins.
+            if mv -f "$_oldw" "$_neww"; then
+                chmod +x "$_neww" 2>/dev/null
+                ln -sfn claude-wrapper.sh "$HOME/bin/claude"
+                echo -e "${GREEN}  ✓ replaced an invalid ~/bin/claude-wrapper.sh with the working copy and relinked${NC}"
+            else
+                echo -e "${YELLOW}  ✗ could not repair ~/bin/claude-wrapper.sh${NC}"
+                rc=1
+            fi
+        fi
+    fi
+    # Self-heal: if there's still no valid wrapper at the correct path (e.g. no
+    # old copy AND a dangling ~/bin/claude or a partial ~/bin/claude-wrapper.sh),
+    # re-fetch a fresh one. Best-effort — the wrapper also self-updates.
+    if ! _wrapper_valid "$_neww"; then
+        local _wt; _wt=$(mktemp)
+        if curl -fsSL --max-time 20 "${_wrapper_url}?cache=${ts}" -o "$_wt" && _wrapper_valid "$_wt"; then
+            if mv "$_wt" "$_neww"; then
+                chmod +x "$_neww" 2>/dev/null
+                ln -sfn claude-wrapper.sh "$HOME/bin/claude"
+                echo -e "${GREEN}  ✓ installed a fresh claude wrapper at ~/bin/claude-wrapper.sh${NC}"
+            else
+                rm -f "$_wt"
+                echo -e "${YELLOW}  ✗ could not install the fresh claude wrapper${NC}"
+                rc=1
+            fi
+        else
+            rm -f "$_wt"
+            echo -e "${YELLOW}  ✗ no valid claude wrapper present and re-fetch failed (kept existing)${NC}"
+            rc=1
+        fi
+    elif [[ ! -f "$_oldw" ]]; then
+        # $_neww is valid, but the ~/bin/claude symlink could still be dangling
+        # or wrong (e.g. a prior migration killed between the mv and the ln) —
+        # ensure it points at the wrapper before reporting OK.
+        [[ "$(readlink "$HOME/bin/claude" 2>/dev/null)" == "claude-wrapper.sh" ]] \
+            || ln -sfn claude-wrapper.sh "$HOME/bin/claude"
+        echo -e "${GREEN}  ✓ claude wrapper location OK${NC}"
+    fi
+    echo ""
+
     # ── Kick off independent, network-bound updates in parallel ─────────
     # Each job writes to its own capture file, but two resources are shared
     # and guarded by locks in the libs: (1) ~/.bashrc — codex.sh and grok.sh

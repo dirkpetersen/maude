@@ -274,9 +274,13 @@ done
 echo "Installing Claude Code..."
 su - "$USERNAME" -c '
     mkdir -p "$HOME/.local/bin" "$HOME/bin"
+    # Install the wrapper where its own self-update expects it
+    # ($HOME/bin/claude-wrapper.sh); installing under ~/.local/bin instead
+    # breaks the wrapper self-update (it writes to ~/bin/claude-wrapper.sh, a
+    # path the ~/bin/claude symlink would not point to).
     curl -fsSL https://raw.githubusercontent.com/dirkpetersen/dok/main/scripts/claude-wrapper.sh \
-        -o "$HOME/.local/bin/claude-wrapper.sh" && chmod +x "$HOME/.local/bin/claude-wrapper.sh" \
-        && ln -sfn "$HOME/.local/bin/claude-wrapper.sh" "$HOME/bin/claude" \
+        -o "$HOME/bin/claude-wrapper.sh" && chmod +x "$HOME/bin/claude-wrapper.sh" \
+        && ln -sfn claude-wrapper.sh "$HOME/bin/claude" \
         && echo "claude-wrapper installed" || \
     { curl -fsSL https://claude.ai/install.sh | bash -s latest; }
 '
