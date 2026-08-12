@@ -33,7 +33,7 @@ pip install --quiet --break-system-packages 'textual>=8.2.4,<9'
 # corporate proxy returning HTML) must not abort the whole bootstrap under
 # set -e. Content-validate before sourcing; keep a cached copy if present.
 mkdir -p "$HOME/.local/lib/maude"
-for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh; do
+for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh kanna.sh; do
     _lib_dst="$HOME/.local/lib/maude/$_lib"
     if curl -fsSL "$GH_RAW/lib/$_lib" -o "$_lib_dst.tmp" 2>/dev/null \
        && grep -q '^[a-z_]*()' "$_lib_dst.tmp"; then
@@ -57,7 +57,8 @@ if ! command -v bun >/dev/null 2>&1; then
     export PATH="$BUN_INSTALL/bin:$PATH"
 fi
 echo "Installing kanna-code..."
-bun install -g kanna-code
+# pinned: keep in sync with light/maude KANNA_PKG
+bun install -g kanna-code@0.63.0
 declare -F ensure_tool_symlinks >/dev/null && ensure_tool_symlinks
 echo "Tool symlinks updated in ~/.local/bin"
 
@@ -90,6 +91,9 @@ else
     mkdir -p "$HOME/.kanna"
     echo "WARNING: ~/Maude/.kanna not found, using local ~/.kanna"
 fi
+# Best-effort: never let a fragile/read-only drvfs mount abort the rest of
+# bootstrap under set -e (statusline install, Claude settings, yolo marker...).
+declare -F ensure_kanna_ready >/dev/null && { ensure_kanna_ready || true; }
 
 # ── Claude Code: status line (cwd + context-window % free) ───────────
 curl -fsSL "$GH_RAW/statusline.sh" -o "$HOME/.claude/statusline.sh"

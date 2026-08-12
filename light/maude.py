@@ -3366,6 +3366,24 @@ class MaudeApp(App):
             self._start_kanna()
 
     def _start_kanna(self) -> None:
+        # Best-effort guard for the plain-missing-dir case (mkdir also fails,
+        # silently, on a dangling ~/.kanna symlink — that case is instead
+        # repaired by ensure_kanna_ready in the shell-out below, which also
+        # seeds default settings so the user isn't prompted through kanna's
+        # setup wizard (no-op if already seeded)).
+        try:
+            (Path.home() / ".kanna" / "data").mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        try:
+            subprocess.run(
+                ["bash", "-c",
+                 '. "$HOME/.local/lib/maude/kanna.sh" 2>/dev/null && ensure_kanna_ready'],
+                check=False, timeout=10,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
         # Make sure the port isn't held by a stale instance before launching.
         kill_port(KANNA_PORT)
         env = {**os.environ, **kanna_env()}

@@ -140,6 +140,9 @@ MAUDE_PY_URL="$GH_RAW/maude.py"
 MAUDE_BIN_URL="$GH_RAW/maude"
 MAUDE_LIB_DIR="$HOME/.local/lib/maude"
 
+# Pin: keep in sync with light/maude-bootstrap.sh's kanna-code install line.
+KANNA_PKG="kanna-code@0.63.0"
+
 # Inline minimal fallback used if the lib download fails. Mirrors
 # ensure-tools.sh so node/python/etc. still get linked when offline.
 _inline_ensure_tool_symlinks() {
@@ -180,6 +183,7 @@ load_lib() {
 load_lib ensure-tools.sh || ensure_tool_symlinks() { _inline_ensure_tool_symlinks; }
 load_lib refresh-md.sh   || true   # refresh_claude_md falls through if not loaded
 load_lib update-skills.sh || true
+load_lib kanna.sh || true
 
 # Pin rationale: 8.2.3 (and only 8.2.3) crashes the Set Creds modal with
 # KeyError 'text-area--gutter' (textual#6528); every other 8.x is verified
@@ -409,7 +413,7 @@ update_all() {
     ( if command -v bun >/dev/null 2>&1; then
           # flock serializes global package installs across the concurrent
           # `maude update` jobs (bun/npm share a global store).
-          ( flock -w 600 9 2>/dev/null || true; bun install -g kanna-code ) 9>"$HOME/.maude-pkg-install.lock"
+          ( flock -w 600 9 2>/dev/null || true; bun install -g "$KANNA_PKG" ) 9>"$HOME/.maude-pkg-install.lock"
       else
           echo "bun is not installed; skipping kanna update"
           exit 1
@@ -420,7 +424,7 @@ update_all() {
     mkdir -p "$MAUDE_LIB_DIR"
     _alloc_job libs
     ( lib_rc=0
-      for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh; do
+      for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh kanna.sh; do
           lib_tmp=$(mktemp)
           if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
              && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
@@ -451,6 +455,8 @@ update_all() {
     . "$MAUDE_LIB_DIR/update-skills.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/gemini.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/kanna.sh" 2>/dev/null || true
     # llm-mode.sh must load before the per-tool reviewer libs (shared helpers).
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/llm-mode.sh" 2>/dev/null || true
@@ -850,7 +856,7 @@ launch_web() {
     # Install kanna-code via Bun if not present
     if ! command -v kanna >/dev/null 2>&1; then
         echo -e "${CYAN}Installing kanna-code...${NC}"
-        bun install -g kanna-code
+        bun install -g "$KANNA_PKG"
         ensure_tool_symlinks
     fi
 
@@ -860,6 +866,10 @@ launch_web() {
     if [[ -x "$HOME/bin/claude" ]]; then
         export CLAUDE_EXECUTABLE="$HOME/bin/claude"
     fi
+
+    # kanna crashes if ~/.kanna is missing — guarantee the dir + seed defaults.
+    mkdir -p "$HOME/.kanna/data" 2>/dev/null || true
+    declare -F ensure_kanna_ready >/dev/null && ensure_kanna_ready
 
     echo -e "${GREEN}Launching kanna web UI...${NC}"
     echo -e "${YELLOW}Ctrl+click the URL below to open in your Windows browser${NC}"
