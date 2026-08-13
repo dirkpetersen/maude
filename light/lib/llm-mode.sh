@@ -50,6 +50,24 @@ clauderc_env() {
     )
 }
 
+# Derive an OpenAI-compatible Foundry endpoint from the configured Anthropic
+# Foundry endpoint. Azure APIM gateways expose each provider under a path on a
+# single host (…/anthropic, …/openai), so an ANTHROPIC_FOUNDRY_BASE_URL ending
+# in /anthropic maps to the same host's /openai. Echoes the derived URL, or
+# nothing when no Foundry URL ending in /anthropic is configured (caller then
+# falls back). Reads env first, then ~/.azure/clauderc (via clauderc_env).
+foundry_openai_url() {
+    local u="${ANTHROPIC_FOUNDRY_BASE_URL:-}"
+    if [[ -z "$u" ]] && declare -F clauderc_env >/dev/null; then
+        u=$(clauderc_env ANTHROPIC_FOUNDRY_BASE_URL)
+    fi
+    u="${u%/}"                       # tolerate a trailing slash
+    # Require scheme://authority before the /anthropic path segment so a bare
+    # host (e.g. "https://anthropic") isn't mistaken for a /anthropic endpoint.
+    [[ "$u" == *://*/anthropic ]] && printf '%s' "${u%/anthropic}/openai"
+    return 0                         # always succeed — no match just means "nothing to echo"
+}
+
 # Fetch .claude/skills/<name>/SKILL.md from the repo root into
 # ~/.claude/skills/<name>/. Echoes a one-line status ("installed (new)",
 # "updated", "up to date", or "failed (<url>)"); returns non-zero on failure.

@@ -98,7 +98,7 @@ model_provider = "azure"
 
 [model_providers.azure]
 name = "Azure OpenAI"
-base_url = "https://${AZURE_OPENAI_RESOURCE}.openai.azure.com/openai/v1"
+base_url = "https://${AZURE_OPENAI_RESOURCE}.openai.azure.com/openai/v1"  # or derived from Foundry, see below
 env_key = "AZURE_OPENAI_API_KEY"
 wire_api = "responses"
 
@@ -118,6 +118,13 @@ region = "us-east-2"             # only region with openai.gpt-5.5 today
   reviewer role rarely needs writes.
 - **Notes:** `--full-auto` is deprecated; Entra ID auth is NOT supported (API key only);
   the Azure base URL **must** end in `/v1`.
+- **Azure `base_url` derivation:** since Maude's typical Azure setup is an APIM gateway
+  exposing each provider by path on one host (`.../anthropic`, `.../openai`, per the
+  `ANTHROPIC_FOUNDRY_BASE_URL` already configured for Claude), `update_codex()` prefers
+  deriving the OpenAI endpoint from that Foundry URL (`foundry_openai_url()` in
+  `light/lib/llm-mode.sh`, swapping a trailing `/anthropic` for `/openai`) and only falls
+  back to the `AZURE_OPENAI_RESOURCE` → `...openai.azure.com/openai/v1` form above when no
+  Foundry `/anthropic` endpoint is configured.
 
 ### 3.3 `light/lib/opencode.sh` — `update_opencode()`
 

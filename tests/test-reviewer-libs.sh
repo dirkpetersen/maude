@@ -23,7 +23,7 @@ source "$LIB_DIR/opencode.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/grok.sh"
 
-for _fn in detect_llm_mode maude_fetch_skill update_codex update_opencode update_grok; do
+for _fn in detect_llm_mode maude_fetch_skill foundry_openai_url update_codex update_opencode update_grok; do
     assert_exit_zero "function $_fn defined" declare -F "$_fn"
 done
 
@@ -70,11 +70,31 @@ assert_eq "clauderc_env: ambient env wins over clauderc" "from-env" "$val"
 val=$(HOME="$SCRATCH" clauderc_env NO_SUCH_VAR_XYZ)
 assert_eq "clauderc_env: undefined var → empty" "" "$val"
 
+# ── foundry_openai_url: derive the OpenAI endpoint from an APIM gateway ──
+val=$(ANTHROPIC_FOUNDRY_BASE_URL="https://gw.azure-api.net/anthropic" foundry_openai_url)
+assert_eq "foundry_openai_url: /anthropic -> /openai" \
+    "https://gw.azure-api.net/openai" "$val"
+val=$(ANTHROPIC_FOUNDRY_BASE_URL="https://gw.azure-api.net/anthropic/" foundry_openai_url)
+assert_eq "foundry_openai_url: trailing slash tolerated" \
+    "https://gw.azure-api.net/openai" "$val"
+val=$(ANTHROPIC_FOUNDRY_BASE_URL="https://x.openai.azure.com/openai/v1" foundry_openai_url)
+assert_eq "foundry_openai_url: non-/anthropic URL -> empty" "" "$val"
+NOCFG_HOME=$(mktemp -d)
+val=$(unset ANTHROPIC_FOUNDRY_BASE_URL; HOME="$NOCFG_HOME" foundry_openai_url)
+assert_eq "foundry_openai_url: unset + no clauderc -> empty" "" "$val"
+rm -rf "$NOCFG_HOME"
+
 # generators pick the resource name up from clauderc
 CFG_HOME=$(mktemp -d)
 mkdir -p "$CFG_HOME/.azure"
 echo 'export AZURE_OPENAI_RESOURCE=osu-openai-prod' > "$CFG_HOME/.azure/clauderc"
-( HOME="$CFG_HOME" MAUDE_RAW="file://$REPO_ROOT/light" PATH="/usr/bin:/bin" update_codex >/dev/null 2>&1 ) || true
+# Explicitly unset ANTHROPIC_FOUNDRY_BASE_URL: this test exercises the
+# resource-URL fallback path specifically, which only applies when no Foundry
+# /anthropic endpoint is configured. Dev machines commonly have this exported
+# ambiently (it's how Claude itself is configured in Foundry mode), which
+# would otherwise make foundry_openai_url() win and silently break this test.
+( unset ANTHROPIC_FOUNDRY_BASE_URL
+  HOME="$CFG_HOME" MAUDE_RAW="file://$REPO_ROOT/light" PATH="/usr/bin:/bin" update_codex >/dev/null 2>&1 ) || true
 assert_exit_zero "codex config uses clauderc resource name" \
     grep -q 'osu-openai-prod.openai.azure.com' "$CFG_HOME/.codex/config.toml"
 rm -rf "$CFG_HOME"
