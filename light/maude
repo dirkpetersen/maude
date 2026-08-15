@@ -626,7 +626,7 @@ update_all() {
        && ! grep -q '\.local/lib/maude/welcome\.sh' /etc/profile.d/maude-welcome.sh 2>/dev/null; then
         echo -e "${YELLOW}  Note: your login still uses the old welcome script; the refresh above won't${NC}"
         echo -e "${YELLOW}  show until the one-time stub is installed as root. From Windows PowerShell:${NC}"
-        echo -e "${CYAN}    wsl -d Maude -u root -- bash -c 't=\$(mktemp); curl -fsSL --max-time 20 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/welcome-stub.sh -o \$t && grep -q .local/lib/maude/welcome.sh \$t && install -m 644 \$t /etc/profile.d/maude-welcome.sh; rm -f \$t'${NC}"
+        echo -e "${CYAN}    wsl -d Maude -u root -- bash -c 'rm -f /tmp/maude-welcome-stub.sh && curl -fsSL --max-time 20 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/welcome-stub.sh -o /tmp/maude-welcome-stub.sh && grep -q .local/lib/maude/welcome.sh /tmp/maude-welcome-stub.sh && install -m 644 /tmp/maude-welcome-stub.sh /etc/profile.d/maude-welcome.sh'${NC}"
     fi
     echo ""
 
