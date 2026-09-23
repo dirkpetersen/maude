@@ -75,15 +75,15 @@ Automount: disabled (no /mnt/c, /mnt/d)
 Only mount: ~/Maude via /etc/fstab drvfs entry
 ```
 
-The setup script (`setup-wsl-maude.ps1`) bakes packages into a reusable `Ubuntu-24.04-Template` WSL distro, then imports it as `Maude`. Teardown + reinstall takes under a minute because the template is kept.
+The setup script (`setup-wsl-maude.ps1`) bakes packages into a reusable `Ubuntu-<version>-Template` WSL distro (`Ubuntu-26.04-Template` by default, `Ubuntu-24.04-Template` with `-Noble`), then imports it as `Maude`. Teardown + reinstall takes under a minute because the template is kept.
 
 ## Commands
 
 ### Testing & Linting
 ```bash
-make test           # Run full test suite (all tests/test-*.sh files)
+make test           # Runs tests/run-all-tests.sh (discovers all tests/test-*.sh files)
 make test-fast      # Run tests, stop on first failure
-make lint           # Bash -n syntax check only (no execution)
+make lint           # Runs tests/test-scripts-syntax.sh (bash -n, no execution)
 bash tests/test-path-setup.sh   # Run a single test file
 ```
 
@@ -165,10 +165,12 @@ The `light/` directory contains the WSL2 sandbox implementation:
 | `teardown-wsl-maude.ps1` | PowerShell (self-elevates) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom-inst (.deb), PATH, welcome stub + user-owned welcome copy, Claude Code |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, reviewer CLIs (Gemini, Codex, OpenCode, Grok — see `docs/multi-cli-reviewers.md`), Claude Code config, yolo-mode marker |
+| `lib/*.sh` | maude user (inside WSL) | Sourced helpers fetched at runtime: `llm-mode.sh` (credential-mode detection, must be sourced first), `codex.sh`/`gemini.sh`/`grok.sh`/`opencode.sh` (reviewer CLI install + config), `kanna.sh`, `ensure-tools.sh`, `refresh-md.sh`, `update-skills.sh`. Canonical reviewer skills live at repo-root `.claude/skills/{codex,gemini,grok,opencode}/SKILL.md` |
 | `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`, `maude github`, `maude update`) |
 | `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`) |
 
 Key implementation details:
+- **Runtime fetch model**: `maude`, `maude-bootstrap.sh`, and `root-bootstrap.sh` pull `lib/*.sh` (cached into `~/.local/lib/maude/`), `maude.py` (daily), `MAUDE.md` (daily, via `lib/refresh-md.sh`), and `welcome-stub.sh` from `GH_RAW=https://raw.githubusercontent.com/dirkpetersen/maude/main/light` at runtime. `main` is therefore the effective release channel for Maude Light — no tag needed for these files to reach installed sandboxes. `MAUDE_RAW` overrides the base URL (e.g. to test a fork/branch)
 - Files are piped into WSL via `Get-Content -Raw | wsl ... bash -c "cat > /tmp/..."` (automount is disabled, so wslpath/cp don't work). Package install scripts use base64 encode/decode to avoid PowerShell CRLF corruption when piping
 - `/tmp` is cleared on `wsl --terminate` -- files must be re-piped after restart (step 6 re-pipes maude-bootstrap.sh)
 - Windows Terminal auto-generates profiles with `source=Microsoft.WSL` -- can't delete them, must hide with pre-hidden stubs
