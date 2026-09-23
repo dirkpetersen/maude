@@ -223,6 +223,18 @@ This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the l
 
 `~/Maude` is mounted from `%LOCALAPPDATA%\Maude\Data\Maude` on your Windows host. Use it to exchange files between Windows and the sandbox — documents, exports, data files, anything you need Claude to read or produce. The folder is pinned to Quick Access in File Explorer for easy access.
 
+### Updating mom
+
+There is no in-place upgrade path for mom — setup refuses to run on an existing distro, and a teardown + reinstall starts from scratch (picking up the pinned version) — so to upgrade mom in an existing Maude, run this from PowerShell (no admin needed — `wsl -u root` is root inside the distro):
+
+```powershell
+wsl -d Maude -u root -e bash -c 'V=0.2.22; . /etc/os-release; T=ubuntu-${VERSION_ID/./}; A=$(dpkg --print-architecture); D=mom-inst_${V}_${T}_${A}.deb; U=https://github.com/dirkpetersen/mom/releases/download/v$V; cd /tmp && curl -fsSLO $U/$D && curl -fsSL $U/SHA256SUMS | grep -F $D | sha256sum -c && dpkg -i $D && rm -f $D && mom --version'
+```
+
+- Set `V=` to the desired release from https://github.com/dirkpetersen/mom/releases.
+- It picks the `.deb` for the distro's Ubuntu version and architecture and verifies the SHA-256 before installing.
+- Use `-e`, not `--` — with `--` wsl.exe runs the command through the login shell, which expands `$V`/`$U`/`$D` to empty before bash sees them (curl fails with "URL using bad/illegal format"). The script is single-quoted with no inner double quotes so PowerShell passes it unmodified.
+
 ## Troubleshooting
 
 ### `maude` command prints `value too great for base (error token is "09")`
