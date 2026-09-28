@@ -209,7 +209,7 @@ A Textual-based full-screen TUI which is the default welcome experience for new 
 ```
 
 ### Key behaviors
-- **Open project**: `app.suspend()` → `claude <model> --continue` (fallback: `claude <model>`) → resume TUI; cursor is restored to the project that was just open
+- **Open project**: `app.suspend()` → `claude <model> --continue` (fallback: `claude <model> --resume` only if the project has saved sessions, then `claude <model>`) → resume TUI; cursor is restored to the project that was just open
 - **Delete**: confirm modal → soft-delete to `Projects/.deleted/`
 - **New project**: modal dialog, spaces auto-replaced with hyphens, git init
 - **Web UI**: launches kanna in its own process group with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so the wrapper handles auth (Foundry/Azure/Bedrock/direct). Click again to stop — `SIGTERM` → `SIGKILL` on the group plus `fuser -k 3210/tcp` as a backstop. Refuses to launch without credentials and pops `CredsEntryScreen` as a recovery path

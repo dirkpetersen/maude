@@ -1109,6 +1109,12 @@ resolve_claude_cmd() {
     printf '%s\n' "claude"   # last resort, lets the shell error out cleanly
 }
 
+# True if Claude Code has saved sessions for the current dir. Sessions live in
+# ~/.claude/projects/<resolved cwd, non-alphanumerics -> '-'>/*.jsonl.
+has_claude_sessions() {
+    compgen -G "$HOME/.claude/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')/*.jsonl" >/dev/null
+}
+
 # Check if project already exists
 if [[ -d "$PROJECT_PATH" ]]; then
     echo -e "${GREEN}Opening project:${NC} $PROJECT_NAME"
@@ -1118,7 +1124,9 @@ if [[ -d "$PROJECT_PATH" ]]; then
     cd "$PROJECT_PATH"
     echo ""
     CLAUDE_CMD=$(resolve_claude_cmd)
-    "$CLAUDE_CMD" opus --continue || exec "$CLAUDE_CMD" opus
+    # --continue can fail asking for `--resume` (multiple sessions); try the picker before a fresh start.
+    # Only when sessions exist: with none, --resume opens an empty picker that blocks until Esc.
+    "$CLAUDE_CMD" opus --continue || { has_claude_sessions && "$CLAUDE_CMD" opus --resume; } || exec "$CLAUDE_CMD" opus
 else
     # New project → create, git init, fresh start
     echo -e "${CYAN}Creating new project:${NC} $PROJECT_NAME"

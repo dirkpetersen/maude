@@ -313,11 +313,27 @@ def slugify(name: str) -> str:
     return name.strip("-")
 
 
+def _has_claude_sessions(path: Path) -> bool:
+    """True if Claude Code has saved sessions for `path` (the current dir).
+
+    Sessions live in ~/.claude/projects/<resolved cwd, non-alphanumerics
+    -> '-'>/*.jsonl. Needed because `--resume` with no sessions opens an
+    empty picker that blocks until Esc.
+    """
+    try:
+        enc = re.sub(r"[^A-Za-z0-9]", "-", os.getcwd())
+        return any((Path.home() / ".claude" / "projects" / enc).glob("*.jsonl"))
+    except OSError:
+        return False
+
+
 def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None:
     """Launch Claude Code for a project.
 
     By default tries `--continue` first (resume the previous session),
-    falling back to a fresh launch if there's nothing to continue.
+    then, only if the project has saved sessions, `--resume` (Claude's
+    interactive session picker, which `--continue` may ask for when
+    several sessions exist), and finally a fresh launch.
     When `fresh=True`, skip `--continue` entirely so the conversation
     starts with no history.
     """
@@ -326,6 +342,8 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None
         subprocess.run(["claude", model], check=False)
         return
     ret = subprocess.run(["claude", model, "--continue"], check=False).returncode
+    if ret != 0 and _has_claude_sessions(project_path):
+        ret = subprocess.run(["claude", model, "--resume"], check=False).returncode
     if ret != 0:
         subprocess.run(["claude", model], check=False)
 
