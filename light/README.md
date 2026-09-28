@@ -35,7 +35,7 @@ The hard prerequisite for Maude is WSL2 itself. Enabling the WSL Windows feature
 Open a **non-elevated** PowerShell and run:
 
 ```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
+curl.exe --ssl-no-revoke -fSLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1
 ```
 
 The first run takes ~3–5 minutes (downloading Ubuntu and baking in packages — the template build). Future reinstalls reuse the template and complete in ~30 seconds.
@@ -47,7 +47,7 @@ The first run takes ~3–5 minutes (downloading Ubuntu and baking in packages �
 Open **PowerShell as Administrator** (right-click → "Run as Administrator") and run the admin phase:
 
 ```powershell
-curl.exe -sLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Admin
+curl.exe --ssl-no-revoke -fSLo $env:TEMP\setup-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1 -Admin
 ```
 
 This installs WSL2, installs Windows Terminal, builds the Ubuntu template, and adds a Windows Defender exclusion for the Maude install path. When it finishes, **close the elevated window** and run the non-elevated user-phase command above to finish setup.
@@ -56,7 +56,7 @@ This installs WSL2, installs Windows Terminal, builds the Ubuntu template, and a
 
 Just the non-elevated user-phase command — no admin, no UAC.
 
-> **Note:** Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`. Piping via `iex` may be blocked by antivirus on corporate machines; the file-based approach above works reliably everywhere.
+> **Note:** Use `curl.exe` (not `curl`) — in PowerShell, `curl` is an alias for `Invoke-WebRequest`. Piping via `iex` may be blocked by antivirus on corporate machines; the file-based approach above works reliably everywhere. `--ssl-no-revoke -f` skips the certificate-revocation check that fails behind TLS-inspecting corporate proxies, and makes curl print an error and leave no file when the download fails.
 
 ### Install options
 
@@ -123,7 +123,7 @@ The installer checks free space on C: at startup and prints it in gigabytes:
 The default teardown runs as your normal user — **no admin/UAC needed**. From any PowerShell:
 
 ```powershell
-curl.exe -sLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\teardown-wsl-maude.ps1
+curl.exe --ssl-no-revoke -fSLo $env:TEMP\teardown-wsl-maude.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\teardown-wsl-maude.ps1
 ```
 
 This removes the Maude distro, Windows Terminal profile, desktop shortcut, and Quick Access pin. The Ubuntu template is kept for fast reinstalls. To remove the template too:
@@ -236,6 +236,16 @@ wsl -d Maude -u root -e bash -c 'V=0.2.22; . /etc/os-release; T=ubuntu-${VERSION
 - Use `-e`, not `--` — with `--` wsl.exe runs the command through the login shell, which expands `$V`/`$U`/`$D` to empty before bash sees them (curl fails with "URL using bad/illegal format"). The script is single-quoted with no inner double quotes so PowerShell passes it unmodified.
 
 ## Troubleshooting
+
+### `The argument '...setup-wsl-maude.ps1' to the -File parameter does not exist`
+
+Cause: the download step silently failed, so there was no script for `powershell -File` to run.
+
+Fix: re-run the install command above and read the curl error it prints.
+
+- `schannel` / `CRYPT_E_NO_REVOCATION_CHECK`: your network does TLS inspection and the certificate-revocation check fails. Use `--ssl-no-revoke` (already in the command above).
+- Cannot connect: a proxy or firewall blocks `raw.githubusercontent.com`. Try `Invoke-WebRequest https://raw.githubusercontent.com/dirkpetersen/maude/main/light/setup-wsl-maude.ps1 -OutFile $env:TEMP\setup-wsl-maude.ps1` (it uses the system proxy settings), then run `powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-wsl-maude.ps1`.
+- No error, but the file vanishes: antivirus removed it. Download to `%USERPROFILE%\Downloads` instead, or ask IT.
 
 ### `maude` command prints `value too great for base (error token is "09")`
 

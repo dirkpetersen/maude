@@ -319,7 +319,7 @@ function Build-Template {
         }
         $rootfsFile = Join-Path $env:TEMP "ubuntu-$UbuntuVersion-wsl-amd64.wsl"
         Write-Host "Downloading ~375 MB (this may take a few minutes)..."
-        curl.exe -L -o $rootfsFile "$rootfsUrl"
+        curl.exe --ssl-no-revoke -L -o $rootfsFile "$rootfsUrl"
         if (-not (Test-Path -LiteralPath $rootfsFile) -or (Get-Item -LiteralPath $rootfsFile).Length -lt 100MB) {
             Write-Host "ERROR: Failed to download Ubuntu WSL image." -ForegroundColor Red
             return $false
@@ -640,14 +640,14 @@ if ($Admin) {
             $wtTmp = Join-Path $env:TEMP "wt-install"
             New-Item -ItemType Directory -Force -Path $wtTmp | Out-Null
             try {
-                $wtRelease = curl.exe -s "https://api.github.com/repos/microsoft/terminal/releases/latest?cache=$cacheBust" | ConvertFrom-Json
+                $wtRelease = curl.exe --ssl-no-revoke -s "https://api.github.com/repos/microsoft/terminal/releases/latest?cache=$cacheBust" | ConvertFrom-Json
                 $msixUrl = ($wtRelease.assets | Where-Object { $_.name -match '\.msixbundle$' } | Select-Object -First 1).browser_download_url
                 if ($msixUrl) {
                     $vclibsUrl = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
                     $xamlUrl   = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
-                    curl.exe -sL -o "$wtTmp\vclibs.appx" $vclibsUrl
-                    curl.exe -sL -o "$wtTmp\uixaml.appx" $xamlUrl
-                    curl.exe -sL -o "$wtTmp\terminal.msixbundle" $msixUrl
+                    curl.exe --ssl-no-revoke -sL -o "$wtTmp\vclibs.appx" $vclibsUrl
+                    curl.exe --ssl-no-revoke -sL -o "$wtTmp\uixaml.appx" $xamlUrl
+                    curl.exe --ssl-no-revoke -sL -o "$wtTmp\terminal.msixbundle" $msixUrl
                     Add-AppxPackage -Path "$wtTmp\vclibs.appx" -ErrorAction SilentlyContinue
                     Add-AppxPackage -Path "$wtTmp\uixaml.appx" -ErrorAction SilentlyContinue
                     Add-AppxPackage -Path "$wtTmp\terminal.msixbundle" -ErrorAction Stop
@@ -782,7 +782,7 @@ if ($Admin) {
     Write-Host "PowerShell. The user phase imports the template as Maude and" -ForegroundColor White
     Write-Host "is the same command you'll use for every future reinstall:" -ForegroundColor White
     Write-Host ""
-    Write-Host "    curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1$(if($OneDrive){' -OneDrive'})$(if($NoOneDrive){' -NoOneDrive'})$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})" -ForegroundColor Yellow
+    Write-Host "    curl.exe --ssl-no-revoke -fSLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1$(if($OneDrive){' -OneDrive'})$(if($NoOneDrive){' -NoOneDrive'})$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})" -ForegroundColor Yellow
     Write-Host ""
     Read-Host "Press Enter to close this window"
     exit
@@ -808,7 +808,7 @@ ERROR: WSL is not installed.
 WSL itself needs admin to install (it enables a Windows feature). Run the
 admin phase once from an ELEVATED PowerShell:
 
-    curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
+    curl.exe --ssl-no-revoke -fSLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
 
 After that, all future installs and reinstalls work without admin.
 
@@ -839,7 +839,7 @@ if (-not $installedTemplate) {
 If the failure looks AV-related, run the admin phase once to add a
 permanent Defender exclusion and (if needed) install Windows Terminal:
 
-    curl.exe -sLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
+    curl.exe --ssl-no-revoke -fSLo `$env:TEMP\setup-wsl-maude.ps1 $GH_RAW/light/setup-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\setup-wsl-maude.ps1 -Admin$(if($Noble){' -Noble'})$(if($Release -ne 'main'){" -Release $Release"})
 
 "@ -ForegroundColor Yellow
         exit 1
@@ -855,7 +855,7 @@ if (Test-WslDistro $DistroName) {
 
 $DistroName is already installed. To reinstall, run teardown first:
 
-    curl.exe -sLo `$env:TEMP\teardown-wsl-maude.ps1 $GH_RAW/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
+    curl.exe --ssl-no-revoke -fSLo `$env:TEMP\teardown-wsl-maude.ps1 $GH_RAW/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
 
 "@ -ForegroundColor Yellow
     exit 0
@@ -881,7 +881,7 @@ Maude now expects this layout under %LOCALAPPDATA%\Maude\:
 Run teardown first (it'll remove the old distro dir but won't touch any
 Data\ folder you may have already created):
 
-    curl.exe -sLo `$env:TEMP\teardown-wsl-maude.ps1 $GH_RAW/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
+    curl.exe --ssl-no-revoke -fSLo `$env:TEMP\teardown-wsl-maude.ps1 $GH_RAW/light/teardown-wsl-maude.ps1; powershell -ExecutionPolicy Bypass -File `$env:TEMP\teardown-wsl-maude.ps1
 
 Then re-run this script.
 

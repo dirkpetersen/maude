@@ -185,7 +185,7 @@ Both the stub (`/etc/profile.d/maude-welcome.sh`) and `/etc/profile.d/maude-shel
 Always use `[[ ]]` not `[ ]` in bash conditionals.
 
 ### `curl.exe` not `curl` in PowerShell
-`curl` in PowerShell aliases to `Invoke-WebRequest`. Always use `curl.exe` explicitly. Also note `iex` may be blocked by antivirus on corporate machines.
+`curl` in PowerShell aliases to `Invoke-WebRequest`. Always use `curl.exe` explicitly. Also note `iex` may be blocked by antivirus on corporate machines. User-facing download commands use `curl.exe --ssl-no-revoke -fSLo <file> <url>`: corporate TLS inspection breaks Windows schannel revocation checks (CRYPT_E_NO_REVOCATION_CHECK), and `-f` surfaces HTTP failures instead of saving an error page.
 
 ### WSL encoding gotcha
 `wsl.exe --list --verbose` outputs UTF-16LE with BOM. Strip null bytes before parsing:
