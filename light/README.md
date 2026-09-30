@@ -304,6 +304,14 @@ Click the **Web UI** button again to confirm it's idle. The TUI runs a 1.5s post
 - Port 3210 still held by a previous run. The TUI runs `fuser -k 3210/tcp` before each launch as a backstop, but a wedged kanna from outside the TUI may need `fuser -k 3210/tcp` manually.
 - Wrapper at `~/bin/claude` missing. The TUI sets `CLAUDE_EXECUTABLE` to that path so kanna inherits Maude's auth; if the wrapper is gone, kanna falls back to plain `claude` on PATH and may fail to authenticate.
 
+### `mom upgrade` fails with `dpkg: error processing package openssh-server (--configure)`
+
+Maude has no use for an SSH server, but port 22 is often already held by the Windows OpenSSH Server (WSL shares localhost ports), so an `openssh-server` upgrade fails to start `ssh.socket` and leaves dpkg half-configured. New installs mask the SSH units already; on an existing install, run this from PowerShell (no admin needed):
+
+```powershell
+wsl -d Maude -u root -e bash -c 'systemctl mask --now ssh.socket ssh.service; dpkg --configure -a'
+```
+
 ### `gh` upload of GPG key fails with `insufficient OAuth scopes`
 
 `gh auth login` needs the `write:gpg_key` scope. The wizard now requests it automatically; if you authed with an earlier version, click **Re-authenticate** in step 3 and complete the device flow again.

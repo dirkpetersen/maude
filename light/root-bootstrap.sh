@@ -136,6 +136,31 @@ usermod -d "/home/$USERNAME" "$USERNAME" 2>/dev/null || true
 # ran with an older version that masked it.
 systemctl unmask user@.service >/dev/null 2>&1 || true
 
+# ── Never run an SSH server ──────────────────────────────────────────
+# openssh-server is in the shared package list (the full appliance needs
+# it), but Maude Light has no use for it (users enter via `wsl -d Maude`).
+# Worse: WSL forwards localhost ports with Windows, so on machines running
+# the Windows OpenSSH Server, port 22 is taken. When an openssh-server
+# upgrade restarts ssh.socket it fails, dpkg leaves the package
+# half-configured, and every later `mom upgrade`/`mom install` dies at
+# `dpkg --configure -a`. Mask (not just disable) so nothing can start the
+# units, and deb-systemd-invoke/helper skip them during package upgrades.
+# The mask symlinks are created directly so this works whether or not
+# systemd is running yet (this is exactly what `systemctl mask` writes).
+mkdir -p /etc/systemd/system
+for _u in ssh.socket ssh.service; do
+    ln -sfn /dev/null "/etc/systemd/system/$_u" 2>/dev/null || true
+done
+if [[ -d /run/systemd/system ]]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl stop ssh.socket ssh.service >/dev/null 2>&1 || true
+fi
+# Repair a half-configured openssh-server left by an earlier failed upgrade.
+if dpkg -s openssh-server >/dev/null 2>&1 \
+   && ! dpkg -s openssh-server 2>/dev/null | grep -q '^Status: install ok installed'; then
+    dpkg --configure -a >/dev/null 2>&1 || true
+fi
+
 # ── Sandbox mount: host folder → /home/<user>/Maude via drvfs ────────
 if [[ -n "$HOST_FOLDER" ]]; then
     MOUNT_POINT="/home/$USERNAME/Maude"
