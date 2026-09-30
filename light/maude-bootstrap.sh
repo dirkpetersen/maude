@@ -58,7 +58,7 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "Installing kanna-code..."
 # pinned: keep in sync with light/maude KANNA_PKG
-bun install -g kanna-code@0.63.0
+bun install -g kanna-code@0.77.1
 declare -F ensure_tool_symlinks >/dev/null && ensure_tool_symlinks
 echo "Tool symlinks updated in ~/.local/bin"
 
