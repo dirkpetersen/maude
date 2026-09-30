@@ -224,6 +224,18 @@ ensure_textual() {
     return 0
 }
 
+# After a failed update, the Textual TUI would immediately clear the screen and
+# wipe the error output. Give the user a chance to read it first. Never blocks
+# without a terminal (piped/cron/CI), and read failure/EOF is ignored.
+pause_if_update_failed() {
+    local rc="$1"
+    if [[ "$rc" -ne 0 && -t 0 ]]; then
+        echo ""
+        echo -e "${YELLOW}Press Enter to start the Maude UI...${NC}"
+        read -r || true
+    fi
+}
+
 maude_maybe_update() {
     local stamp="$HOME/.local/share/maude/.last-maude-update"
     local now
@@ -237,7 +249,12 @@ maude_maybe_update() {
         echo -e "${CYAN}Running weekly maude update...${NC}"
         mkdir -p "$(dirname "$stamp")"
         echo "$now" > "$stamp"
-        update_all
+        # _MAUDE_UPDATE_THEN_TUI survives update_all's self-update re-exec
+        # ('maude update') so the dispatcher below still launches the TUI.
+        # Env-prefix scope: it does not persist in this shell afterwards.
+        local _urc=0
+        _MAUDE_UPDATE_THEN_TUI=1 update_all || _urc=$?
+        pause_if_update_failed "$_urc"
     fi
 }
 
@@ -980,8 +997,21 @@ case "$1" in
         exit 0
         ;;
     update)
+        # Set by maude_maybe_update: this is the re-exec'd continuation of a
+        # weekly update started from the TUI launcher, so finish by launching
+        # the TUI. Capture and clear it so it doesn't leak to child processes.
+        _then_tui="${_MAUDE_UPDATE_THEN_TUI:-}"
+        unset _MAUDE_UPDATE_THEN_TUI
         update_all
-        exit $?
+        _urc=$?
+        if [[ "$_then_tui" == "1" ]]; then
+            pause_if_update_failed "$_urc"
+            # Weekly stamp was written before update_all, so launch_tui's
+            # maude_maybe_update will not run a second update.
+            launch_tui
+            exit $?
+        fi
+        exit $_urc
         ;;
     list|ls)
         list_projects
