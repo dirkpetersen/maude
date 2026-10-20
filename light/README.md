@@ -228,12 +228,30 @@ This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the l
 There is no in-place upgrade path for mom — setup refuses to run on an existing distro, and a teardown + reinstall starts from scratch (picking up the pinned version) — so to upgrade mom in an existing Maude, run this from PowerShell (no admin needed — `wsl -u root` is root inside the distro):
 
 ```powershell
-wsl -d Maude -u root -e bash -c 'V=0.2.22; . /etc/os-release; T=ubuntu-${VERSION_ID/./}; A=$(dpkg --print-architecture); D=mom-inst_${V}_${T}_${A}.deb; U=https://github.com/dirkpetersen/mom/releases/download/v$V; cd /tmp && curl -fsSLO $U/$D && curl -fsSL $U/SHA256SUMS | grep -F $D | sha256sum -c && dpkg -i $D && rm -f $D && mom --version'
+wsl -d Maude -u root -e bash -c 'V=0.2.22; . /etc/os-release; T=ubuntu-${VERSION_ID/./}; A=$(dpkg --print-architecture); D=mom-inst_${V}_${T}_${A}.deb; U=https://github.com/dirkpetersen/mom/releases/download/v$V; cd $(mktemp -d) && curl -fsSLO $U/$D && curl -fsSL $U/SHA256SUMS | grep -F $D | sha256sum -c && dpkg -i $D && rm -f $D && mom --version'
 ```
 
 - Set `V=` to the desired release from https://github.com/dirkpetersen/mom/releases.
 - It picks the `.deb` for the distro's Ubuntu version and architecture and verifies the SHA-256 before installing.
 - Use `-e`, not `--` — with `--` wsl.exe runs the command through the login shell, which expands `$V`/`$U`/`$D` to empty before bash sees them (curl fails with "URL using bad/illegal format"). The script is single-quoted with no inner double quotes so PowerShell passes it unmodified.
+
+### Dev mode (remove sandbox isolation)
+
+Dev mode sets Maude back to standard WSL behavior. Windows drives are mounted at `/mnt/c` and so on, Windows programs can run, the Windows PATH is added to PATH, and the Maude user gets full `sudo`. `sudo` asks for the user's password. The first time you run the script, it asks you to set that password.
+
+**Warning:** Claude Code runs in bypassPermissions mode in Maude. In dev mode the AI agent can read, change and delete files on all your Windows drives. The sudo password does not stop the agent: it runs as the same Linux user, so it can capture the password or use `sudo` right after you did. Treat dev mode as giving the agent root.
+
+Close all open Maude terminals first, because `wsl --terminate Maude` ends every open Maude terminal and running Claude session.
+
+Run this from PowerShell (no admin needed):
+
+```powershell
+wsl -d Maude -u root -e bash -c 'd=$(mktemp -d) && curl --max-time 30 -fsSLo $d/dev-mode.sh https://raw.githubusercontent.com/dirkpetersen/maude/main/light/dev-mode.sh && bash $d/dev-mode.sh'; wsl --terminate Maude
+```
+
+With the Windows PATH added, Windows commands without a file extension (for example npm shims such as `codex` or `gemini` in `%APPDATA%\npm`) can hide the Linux tools of the same name in `~/.local/bin`. If that happens, set `appendWindowsPath = false` in `/etc/wsl.conf`.
+
+To go back to the isolated sandbox, tear down and reinstall (see Reinstall).
 
 ## Troubleshooting
 
@@ -372,6 +390,7 @@ Maude Light could be ported to macOS using [Lima](https://github.com/lima-vm/lim
 | `setup-wsl-maude.ps1` | Two phases (PowerShell) | `-Admin` (elevated): WSL install, distro import, root bootstrap. *(no flag, unelevated)*: host folder, WT profile, shortcut, user bootstrap |
 | `teardown-wsl-maude.ps1` | Admin (PowerShell) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen |
+| `dev-mode.sh` | root (inside WSL) | Opt-in dev mode: standard WSL behavior + sudo with password; removes sandbox isolation |
 | `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Claude Code config |
 | `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code; warns on suspicious repos |
 | `maude.py` | maude user (inside WSL) | Textual TUI: project launcher, model picker, Web UI toggle; self-updates daily at noon |
