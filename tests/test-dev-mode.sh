@@ -9,6 +9,7 @@ bash -n "${SCRIPT_DIR}/../light/dev-mode.sh"
 
 d=$(mktemp -d)
 mkdir -p "$d/etc/sudoers.d" "$d/bin"
+touch "$d/etc/sudoers.d/maude-reboot"
 printf '[user]\ndefault=tester\n' > "$d/etc/wsl.conf"
 # stubs: pretend to be root, user exists, sudoers file is valid
 printf '#!/bin/sh\n[ "$1" = "-u" ] && echo 0\nexit 0\n' > "$d/bin/id"
@@ -22,6 +23,7 @@ cp "$d/etc/wsl.conf" "$d/wsl.conf.orig"
 # no password and passwd fails: nothing changes
 rc=0; PW_STATE="NP" PW_RC=1 PATH="$d/bin:$PATH" bash "$d/dev-mode.sh" >/dev/null 2>&1 || rc=$?
 assert_eq "passwd failure exits non-zero" "1" "$rc"
+assert_eq "reboot rule kept on failure" "yes" "$([ -e "$d/etc/sudoers.d/maude-reboot" ] && echo yes || echo no)"
 assert_eq "no sudoers file on failure" "no" "$([ -e "$d/etc/sudoers.d/maude-dev" ] && echo yes || echo no)"
 assert_eq "wsl.conf unchanged on failure" "$(cat "$d/wsl.conf.orig")" "$(cat "$d/etc/wsl.conf")"
 
@@ -35,6 +37,7 @@ assert_contains "appendWindowsPath" "appendWindowsPath = true" "$conf"
 assert_contains "automount on"      "[automount]"$'\n'"enabled = true" "$conf"
 assert_contains "interop on"        "[interop]"$'\n'"enabled = true" "$conf"
 assert_eq "sudoers line" "tester ALL=(ALL) ALL" "$(cat "$d/etc/sudoers.d/maude-dev")"
+assert_eq "NOPASSWD reboot rule removed" "no" "$([ -e "$d/etc/sudoers.d/maude-reboot" ] && echo yes || echo no)"
 
 # no password and passwd succeeds
 rm -f "$d/etc/sudoers.d/maude-dev"

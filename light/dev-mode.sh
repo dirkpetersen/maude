@@ -30,6 +30,8 @@ trap 'rm -f "$tmp"' EXIT
 printf '%s ALL=(ALL) ALL\n' "$USERNAME" > "$tmp"
 visudo -cf "$tmp" >/dev/null
 install -m 0440 "$tmp" /etc/sudoers.d/maude-dev
+# Every sudo must ask for the password, so drop the install-time NOPASSWD reboot rule.
+rm -f /etc/sudoers.d/maude-reboot
 
 cat > /etc/wsl.conf << WSLEOF
 [boot]

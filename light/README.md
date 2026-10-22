@@ -237,7 +237,7 @@ wsl -d Maude -u root -e bash -c 'V=0.2.22; . /etc/os-release; T=ubuntu-${VERSION
 
 ### Dev mode (remove sandbox isolation)
 
-Dev mode sets Maude back to standard WSL behavior. Windows drives are mounted at `/mnt/c` and so on, Windows programs can run, the Windows PATH is added to PATH, and the Maude user gets full `sudo`. `sudo` asks for the user's password. The first time you run the script, it asks you to set that password.
+Dev mode sets Maude back to standard WSL behavior. Windows drives are mounted at `/mnt/c` and so on, Windows programs can run, the Windows PATH is added to PATH, and the Maude user gets full `sudo`. Every `sudo` command asks for the user's password, including `reboot` and `shutdown`. The first time you run the script, it asks you to set that password.
 
 **Warning:** Claude Code runs in bypassPermissions mode in Maude. In dev mode the AI agent can read, change and delete files on all your Windows drives. The sudo password does not stop the agent: it runs as the same Linux user, so it can capture the password or use `sudo` right after you did. Treat dev mode as giving the agent root.
 
