@@ -253,6 +253,22 @@ With the Windows PATH added, Windows commands without a file extension (for exam
 
 To go back to the isolated sandbox, tear down and reinstall (see Reinstall).
 
+### Second user (your own account in the same distro)
+
+This adds a second Linux user (for example `dp`) to the same Maude distro, and a second Windows Terminal profile "Ubuntu (26.04)" with the Ubuntu logo and colors that opens the distro as that user. The Maude profile and the Maude user do not change. A second user costs no extra memory, because it is the same distro.
+
+The new user gets `sudo`, and `sudo` asks for the user's password. The first time you run the script, it asks you to set that password. Your local Windows drives are mounted at `/mnt/c`, `/mnt/d` and so on for this user only. The `maude` user (the AI agent) gets "permission denied" on these drives. Windows programs still cannot run, because interop stays off for the whole distro.
+
+Do not type this user's password in a Maude terminal. The agent runs there and can see what you type.
+
+Run this from PowerShell (no admin needed). Use `-UserName` to choose another name. The default is your Windows user name.
+
+```powershell
+curl.exe --ssl-no-revoke -fSLo $env:TEMP\add-user.ps1 https://raw.githubusercontent.com/dirkpetersen/maude/main/light/add-user.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\add-user.ps1 -UserName dp
+```
+
+Then open the new profile from the Windows Terminal dropdown, or run `wsl -d Maude -u dp --cd ~`. The new user has no Claude Code setup. Install what you need with `sudo`.
+
 ## Troubleshooting
 
 ### `The argument '...setup-wsl-maude.ps1' to the -File parameter does not exist`
