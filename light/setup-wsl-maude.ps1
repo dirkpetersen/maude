@@ -1137,6 +1137,8 @@ if ($wtSettingsPath -and (Test-Path -LiteralPath $wtSettingsPath)) {
                         $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
                     }
                     $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'hidden' -NotePropertyValue $false -Force
+                    # Always start as the sandbox user, even if add-user.sh made another user the WSL default.
+                    $wtJson.profiles.list[$i] | Add-Member -NotePropertyName 'commandline' -NotePropertyValue "wsl.exe -d $DistroName -u $DefaultUser --cd ~" -Force
                     $hasAutoProfile = $true
                 } else {
                     continue
@@ -1161,6 +1163,7 @@ if ($wtSettingsPath -and (Test-Path -LiteralPath $wtSettingsPath)) {
             name   = $DistroName
             source = "Windows.Terminal.Wsl"
             hidden = $false
+            commandline = "wsl.exe -d $DistroName -u $DefaultUser --cd ~"
         }
         if ($wtIconPath) {
             $autoProfile | Add-Member -NotePropertyName 'icon' -NotePropertyValue $wtIconPath -Force
@@ -1210,9 +1213,9 @@ if ($wtExe) {
     $sc = $ws.CreateShortcut($shortcutFile)
     $sc.TargetPath = $wtExe
     if ($distroGuid) {
-        $sc.Arguments = "new-tab -- C:\Windows\System32\wsl.exe --distribution-id $distroGuid"
+        $sc.Arguments = "new-tab -- C:\Windows\System32\wsl.exe --distribution-id $distroGuid -u $DefaultUser"
     } else {
-        $sc.Arguments = "new-tab -- wsl -d $DistroName"
+        $sc.Arguments = "new-tab -- wsl -d $DistroName -u $DefaultUser"
     }
     $sc.Description = "Open $DistroName in Windows Terminal"
     if (Test-Path -LiteralPath $icoFile) { $sc.IconLocation = "$icoFile,0" }

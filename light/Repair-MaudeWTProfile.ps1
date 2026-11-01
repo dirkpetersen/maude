@@ -74,7 +74,7 @@ foreach ($p in $json.profiles.list) {
 $maudeProfile = [PSCustomObject][ordered]@{
     guid        = $fixedGuid
     name        = $DistroName
-    commandline = "wsl.exe -d $DistroName --cd ~"
+    commandline = "wsl.exe -d $DistroName -u maude --cd ~"
     hidden      = $false
 }
 if ($icon) { $maudeProfile | Add-Member -NotePropertyName icon -NotePropertyValue ($icon -replace '\\','/') -Force }
