@@ -66,7 +66,7 @@ foreach ($p in $json.profiles.list) {
     $nm  = if ($p.PSObject.Properties['name'])        { $p.name }        else { '' }
     $cmd = if ($p.PSObject.Properties['commandline']) { $p.commandline } else { '' }
     $gid = if ($p.PSObject.Properties['guid'])        { $p.guid }        else { '' }
-    if ($nm -eq $DistroName -and ($cmd -eq '' -or $gid -eq $fixedGuid)) { $removed++; continue }
+    if ($nm -eq $DistroName -and ($cmd -eq '' -or $gid -eq $fixedGuid -or $p.PSObject.Properties['source'])) { $removed++; continue }
     $kept += $p
 }
 
