@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **All code and documentation in this repository must be written by background Sonnet agents and all code changes must be reviewed by a background Fable agent.** This applies every session, not just when the user restates it — including when the orchestrating/main-loop session is itself already running Sonnet.
 
 - **Authoring**: For any non-trivial code or doc change (new/edited `.sh`, `.py`, `.ps1`, `.md`, workflow YAML, etc.), delegate the actual writing to a background agent pinned to Sonnet: `Agent({ description: ..., prompt: <full context — files, line numbers, what to change and why>, model: "sonnet", run_in_background: true })`. Brief it like a colleague with no context on the conversation (per the Agent tool's own guidance) — don't just say "fix the bug," give it the file paths, the root cause, and the specific change.
-- **Reviewing**: Before any code change (not docs-only) is presented as complete or committed, run it through a separate background agent pinned to Fable for review: `Agent({ description: ..., prompt: <diff or files to review, what to check for>, model: "fable", run_in_background: true })`. The review agent must be a distinct spawn from the authoring agent — an agent must never review its own work — and should look for correctness bugs, security issues, and unrequested scope creep, not just style.
+- **Reviewing**: Before any code change (not docs-only) is presented as complete or committed, run it through a separate background agent pinned to the latest Fable (currently 5.2) for review: `Agent({ description: ..., prompt: <diff or files to review, what to check for>, subagent_type: "fable-reviewer", run_in_background: true })`. The `fable-reviewer` agent (`.claude/agents/fable-reviewer.md`) sets `model: claude-fable-5-2`; the plain `model: "fable"` alias resolves to the older 5.1. When a newer Fable ships, change the model ID in that one file. The review agent must be a distinct spawn from the authoring agent — an agent must never review its own work — and should look for correctness bugs, security issues, and unrequested scope creep, not just style.
 - **Committing & pushing (standing authorization)**: Once the Fable review comes back clean — no unresolved findings — **automatically commit the change and push it to `origin/main`**. Do NOT wait for a separate "commit" or "push" confirmation; this instruction IS that standing authorization for this repo. If the Fable review surfaces real findings, fix them first (Sonnet author → a fresh Fable re-review), and only commit+push once a review is clean. Follow the repo's usual commit conventions (clear message, `Co-Authored-By` trailer). Direct-to-`main` matches this repo's established practice.
 - Do not skip the Fable review step to save time, especially on anything user-facing or production-bound (`light/`). This is the point of the policy, not an optional nicety. The Fable review is the gate: passing it is what authorizes the auto commit+push.
 - Use foreground-vs-background judgment as usual: prefer backgrounding both authoring and review agents unless the very next step in the conversation genuinely depends on the result.
@@ -62,12 +62,12 @@ Windows host
     +-- %LOCALAPPDATA%\Maude\Data\Maude\              <- shared folder (default)
     |       +-- Projects/       <- coding projects (directly used by WSL)
     |       +-- .claude/        <- Claude Code config (symlinked from WSL)
-    |       +-- .kanna/         <- kanna web UI data (symlinked from WSL)
+    |       +-- .kanna/         <- kanna web UI data (only .kanna/data is linked from WSL)
     |
     +-- WSL2: Maude (Ubuntu 26.04 default, 24.04 with -Noble)
           +-- ~/Maude/          <- drvfs mount of shared folder
           +-- ~/.claude         -> symlink to ~/Maude/.claude
-          +-- ~/.kanna          -> symlink to ~/Maude/.kanna
+          +-- ~/.kanna          is a local dir; ~/.kanna/data -> ~/Maude/.kanna/data (kanna needs a local unix socket)
           +-- ~/bin/            <- user scripts (front of PATH)
           +-- ~/.local/bin/     <- tool binaries (end of PATH)
 

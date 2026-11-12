@@ -141,8 +141,8 @@ MAUDE_BIN_URL="$GH_RAW/maude"
 MAUDE_LIB_DIR="$HOME/.local/lib/maude"
 
 # Pin: keep in sync with light/maude-bootstrap.sh's kanna-code install line.
-# 0.88.0+ needs a unix socket in ~/.kanna, which is on the drvfs host share and cannot hold sockets -> "already starting". Stay on 0.77.1.
-KANNA_PKG="kanna-code@0.77.1"
+# 0.78+ needs a unix socket in ~/.kanna, so ~/.kanna must be local; only ~/.kanna/data is on the drvfs share (see ensure_kanna_layout).
+KANNA_PKG="kanna-code@0.88.0"
 
 # Inline minimal fallback used if the lib download fails. Mirrors
 # ensure-tools.sh so node/python/etc. still get linked when offline.
@@ -551,6 +551,7 @@ update_all() {
     . "$MAUDE_LIB_DIR/gemini.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/kanna.sh" 2>/dev/null || true
+    declare -F ensure_kanna_layout >/dev/null && ensure_kanna_layout
     # llm-mode.sh must load before the per-tool reviewer libs (shared helpers).
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/llm-mode.sh" 2>/dev/null || true
@@ -962,7 +963,6 @@ launch_web() {
     fi
 
     # kanna crashes if ~/.kanna is missing — guarantee the dir + seed defaults.
-    mkdir -p "$HOME/.kanna/data" 2>/dev/null || true
     declare -F ensure_kanna_ready >/dev/null && ensure_kanna_ready
 
     echo -e "${GREEN}Launching kanna web UI...${NC}"

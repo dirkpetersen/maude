@@ -58,7 +58,7 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "Installing kanna-code..."
 # pinned: keep in sync with light/maude KANNA_PKG
-bun install -g kanna-code@0.77.1
+bun install -g kanna-code@0.88.0
 declare -F ensure_tool_symlinks >/dev/null && ensure_tool_symlinks
 echo "Tool symlinks updated in ~/.local/bin"
 
@@ -78,19 +78,8 @@ else
     echo "WARNING: ~/Maude/.claude not found, using local ~/.claude"
 fi
 
-# ── Symlink ~/.kanna → ~/Maude/.kanna (kanna data stored on host) ────
-if [[ -d "$HOME/Maude/.kanna" ]]; then
-    if [[ -d "$HOME/.kanna" ]] && [[ ! -L "$HOME/.kanna" ]]; then
-        rm -rf "$HOME/.kanna"
-    fi
-    if [[ ! -L "$HOME/.kanna" ]]; then
-        ln -sfn "$HOME/Maude/.kanna" "$HOME/.kanna"
-        echo "~/.kanna symlinked to ~/Maude/.kanna (host-persistent)."
-    fi
-else
-    mkdir -p "$HOME/.kanna"
-    echo "WARNING: ~/Maude/.kanna not found, using local ~/.kanna"
-fi
+# ── ~/.kanna is a local dir; only ~/.kanna/data links to the host share ──
+declare -F ensure_kanna_layout >/dev/null && ensure_kanna_layout || true
 # Best-effort: never let a fragile/read-only drvfs mount abort the rest of
 # bootstrap under set -e (statusline install, Claude settings, yolo marker...).
 declare -F ensure_kanna_ready >/dev/null && { ensure_kanna_ready || true; }

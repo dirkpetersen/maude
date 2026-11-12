@@ -22,12 +22,12 @@ Windows host
     +-- %LOCALAPPDATA%\Maude\Data\Maude\          <- shared folder (default)
     |       +-- Projects/     <- coding projects (directly used by WSL)
     |       +-- .claude/      <- Claude Code config (symlinked from WSL home)
-    |       +-- .kanna/       <- kanna web UI data (symlinked from WSL home)
+    |       +-- .kanna/       <- kanna web UI data (only .kanna/data is linked from WSL home)
     |
     +-- WSL2 distro: "Maude" (Ubuntu 26.04 default, 24.04 with -Noble flag)
           +-- ~/Maude/        <- drvfs mount of shared folder
           +-- ~/.claude       -> symlink to ~/Maude/.claude
-          +-- ~/.kanna        -> symlink to ~/Maude/.kanna
+          +-- ~/.kanna        local dir; ~/.kanna/data -> ~/Maude/.kanna/data
           +-- ~/bin/          <- user scripts (front of PATH)
           +-- ~/.local/bin/   <- tool binaries (end of PATH)
 
@@ -133,7 +133,7 @@ wsl -d Maude -- bash -c "echo '$encoded' | base64 -d | bash"
 Three separate download paths fetch files from `https://raw.githubusercontent.com/dirkpetersen/maude/$Release` — know which one to extend when adding a new file:
 
 1. **Installer (`setup-wsl-maude.ps1`)** downloads exactly 8 files into `$env:TEMP\maude-setup` with a unix-timestamp cache-bust: `light/root-bootstrap.sh`, `light/maude-bootstrap.sh`, `light/maude`, `light/maude-shell.sh`, `light/welcome.sh`, `light/welcome-stub.sh`, `maude.png`, `packages/ubuntu-packages.yaml`. Checksums verified for pinned releases. Both welcome files are piped in: `light/welcome.sh` as `/tmp/maude-welcome.sh` (used to seed the user-owned `~/.local/lib/maude/welcome.sh`) and `light/welcome-stub.sh` as `/tmp/maude-welcome-stub.sh` (installed to `/etc/profile.d/maude-welcome.sh`) — piping the stub keeps it offline-safe and SHA-verified for pinned releases (it's root-owned code sourced by every login shell), with `root-bootstrap.sh`'s direct `curl` of `$GH_RAW/welcome-stub.sh` as the fallback for the non-piped path.
-2. **Bootstrap (`maude-bootstrap.sh`)** re-fetches the eight `lib/*.sh` helpers (`ensure-tools.sh`, `refresh-md.sh`, `update-skills.sh`, `gemini.sh`, `llm-mode.sh`, `codex.sh`, `opencode.sh`, `grok.sh`) into `~/.local/lib/maude/` on every bootstrap run, then sources them (`llm-mode.sh` before the per-tool reviewer libs). Bootstrap also calls `refresh_claude_md` (downloads `MAUDE.md` + the one-time `CLAUDE.template.md`), `update_gemini` (downloads the repo-root `.claude/skills/gemini/SKILL.md` into `~/.claude/skills/gemini`), and then `update_codex`/`update_opencode`/`update_grok` right below it (warn-and-continue).
+2. **Bootstrap (`maude-bootstrap.sh`)** re-fetches the nine `lib/*.sh` helpers (`ensure-tools.sh`, `refresh-md.sh`, `update-skills.sh`, `gemini.sh`, `llm-mode.sh`, `codex.sh`, `opencode.sh`, `grok.sh`, `kanna.sh`) into `~/.local/lib/maude/` on every bootstrap run, then sources them (`llm-mode.sh` before the per-tool reviewer libs). Bootstrap also calls `refresh_claude_md` (downloads `MAUDE.md` + the one-time `CLAUDE.template.md`), `update_gemini` (downloads the repo-root `.claude/skills/gemini/SKILL.md` into `~/.claude/skills/gemini`), and then `update_codex`/`update_opencode`/`update_grok` right below it (warn-and-continue).
 3. **CLI runtime (`maude` via `lib/refresh-md.sh`)** refreshes `MAUDE.md` at most once per day (stamp: `~/.local/share/maude/.last-md-refresh`), validates the download (≥200 bytes, starts with `# Maude Sandbox`), caches to `~/.local/share/maude/MAUDE.md`, falls through to the cache on failure.
 
 When adding a new file under `light/`, decide which stage owns it: a new top-level script goes in the installer's `$filesToDownload`; a new `lib/*.sh` helper goes in the `for _lib in` loop in `maude-bootstrap.sh`; user-facing markdown that should refresh daily belongs alongside `MAUDE.md` in `refresh-md.sh`.
@@ -162,7 +162,7 @@ The rest of the command runs sequentially, after the join, in this order: shell 
 `root-bootstrap.sh` writes `/etc/wsl.conf` (`automount=false`, default user, `interop=false`) and `/etc/fstab`. These only take effect after `wsl --terminate`. The setup script terminates WSL after root-bootstrap, then runs `maude-bootstrap.sh` as the maude user in the restarted distro.
 
 ### Host-persistent paths
-`~/.claude` and `~/.kanna` are symlinks to `~/Maude/.claude` and `~/Maude/.kanna`. These survive WSL distro teardown/reinstall because they live on the Windows drvfs mount. Any file that must survive reinstall must live there.
+`~/.claude` is a symlink to `~/Maude/.claude`. `~/.claude` and `~/.kanna/data` survive teardown/reinstall because they live on the drvfs mount. `~/.kanna` is a real local directory (kanna >= 0.78 needs a unix socket there, which drvfs cannot hold); only `~/.kanna/data` is a symlink to `~/Maude/.kanna/data`. `ensure_kanna_layout` (lib/kanna.sh) migrates old installs. Troubleshooting: "kanna is already starting" means kanna >= 0.78 with `~/.kanna` on drvfs; the layout migration fixes it. The `~/.kanna` root files (keybindings.json, llm-provider.json, cloud.json, pi sessions, machine-name) are local and do not survive reinstall. Any file that must survive reinstall must live under ~/Maude.
 
 ### Sandbox docs lifecycle
 
@@ -226,7 +226,7 @@ Full-screen Textual TUI — default welcome experience for every new terminal se
 - **Open project**: `app.suspend()` → `claude <model> --continue` (fallback: `claude <model> --resume` only if the project has saved sessions, then `claude <model>`, each if the previous exits non-zero) → resume TUI; cursor restored to the project just opened. The sidebar **Clear context (no history)** checkbox (`#fresh-context`, below the model picker) sets `fresh=True`, which makes `open_project()` skip `--continue` and start Claude with no prior history
 - **Delete**: confirm modal → soft-delete to `Projects/.deleted/` (not permanent)
 - **New project**: modal, spaces auto-replaced with hyphens, git init
-- **Web UI**: launches kanna with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so the wrapper sets auth env vars (Foundry/Azure/Bedrock/direct). Click again to stop — `SIGTERM` → `SIGKILL` + `fuser -k 3210/tcp`. Refuses to launch without credentials; pops `CredsEntryScreen` as recovery
+- **Web UI**: before launch, `_kanna_fix_version` (lib/kanna.sh) reinstalls kanna when the installed version differs from the pin (the TUI suspends so the user sees the 2-minute wait). Launches kanna with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so the wrapper sets auth env vars (Foundry/Azure/Bedrock/direct). Click again to stop — `SIGTERM` → `SIGKILL` + `fuser -k 3210/tcp`. Refuses to launch without credentials; pops `CredsEntryScreen` as recovery
 - **To Github**: dual-mode push/detach for the selected project. If `origin` already points to GitHub, opens `DetachFromGithubScreen` which removes the local `origin` remote only — it explicitly does NOT delete the GitHub-side repo (leaves it orphaned; must be deleted manually on github.com). Otherwise opens `PushToGithubScreen`, which: (1) auto-seeds a minimal `README.md` (`# {repo}\n`) if none exists in any case variant, (2) forces `GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new'` so a misconfigured SSH state errors in 5-10s instead of blocking on a passphrase prompt, (3) short-circuits with a clear error and auto-pops `SSHKeyUnlockScreen` if the SSH key has a passphrase but no agent has it loaded, (4) runs `gh repo create --push` for new repos or `git push -u origin HEAD` for existing ones, creating an initial commit first if the project has no HEAD
 - **SSH key unlock at TUI mount**: on mount (and again after `CredsEntryScreen` closes), if `~/.ssh/id_ed25519` exists, an ssh-agent is reachable (`ensure_ssh_agent()` will spin one up), and the key isn't already loaded, the TUI auto-pops `SSHKeyUnlockScreen` for the passphrase — or silently runs `ssh-add` with an empty passphrase if the key is unencrypted. This is the deliberate counterpart to the Setup Git wizard's keychain block (which omits a key file on purpose). If you ever "fix" the wizard by passing the key to `keychain`, you'll re-introduce an early `.bashrc` prompt before the TUI is visible — leave the unlock to the TUI
 - **Setup Git(hub)**: `GitSetupWizard` 4-step modal — (1) GitHub username → `api.github.com/users/<name>` lookup pre-fills name/email (email falls back to `<id>+<login>@users.noreply.github.com` when hidden); (2) ed25519 SSH key detect/generate + verify via `ssh -T git@github.com` (manual paste of the pubkey to github.com); (3) `gh auth login --hostname github.com --git-protocol ssh --web --scopes write:gpg_key`, then silently generates an ed25519+cv25519 GPG signing key (no passphrase) and uploads it via `gh gpg-key add` — no separate GPG step is shown to the user; (4) `git config user.name`/`user.email`/`init.defaultBranch=main` (plus `user.signingkey` + `commit.gpgsign=true` when GPG was provisioned), `mom install -y keychain`, and a sentinel-bracketed (`# >>> Maude keychain BEGIN`/`END`) keychain block appended to `~/.bashrc`. The keychain block intentionally does NOT pass a key file — `SSHKeyUnlockScreen` handles the passphrase prompt at TUI startup instead, so `.bashrc` doesn't block on a prompt before the TUI appears
@@ -253,6 +253,6 @@ Kanna is launched with `CLAUDE_EXECUTABLE=$HOME/bin/claude` so it shells out to 
 | Path (inside WSL) | Purpose |
 |-------------------|---------|
 | `~/Maude/.claude/` | All Claude Code config, credentials, CLAUDE.md, yolo-mode marker |
-| `~/Maude/.kanna/` | kanna web UI data |
+| `~/Maude/.kanna/data/` | kanna web UI data (sessions, chats) |
 | `~/Maude/Projects/` | User's coding projects |
 | `~/Maude/DANGER-ZONE.txt` | Safety warning about the AI's unrestricted access to this folder; auto-restored on startup if deleted |

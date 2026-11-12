@@ -217,7 +217,7 @@ Example workflow:
 maude web
 ```
 
-This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the link in the terminal to open it in your Windows browser. Kanna data is stored in `~/Maude/.kanna` (host-persistent via the shared mount).
+This launches kanna and prints a URL (`http://127.0.0.1:3210`). Ctrl+click the link in the terminal to open it in your Windows browser. Kanna data is stored in `~/Maude/.kanna/data` (host-persistent via the shared mount).
 
 ### Shared folder
 
@@ -362,7 +362,7 @@ Windows host
   │           └── Maude\                         ← shared folder (default, has icon)
   │                 ├── Projects/                ← coding projects (directly used by WSL)
   │                 ├── .claude/                 ← Claude Code config (symlinked from WSL)
-  │                 └── .kanna/                  ← kanna web UI data (symlinked from WSL)
+  │                 └── .kanna/                  ← kanna web UI data (only data/ is linked from WSL)
   │
   └── WSL2: Maude (Ubuntu 26.04, or 24.04 with -Noble)
         ├── ~/Maude/           ← drvfs mount of the shared folder
@@ -370,7 +370,7 @@ Windows host
         │     ├── .claude/     ← Claude Code config + skills
         │     └── .kanna/      ← kanna web UI data
         ├── ~/.claude          → symlink to ~/Maude/.claude
-        ├── ~/.kanna           → symlink to ~/Maude/.kanna
+        ├── ~/.kanna           local dir; ~/.kanna/data → ~/Maude/.kanna/data
         ├── ~/bin/             ← user scripts (front of PATH)
         └── ~/.local/bin/      ← tool binaries (end of PATH)
 
