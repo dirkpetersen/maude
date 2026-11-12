@@ -8,9 +8,9 @@ suite_header "perplexity connector sync"
 MAUDE_PY="${SCRIPT_DIR}/../light/maude.py"
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
-mkdir -p "$d/bin" "$d/home"
+mkdir -p "$d/bin" "$d/home/.local/bin"
 # Fake claude: logs args; `mcp get` result is driven by FAKE_GET (missing|nc|ok).
-cat > "$d/bin/claude" <<'FAKE'
+cat > "$d/home/.local/bin/claude" <<'FAKE'
 #!/bin/sh
 echo "$*" >> "$CALLS"
 if [ "$1 $2" = "mcp get" ]; then
@@ -22,6 +22,9 @@ if [ "$1 $2" = "mcp get" ]; then
 fi
 exit 0
 FAKE
+chmod +x "$d/home/.local/bin/claude"
+# Decoy wrapper on PATH: must never be used for `mcp` (the real wrapper breaks --transport).
+printf '#!/bin/sh\necho WRAPPER-USED >> "$CALLS"\nexit 1\n' > "$d/bin/claude"
 chmod +x "$d/bin/claude"
 
 # textual may be absent: pull only the needed names out of maude.py.

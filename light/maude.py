@@ -332,11 +332,16 @@ def _has_claude_sessions(path: Path) -> bool:
 
 def _claude_mcp(*args: str, capture: bool = False):
     """Run `claude mcp ...`. Capture mode is for status checks; otherwise the
-    child inherits the terminal so the user can follow the sign-in link."""
+    child inherits the terminal so the user can follow the sign-in link.
+
+    Uses the real Claude Code binary: the ~/bin/claude wrapper treats `mcp` as a
+    model/prompt word and injects --model, which breaks `mcp add --transport`."""
+    real = Path.home() / ".local" / "bin" / "claude"
+    exe = str(real) if os.access(real, os.X_OK) else "claude"
     if capture:
-        return subprocess.run(["claude", "mcp", *args], capture_output=True,
+        return subprocess.run([exe, "mcp", *args], capture_output=True,
                               text=True, timeout=60)
-    return subprocess.run(["claude", "mcp", *args], check=False)
+    return subprocess.run([exe, "mcp", *args], check=False)
 
 
 def sync_perplexity() -> None:
