@@ -89,7 +89,7 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     printf "    Share an image:  drop it into your Maude folder on Windows, then ask Claude\n"
     printf "                     to look at it (e.g. ~/Maude/Projects/<name>/screenshot.png)\n"
     printf "    Activate mic:    ${B}Win+H${N}  (Windows voice dictation)\n"
-    printf "    TUI auto-launch: untick ${B}Start TUI with Maude${N} in the sidebar to opt out\n"
+    printf "    TUI auto-launch: untick ${B}Autostart${N} in the sidebar to opt out\n"
     printf "\n"
     if [[ ! -f "$HOME/.aws/credentials" ]] && [[ ! -f "$HOME/.azure/clauderc" ]]; then
         printf "  ${Y}LLM service credentials not yet set up.${N}\n"

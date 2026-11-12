@@ -46,6 +46,9 @@ from textual.widgets import (
 PROJECTS_DIR = Path.home() / "Maude" / "Projects"
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
 DISABLE_FLAG   = Path.home() / ".maude-tui-disabled"
+PERPLEXITY_FLAG = Path.home() / ".maude-perplexity"
+PERPLEXITY_NAME = "perplexity-computer"
+PERPLEXITY_URL  = "https://www.perplexity.ai/rest/computer/mcp"
 KANNA_CMD    = "kanna"
 KANNA_PORT   = 3210
 
@@ -327,6 +330,41 @@ def _has_claude_sessions(path: Path) -> bool:
         return False
 
 
+def _claude_mcp(*args: str, capture: bool = False):
+    """Run `claude mcp ...`. Capture mode is for status checks; otherwise the
+    child inherits the terminal so the user can follow the sign-in link."""
+    if capture:
+        return subprocess.run(["claude", "mcp", *args], capture_output=True,
+                              text=True, timeout=60)
+    return subprocess.run(["claude", "mcp", *args], check=False)
+
+
+def sync_perplexity() -> None:
+    """Make the user-scope Perplexity MCP connector match PERPLEXITY_FLAG.
+
+    Never raises: the project must open even if this fails.
+    """
+    try:
+        want = PERPLEXITY_FLAG.exists()
+        r = _claude_mcp("get", PERPLEXITY_NAME, capture=True)
+        exists = r.returncode == 0
+        connected = exists and "Connected" in (r.stdout or "")
+        if want and not connected:
+            if not exists:
+                print("Setting up the Perplexity connector...")
+                _claude_mcp("add", "--transport", "http", "--scope", "user",
+                            PERPLEXITY_NAME, PERPLEXITY_URL)
+            print("Sign in to Perplexity if asked...")
+            _claude_mcp("login", PERPLEXITY_NAME)
+        elif not want and exists:
+            print("Removing the Perplexity connector...")
+            _claude_mcp("remove", "--scope", "user", PERPLEXITY_NAME)
+    except KeyboardInterrupt:
+        print("Perplexity sign-in skipped.")
+    except Exception as e:
+        print(f"Warning: Perplexity connector step failed ({e}); continuing.")
+
+
 def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None:
     """Launch Claude Code for a project.
 
@@ -338,6 +376,7 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None
     starts with no history.
     """
     os.chdir(project_path)
+    sync_perplexity()
     if fresh:
         subprocess.run(["claude", model], check=False)
         return
@@ -2675,13 +2714,22 @@ class MaudeApp(App):
         margin-bottom: 1;
     }
 
-    #autostart-label {
+    #opts-row {
+        height: auto;
+    }
+
+    .opt-col {
+        width: 1fr;
+        height: auto;
+    }
+
+    #autostart-label, #perplexity-label {
         color: #c09898;
         margin-top: 0;
         margin-bottom: 0;
     }
 
-    #autostart {
+    #perplexity, #autostart {
         margin-top: 0;
         margin-bottom: 0;
     }
@@ -3219,8 +3267,13 @@ class MaudeApp(App):
                 yield Label("Clear context (no history)", id="fresh-label")
                 yield Checkbox("", value=False, id="fresh-context")
                 yield Static("─" * 28, id="divider3")
-                yield Label("Start TUI with Maude", id="autostart-label")
-                yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
+                with Horizontal(id="opts-row"):
+                    with Vertical(classes="opt-col"):
+                        yield Label("Autostart", id="autostart-label")
+                        yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
+                    with Vertical(classes="opt-col"):
+                        yield Label("Perplexity", id="perplexity-label")
+                        yield Checkbox("", value=PERPLEXITY_FLAG.exists(), id="perplexity")
                 yield Static(
                     Text.assemble(
                         ("  maude ", "#505050"),
@@ -3531,6 +3584,18 @@ class MaudeApp(App):
         else:
             DISABLE_FLAG.touch()
             self.notify("TUI auto-start disabled (text banner instead)")
+
+    @on(Checkbox.Changed, "#perplexity")
+    def perplexity_toggled(self, event: Checkbox.Changed) -> None:
+        try:
+            if event.value:
+                PERPLEXITY_FLAG.touch()
+                self.notify("Perplexity connector will be set up when you open a project")
+            else:
+                PERPLEXITY_FLAG.unlink(missing_ok=True)
+                self.notify("Perplexity connector will be removed when you open a project")
+        except OSError as e:
+            self.notify(f"Could not save Perplexity setting: {e}", severity="error")
 
     @on(RadioSet.Changed, "#model-select")
     def model_changed(self, event: RadioSet.Changed) -> None:

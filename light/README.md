@@ -153,7 +153,7 @@ After install, open the **Maude** profile in Windows Terminal (or the desktop sh
   mom install <pkg>    Install system packages (no sudo needed)
 ```
 
-Type `menu` at any shell prompt to reopen the TUI. To opt out of TUI auto-launch, uncheck the *Start TUI with Maude* checkbox in the sidebar.
+Type `menu` at any shell prompt to reopen the TUI. To opt out of TUI auto-launch, uncheck the *Autostart* checkbox in the sidebar.
 
 ### Interactive TUI (`maude tui`)
 
@@ -163,7 +163,8 @@ The TUI is a full-screen Textual interface that replaces the command-line workfl
 
 | Control | Description |
 |---------|-------------|
-| *Start TUI with Maude* checkbox | TUI auto-launch (default ON). Unchecking creates `~/.maude-tui-disabled` so future logins drop straight to the shell with the text banner. |
+| *Autostart* checkbox | TUI auto-launch (default ON). Unchecking creates `~/.maude-tui-disabled` so future logins drop straight to the shell with the text banner. |
+| *Perplexity* checkbox | Next to *Autostart*, off by default. Ticking creates `~/.maude-perplexity`. When you open a project from the TUI, Maude then adds the Perplexity Computer connector (`perplexity-computer`, `https://www.perplexity.ai/rest/computer/mcp`) and runs `claude mcp login` so you can sign in. Unticking removes the connector the next time you open a project (also if you added it yourself). It is a user-scope MCP entry in `~/.claude.json`. |
 | *Claude model* radio buttons | Choose which Claude model opens for your projects: `opus` (default), `fable`, `sonnet`, or `haiku`. The selection is saved to `~/.maude-model` and persists across sessions. |
 
 **Project list (right panel)**
@@ -328,7 +329,7 @@ The TUI auto-launches by default; if it isn't, check whether the opt-out flag ex
 ls -la ~/.maude-tui-disabled
 ```
 
-Delete it (or untick the **Start TUI with Maude** sidebar checkbox) to re-enable auto-launch. Note: the legacy `~/.maude-tui-autostart` flag is no longer consulted — only `~/.maude-tui-disabled` matters now.
+Delete it (or untick the **Autostart** sidebar checkbox) to re-enable auto-launch. Note: the legacy `~/.maude-tui-autostart` flag is no longer consulted — only `~/.maude-tui-disabled` matters now.
 
 ### Web UI button doesn't start kanna
 
