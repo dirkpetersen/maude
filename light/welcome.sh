@@ -3,8 +3,8 @@
 # 'maude update' -- sourced by login shells. Bootstraps keychain, then either
 # auto-launches the TUI or prints the static welcome banner.
 
-# Only for the sandbox user (wsl.conf [user] default=), not other accounts such as one made by add-user.sh.
-[ "$(id -un)" = "$(sed -n 's/^default *= *//p' /etc/wsl.conf 2>/dev/null | head -n 1)" ] || return 0
+# Only for the sandbox user (the one with the ~/Maude shared mount), not other accounts such as one made by add-user.sh.
+[ -d "$HOME/Maude" ] || return 0
 
 # ── Ensure DANGER-ZONE.txt is present on the shared mount ────────────
 if [[ -d "$HOME/Maude" ]] && [[ ! -f "$HOME/Maude/DANGER-ZONE.txt" ]]; then
