@@ -177,7 +177,7 @@ def kanna_env() -> dict[str, str]:
     kanna where it is. Falls back to plain `claude` on PATH if the
     wrapper isn't installed yet.
     """
-    extra: dict[str, str] = {}
+    extra: dict[str, str] = {"KANNA_DISABLE_SELF_UPDATE": "1"}  # pinned; self-update fails (no bun in its PATH)
     wrapper = Path.home() / "bin" / "claude"
     if wrapper.is_file() and os.access(wrapper, os.X_OK):
         extra["CLAUDE_EXECUTABLE"] = str(wrapper)

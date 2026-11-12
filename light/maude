@@ -141,7 +141,7 @@ MAUDE_BIN_URL="$GH_RAW/maude"
 MAUDE_LIB_DIR="$HOME/.local/lib/maude"
 
 # Pin: keep in sync with light/maude-bootstrap.sh's kanna-code install line.
-KANNA_PKG="kanna-code@0.77.1"
+KANNA_PKG="kanna-code@0.88.0"
 
 # Inline minimal fallback used if the lib download fails. Mirrors
 # ensure-tools.sh so node/python/etc. still get linked when offline.
@@ -967,7 +967,7 @@ launch_web() {
     echo -e "${GREEN}Launching kanna web UI...${NC}"
     echo -e "${YELLOW}Ctrl+click the URL below to open in your Windows browser${NC}"
     echo ""
-    kanna --no-open
+    KANNA_DISABLE_SELF_UPDATE=1 kanna --no-open
 }
 
 # ── Main ──────────────────────────────────────────────────────────────
