@@ -32,21 +32,21 @@ cat > "$d/run.py" <<'PY'
 import ast, os, subprocess, sys
 from pathlib import Path
 src = open(sys.argv[1]).read()
-want = {"PERPLEXITY_FLAG", "PERPLEXITY_NAME", "PERPLEXITY_URL", "_claude_mcp", "sync_perplexity"}
+want = {"PERPLEXITY_FLAG", "PERPLEXITY_NAME", "PERPLEXITY_URL", "_claude_mcp", "sync_perplexity", "remove_perplexity"}
 ns = {"os": os, "subprocess": subprocess, "Path": Path}
 for n in ast.parse(src).body:
     names = {t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)} | {getattr(n, "name", "")}
     if names & want:
         exec(compile(ast.Module([n], []), "maude.py", "exec"), ns)
-ns["sync_perplexity"]()
+ns[sys.argv[2] if len(sys.argv) > 2 else "sync_perplexity"]()
 PY
 
-run() { # flag(on|off) get-mode
+run() { # flag(on|off) get-mode [function]
   rm -f "$d/calls" "$d/home/.maude-perplexity"
   [ "$1" = on ] && : > "$d/home/.maude-perplexity"
   ( HOME="$d/home" PATH="$d/bin:$PATH" CALLS="$d/calls" FAKE_GET="$2" \
-    python3 -I "$d/run.py" "$MAUDE_PY" ) >/dev/null 2>&1 || true
-  tr '\n' ';' < "$d/calls"
+    python3 -I "$d/run.py" "$MAUDE_PY" ${3:-sync_perplexity} ) >/dev/null 2>&1 || true
+  { tr "\n" ";" < "$d/calls"; } 2>/dev/null || true
 }
 
 U=perplexity-computer
@@ -54,12 +54,13 @@ URL=https://www.perplexity.ai/rest/computer/mcp
 assert_eq "on, missing"        "mcp get $U;mcp add --transport http --scope user $U $URL;mcp login $U;" "$(run on missing)"
 assert_eq "on, not connected"  "mcp get $U;mcp login $U;" "$(run on nc)"
 assert_eq "on, connected"      "mcp get $U;" "$(run on ok)"
-assert_eq "off, exists"        "mcp get $U;mcp remove --scope user $U;" "$(run off ok)"
-assert_eq "off, missing"       "mcp get $U;" "$(run off missing)"
+assert_eq "off, exists: untouched" ""  "$(run off ok)"
+assert_eq "off, missing: untouched" "" "$(run off missing)"
+assert_eq "untick removes"     "mcp remove --scope user $U;" "$(run off ok remove_perplexity)"
 
 # Missing claude binary must not crash (PATH holds python3 only, via a symlink dir).
 mkdir -p "$d/pybin"; ln -s "$(command -v python3)" "$d/pybin/python3"
-( HOME="$d/home" PATH="$d/pybin" python3 -I "$d/run.py" "$MAUDE_PY" ) >/dev/null 2>&1 \
+( HOME="$d/home" PATH="$d/pybin" python3 -I "$d/run.py" "$MAUDE_PY" ${3:-sync_perplexity} ) >/dev/null 2>&1 \
   && ok=yes || ok=no
 assert_eq "no claude binary: no crash" "yes" "$ok"
 suite_summary

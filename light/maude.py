@@ -345,29 +345,37 @@ def _claude_mcp(*args: str, capture: bool = False):
 
 
 def sync_perplexity() -> None:
-    """Make the user-scope Perplexity MCP connector match PERPLEXITY_FLAG.
+    """Add + sign in to the user-scope Perplexity MCP connector when PERPLEXITY_FLAG is set.
 
-    Never raises: the project must open even if this fails.
+    Never raises: the project must open even if this fails. Removal happens only
+    when the box is unticked (remove_perplexity), so a connector the user added
+    by hand is not touched while the box has never been ticked.
     """
     try:
-        want = PERPLEXITY_FLAG.exists()
+        if not PERPLEXITY_FLAG.exists():
+            return
         r = _claude_mcp("get", PERPLEXITY_NAME, capture=True)
         exists = r.returncode == 0
         connected = exists and "Connected" in (r.stdout or "")
-        if want and not connected:
+        if not connected:
             if not exists:
                 print("Setting up the Perplexity connector...")
                 _claude_mcp("add", "--transport", "http", "--scope", "user",
                             PERPLEXITY_NAME, PERPLEXITY_URL)
             print("Sign in to Perplexity if asked...")
             _claude_mcp("login", PERPLEXITY_NAME)
-        elif not want and exists:
-            print("Removing the Perplexity connector...")
-            _claude_mcp("remove", "--scope", "user", PERPLEXITY_NAME)
     except KeyboardInterrupt:
         print("Perplexity sign-in skipped.")
     except Exception as e:
         print(f"Warning: Perplexity connector step failed ({e}); continuing.")
+
+
+def remove_perplexity() -> None:
+    """Remove the user-scope Perplexity connector (best effort, never raises)."""
+    try:
+        _claude_mcp("remove", "--scope", "user", PERPLEXITY_NAME, capture=True)
+    except Exception:
+        pass
 
 
 def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None:
@@ -3598,7 +3606,8 @@ class MaudeApp(App):
                 self.notify("Perplexity connector will be set up when you open a project")
             else:
                 PERPLEXITY_FLAG.unlink(missing_ok=True)
-                self.notify("Perplexity connector will be removed when you open a project")
+                remove_perplexity()
+                self.notify("Perplexity connector removed")
         except OSError as e:
             self.notify(f"Could not save Perplexity setting: {e}", severity="error")
 

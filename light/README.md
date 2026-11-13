@@ -164,7 +164,7 @@ The TUI is a full-screen Textual interface that replaces the command-line workfl
 | Control | Description |
 |---------|-------------|
 | *Autostart* checkbox | TUI auto-launch (default ON). Unchecking creates `~/.maude-tui-disabled` so future logins drop straight to the shell with the text banner. |
-| *Perplexity* checkbox | Next to *Autostart*, off by default. Ticking creates `~/.maude-perplexity`. When you open a project from the TUI, Maude then adds the Perplexity Computer connector (`perplexity-computer`, `https://www.perplexity.ai/rest/computer/mcp`) and runs `claude mcp login` so you can sign in. Unticking removes the connector the next time you open a project (also if you added it yourself). It is a user-scope MCP entry in `~/.claude.json`. |
+| *Perplexity* checkbox | Next to *Autostart*, off by default. Ticking creates `~/.maude-perplexity`. When you open a project from the TUI, Maude then adds the Perplexity Computer connector (`perplexity-computer`, `https://www.perplexity.ai/rest/computer/mcp`) and runs `claude mcp login` so you can sign in. Unticking removes the connector right away. While the box has never been ticked, Maude never touches a connector you added yourself. It is a user-scope MCP entry in `~/.claude.json`. |
 | *Claude model* radio buttons | Choose which Claude model opens for your projects: `opus` (default), `fable`, `sonnet`, or `haiku`. The selection is saved to `~/.maude-model` and persists across sessions. |
 
 **Project list (right panel)**
