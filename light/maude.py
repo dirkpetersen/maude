@@ -3492,7 +3492,7 @@ class MaudeApp(App):
             os.close(fd)
         btn = self.query_one("#btn-web", Button)
         btn.label = "Stop Web UI"
-        url = f"http://localhost:{KANNA_PORT}"
+        url = f"http://127.0.0.1:{KANNA_PORT}"
         label = Text("Web UI: ")
         label.append(url, style=f"link {url} #72c09a")
         label.append(" (Ctrl+Click)", style="#a09090")
