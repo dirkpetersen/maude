@@ -3470,10 +3470,10 @@ class MaudeApp(App):
         kill_port(KANNA_PORT)
         env = {**os.environ, **kanna_env()}
         # Send kanna's output to a temp log so we can surface errors if it
-        # dies on startup. Use process_group=0 (new pgroup, same session)
-        # so we can SIGTERM the whole tree on Stop without detaching kanna
-        # from the controlling tty (start_new_session can break some Node
-        # CLIs that expect a tty at startup).
+        # dies on startup. start_new_session detaches kanna from the TUI's
+        # controlling terminal: kanna 0.88 touches the tty, and as a background
+        # process group of that tty the kernel stopped it (state T, never
+        # listening). Its pgid equals its pid, so stop_kanna still kills the tree.
         fd, log_path = tempfile.mkstemp(prefix="maude-kanna-", suffix=".log")
         self._kanna_log = Path(log_path)
         try:
@@ -3481,7 +3481,7 @@ class MaudeApp(App):
                 [KANNA_CMD, "--no-open"], env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=fd, stderr=subprocess.STDOUT,
-                process_group=0,
+                start_new_session=True,
             )
         except FileNotFoundError as err:
             os.close(fd)
