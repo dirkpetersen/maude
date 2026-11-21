@@ -158,14 +158,27 @@ def run_windows(folder: str, model: str, banner: bool = True) -> int:
     if banner:
         print(BANNER.format(folder))
     model = model or windows_model(env["USERPROFILE"])
-    rc = subprocess.run(windows_cmd(claude, model, True), cwd=folder, check=False).returncode
+    rc = _run(windows_cmd(claude, model, True), cwd=folder)
     if rc:
-        rc = subprocess.run(windows_cmd(claude, model, False), cwd=folder, check=False).returncode
+        rc = _run(windows_cmd(claude, model, False), cwd=folder)
     return rc
+
+
+def _run(cmd: list[str], **kw) -> int:
+    """Run cmd and wait. Ctrl+C belongs to the child (Claude Code cancels a turn with it):
+    subprocess.run would kill the child on KeyboardInterrupt, so keep waiting instead."""
+    p = subprocess.Popen(cmd, **kw)
+    while True:
+        try:
+            return p.wait()
+        except KeyboardInterrupt:
+            continue
 
 
 def self_install(env=os.environ) -> tuple[str, bool]:
     """Return (exe path used by the menu, whether anything changed)."""
+    if not getattr(sys, "frozen", False):  # plain `python maude_exe.py`: never install python.exe
+        return os.path.abspath(sys.executable), False
     import winreg
     cur = os.path.abspath(sys.executable)
     target = install_target(env["USERPROFILE"])
@@ -240,7 +253,7 @@ def main(argv: list[str]) -> int:
             print(f"Maude: installed {exe} and the 'Open in Maude' folder menu.")
             print(r"Hint: add %USERPROFILE%\.local\bin to your user PATH to type 'maude' in PowerShell.")
     if not args:
-        return subprocess.run(tui_cmd(), check=False).returncode
+        return _run(tui_cmd())
     folder = os.path.realpath(args[0])
     env = os.environ
     share = os.path.realpath(fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env)))
@@ -260,7 +273,7 @@ def main(argv: list[str]) -> int:
         if sys.stdin.isatty() and not sys.stdout.closed:
             input("Press Enter to close.")
         return 2
-    return subprocess.run(sandbox_cmd(wsl_dir(folder, share), model), check=False).returncode
+    return _run(sandbox_cmd(wsl_dir(folder, share), model))
 
 
 if __name__ == "__main__":
