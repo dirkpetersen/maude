@@ -59,6 +59,9 @@ UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 MODELS        = ("fable", "opus", "sonnet", "haiku")
 DEFAULT_MODEL = "opus"
 MODEL_FILE    = Path.home() / ".maude-model"
+AI_TOOLS      = ("Claude Code", "Kiro CLI", "OpenCode", "Crush")
+DEFAULT_TOOL  = "Claude Code"
+TOOL_FILE     = Path.home() / ".maude-tool"
 VERSION_FILE  = Path.home() / ".local" / "share" / "maude" / "version"
 
 LOGO = (
@@ -378,8 +381,44 @@ def remove_perplexity() -> None:
         pass
 
 
-def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None:
-    """Launch Claude Code for a project.
+def tool_command(tool: str, model: str, fresh: bool) -> list[str]:
+    """Command line for an AI tool. Only Claude Code takes the model: the
+    others have no stable alias mapping, so they start on their own default."""
+    cont = [] if fresh else ["--continue"]
+    return {
+        "Claude Code": ["claude", model, *cont],
+        "Kiro CLI": ["kiro-cli", "chat", *([] if fresh else ["--resume"])],
+        "OpenCode": ["opencode", *cont],
+        "Crush": ["crush", *cont],
+    }[tool]
+
+
+def reconcile(model: str, tool: str, changed: str) -> tuple[str, str]:
+    """Fable only runs in Claude Code. `changed` ("model"|"tool") is the side
+    the user just set, so the other side gives way."""
+    if model == "fable" and tool != DEFAULT_TOOL:
+        return (model, DEFAULT_TOOL) if changed == "model" else ("opus", tool)
+    return model, tool
+
+
+def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
+    cmd = tool_command(tool, model, fresh)
+    if not shutil.which(cmd[0]):
+        input(f"{tool} is not installed; run 'maude update'. Press Enter to go back. ")
+        return
+    if tool == "Kiro CLI" and subprocess.run([cmd[0], "whoami"], capture_output=True).returncode != 0:
+        # Interop is off in the sandbox, so a browser cannot open: use the device code flow.
+        subprocess.run([cmd[0], "login", "--use-device-flow"], check=False)
+    ret = subprocess.run(cmd, check=False).returncode
+    if ret != 0 and tool == "Kiro CLI" and not fresh:
+        subprocess.run(tool_command(tool, model, True), check=False)  # nothing to resume
+
+
+def open_project(project_path: Path, model: str, *, fresh: bool = False,
+                 tool: str = DEFAULT_TOOL) -> None:
+    """Launch the selected AI tool for a project (Claude Code by default).
+
+    For Claude Code:
 
     By default tries `--continue` first (resume the previous session),
     then, only if the project has saved sessions, `--resume` (Claude's
@@ -389,6 +428,9 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False) -> None
     starts with no history.
     """
     os.chdir(project_path)
+    if tool != DEFAULT_TOOL:
+        _open_other_tool(tool, model, fresh)
+        return
     sync_perplexity()
     if fresh:
         subprocess.run(["claude", model], check=False)
@@ -415,6 +457,25 @@ def save_model(name: str) -> None:
     if name in MODELS:
         try:
             MODEL_FILE.write_text(name)
+        except OSError:
+            pass
+
+
+def read_tool() -> str:
+    """Return the user's saved AI tool, or the default."""
+    try:
+        t = TOOL_FILE.read_text().strip()
+        if t in AI_TOOLS:
+            return t
+    except OSError:
+        pass
+    return DEFAULT_TOOL
+
+
+def save_tool(name: str) -> None:
+    if name in AI_TOOLS:
+        try:
+            TOOL_FILE.write_text(name)
         except OSError:
             pass
 
@@ -2727,7 +2788,7 @@ class MaudeApp(App):
         margin-bottom: 1;
     }
 
-    #opts-row {
+    #opts-row, #pick-row {
         height: auto;
     }
 
@@ -2786,20 +2847,20 @@ class MaudeApp(App):
         margin-bottom: 1;
     }
 
-    #model-label {
+    #model-label, #tool-label {
         color: #d4a0a0;
         text-style: bold;
         margin-bottom: 0;
     }
 
-    #model-select {
+    #model-select, #tool-select {
         background: #242424;
         border: none;
         padding: 0;
         height: auto;
     }
 
-    #model-select:focus-within {
+    #model-select:focus-within, #tool-select:focus-within {
         background: #2a2424;
     }
 
@@ -3257,7 +3318,11 @@ class MaudeApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self._model = read_model()
+        self._tool = read_tool()
+        model = read_model()
+        self._model, self._tool = reconcile(model, self._tool, "tool")
+        if self._model != model:
+            save_model(self._model)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -3273,10 +3338,17 @@ class MaudeApp(App):
                     id="tips",
                 )
                 yield Static("─" * 28, id="divider2")
-                yield Label("Claude model", id="model-label")
-                with RadioSet(id="model-select"):
-                    for m in MODELS:
-                        yield RadioButton(m, value=(m == self._model))
+                with Horizontal(id="pick-row"):
+                    with Vertical(classes="opt-col"):
+                        yield Label("Claude model", id="model-label")
+                        with RadioSet(id="model-select"):
+                            for m in MODELS:
+                                yield RadioButton(m, value=(m == self._model))
+                    with Vertical(classes="opt-col"):
+                        yield Label("AI tool", id="tool-label")
+                        with RadioSet(id="tool-select"):
+                            for t in AI_TOOLS:
+                                yield RadioButton(t, value=(t == self._tool))
                 yield Label("Clear context (no history)", id="fresh-label")
                 yield Checkbox("", value=False, id="fresh-context")
                 yield Static("─" * 28, id="divider3")
@@ -3328,12 +3400,16 @@ class MaudeApp(App):
         self.call_after_refresh(self._maybe_prompt_ssh_unlock)
 
     def _sync_model_cursor(self) -> None:
+        self._sync_cursor("#model-select", MODELS, self._model)
+        self._sync_cursor("#tool-select", AI_TOOLS, self._tool)
+
+    def _sync_cursor(self, sel: str, items: tuple, value: str) -> None:
         try:
-            radioset = self.query_one("#model-select", RadioSet)
+            radioset = self.query_one(sel, RadioSet)
         except Exception:
             return
         try:
-            idx = MODELS.index(self._model)
+            idx = items.index(value)
         except ValueError:
             return
         # `_selected` is the keyboard-cursor index. Move it via the
@@ -3613,9 +3689,36 @@ class MaudeApp(App):
 
     @on(RadioSet.Changed, "#model-select")
     def model_changed(self, event: RadioSet.Changed) -> None:
-        self._model = str(event.pressed.label)
+        new = str(event.pressed.label)
+        if new == self._model:  # echo of a programmatic update
+            return
+        self._model, tool = reconcile(new, self._tool, "model")
         save_model(self._model)
+        if tool != self._tool:
+            self._tool = tool
+            save_tool(tool)
+            self._press("#tool-select", AI_TOOLS, tool)
         self.query_one("#projects-table", DataTable).focus()
+
+    @on(RadioSet.Changed, "#tool-select")
+    def tool_changed(self, event: RadioSet.Changed) -> None:
+        new = str(event.pressed.label)
+        if new == self._tool:
+            return
+        self._tool = new
+        save_tool(new)
+        model, _ = reconcile(self._model, new, "tool")
+        if model != self._model:
+            self._model = model
+            save_model(model)
+            self._press("#model-select", MODELS, model)
+            self.notify("Fable is only available in Claude Code; switched model to opus")
+        self.query_one("#projects-table", DataTable).focus()
+
+    def _press(self, sel: str, items: tuple, value: str) -> None:
+        """Select a radio button in code; the Changed echo is ignored by the handlers."""
+        self.query_one(sel, RadioSet).query(RadioButton)[items.index(value)].value = True
+        self._sync_cursor(sel, items, value)
 
     # ── Callbacks ─────────────────────────────────────────────────────
 
@@ -3653,7 +3756,7 @@ class MaudeApp(App):
             except Exception:
                 fresh = False
         with self.suspend():
-            open_project(path, self._model, fresh=fresh)
+            open_project(path, self._model, fresh=fresh, tool=self._tool)
         # Auto-clear the checkbox after use — fresh-context is a one-shot
         # exception; the default is always to resume with history.
         if fresh:

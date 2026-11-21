@@ -298,7 +298,7 @@ launch_tui() {
 
 # ── Update everything: maude CLI, Claude Code, the maude TUI, kanna ───
 update_all() {
-    local ts rc=0
+    local ts rc=0 _lf
     ts=$(date +%s)
 
     # Update the maude CLI first. Linux/bash keeps the running script's open
@@ -518,7 +518,7 @@ update_all() {
     mkdir -p "$MAUDE_LIB_DIR"
     _alloc_job libs
     ( lib_rc=0
-      for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh kanna.sh; do
+      for lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh kanna.sh cli-tools.sh; do
           lib_tmp=$(mktemp)
           if curl -fsSL --max-time 10 "$GH_RAW/lib/$lib?cache=${ts}" -o "$lib_tmp" \
              && [[ -s "$lib_tmp" ]] && grep -q '^[a-z_]*()' "$lib_tmp"; then
@@ -561,6 +561,8 @@ update_all() {
     . "$MAUDE_LIB_DIR/opencode.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
     . "$MAUDE_LIB_DIR/grok.sh" 2>/dev/null || true
+    # shellcheck source=/dev/null
+    . "$MAUDE_LIB_DIR/cli-tools.sh" 2>/dev/null || true
 
     if declare -F update_skills >/dev/null; then
         _alloc_job skills
@@ -573,7 +575,7 @@ update_all() {
         JPID[gemini]=$!
     fi
     local _rtool
-    for _rtool in codex opencode grok; do
+    for _rtool in codex opencode grok kiro crush; do
         if declare -F "update_${_rtool}" >/dev/null; then
             _alloc_job "$_rtool"
             ( "update_${_rtool}" ) > "${JOUT[$_rtool]}" 2> "${JERR[$_rtool]}" &
@@ -759,8 +761,11 @@ update_all() {
     # These already ran (in parallel with everything above) — this loop
     # only reads back the captured output.
     local _rtool _rline
-    for _rtool in codex opencode grok; do
-        echo -e "${BOLD}Updating ${_rtool} CLI + skill...${NC}"
+    for _rtool in codex opencode grok kiro crush; do
+        case "$_rtool" in
+            kiro|crush) echo -e "${BOLD}Installing ${_rtool} CLI if missing...${NC}" ;;
+            *)          echo -e "${BOLD}Updating ${_rtool} CLI + skill...${NC}" ;;
+        esac
         if [[ -n "${JPID[$_rtool]:-}" ]]; then
             while IFS= read -r _rline; do
                 [[ -z "$_rline" ]] && continue
@@ -777,12 +782,19 @@ update_all() {
             fi
             [[ "${JRC[$_rtool]:-1}" -ne 0 ]] && rc=1
         else
-            echo -e "${YELLOW}  ${_rtool}.sh library not loaded — skipping${NC}"
+            case "$_rtool" in kiro|crush) _lf=cli-tools ;; *) _lf=$_rtool ;; esac
+            echo -e "${YELLOW}  ${_lf}.sh library not loaded — skipping${NC}"
             rc=1
         fi
         echo ""
     done
     unset _rtool
+    # Idempotent; runs even when Kiro was already installed.
+    if declare -F link_kiro_skills >/dev/null && ! link_kiro_skills; then
+        echo -e "${YELLOW}  ! could not link ~/.kiro/skills${NC}"
+        rc=1
+        echo ""
+    fi
 
     echo -e "${BOLD}Refreshing tool symlinks (bun, kanna, node, npm, npx, python, pip)...${NC}"
     ensure_tool_symlinks

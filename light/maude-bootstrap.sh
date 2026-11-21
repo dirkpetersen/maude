@@ -33,7 +33,7 @@ pip install --quiet --break-system-packages 'textual>=8.2.4,<9'
 # corporate proxy returning HTML) must not abort the whole bootstrap under
 # set -e. Content-validate before sourcing; keep a cached copy if present.
 mkdir -p "$HOME/.local/lib/maude"
-for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh kanna.sh; do
+for _lib in ensure-tools.sh refresh-md.sh update-skills.sh gemini.sh llm-mode.sh codex.sh opencode.sh grok.sh kanna.sh cli-tools.sh; do
     _lib_dst="$HOME/.local/lib/maude/$_lib"
     if curl -fsSL "$GH_RAW/lib/$_lib" -o "$_lib_dst.tmp" 2>/dev/null \
        && grep -q '^[a-z_]*()' "$_lib_dst.tmp"; then
@@ -135,6 +135,18 @@ for _tool in codex opencode grok; do
     fi
 done
 unset _tool
+
+# ── Install the extra TUI "AI tool" CLIs (Kiro CLI, Crush) ───────────
+for _tool in kiro crush; do
+    echo "Installing ${_tool} CLI..."
+    if "update_${_tool}"; then
+        echo "  ${_tool} CLI installed."
+    else
+        echo "  WARNING: ${_tool} install had problems — continuing."
+    fi
+done
+unset _tool
+link_kiro_skills || echo "  WARNING: could not link ~/.kiro/skills — continuing."
 
 # ── Claude Code: project instructions (MAUDE.md + CLAUDE.md template) ─
 # Uses refresh_claude_md() from refresh-md.sh, which validates the download
