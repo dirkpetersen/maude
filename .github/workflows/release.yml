@@ -192,10 +192,14 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+  # ── Build maude.exe (Windows launcher) ─────────────────────────────────────
+  build-exe:
+    uses: ./.github/workflows/build-maude-exe.yml
+
   # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
     runs-on: ubuntu-latest
-    needs: [build-wsl, build-docker]
+    needs: [build-wsl, build-docker, build-exe]
     timeout-minutes: 15
 
     steps:
@@ -207,6 +211,15 @@ jobs:
         with:
           name: wsl-image
           path: dist/
+
+      - name: Download maude.exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: maude-exe
+          path: dist/
+
+      - name: Checksum maude.exe
+        run: cd dist && sha256sum maude.exe > maude.exe.sha256
 
       - name: Generate release notes from template
         run: |
@@ -223,4 +236,6 @@ jobs:
             --title "maude ${VERSION}" \
             --notes-file /tmp/release-notes.md \
             "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz" \
-            "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256"
+            "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256" \
+            dist/maude.exe \
+            dist/maude.exe.sha256

@@ -11,15 +11,24 @@ Reason: every feature of `maude.py` (Textual TUI, `claude` wrapper, `~/Maude/Pro
 | Textual TUI, project list, model picker, git wizard, kanna Web UI, creds, update | Runs unchanged inside WSL. `maude.exe` with no argument starts `maude tui` in the WSL distro |
 | Open project in Claude Code | `maude.exe "<folder>"` runs `claude <model> --continue` in the WSL distro (see below) |
 | `fuser`, `killpg`, bash helpers, `.bashrc`, `mom`, `/tmp` | Not used by the exe. Stay inside WSL |
-| Native Windows `claude.exe` | Not used (disabled) |
+| Native Windows `claude.exe` | Used only in Windows mode (see below) |
 
-## Open question: what does "Open in Maude" do?
+## Two modes
 
-Decision: option (b). The folder goes to the WSL Maude sandbox.
+The sandbox is the default. Windows mode is a deliberate choice.
 
-- The sandbox only sees `%LOCALAPPDATA%\Maude\Data\Maude` (mounted as `~/Maude`). A folder inside it opens in `~/Maude/<relative path>`. A folder outside it gets a clear message and is not opened.
-- Security trade-off: the sandbox exists so the agent cannot touch the rest of the Windows disk. Option (b) keeps this. The cost: you must move or copy a project into the share first.
-- Alternative (a): run Windows-native `claude.exe` directly in any folder. It works everywhere, but the agent then runs in bypass mode with your full Windows user rights (all your files, SSH keys, browser data). Not implemented. It could be added later as an explicit opt-in.
+| Folder | Flags | What happens |
+|---|---|---|
+| none (`maude.exe`) | | Starts `maude tui` in the WSL sandbox |
+| inside `%LOCALAPPDATA%\Maude\Data\Maude` | | Sandbox: `wsl.exe -d Maude --cd ~/Maude/<rel> -- bash -lc '<claude <model> --continue, else claude <model>>'` |
+| outside the share | none | Prints the OUTSIDE warning and asks `Run Claude Code on Windows outside the sandbox? [y/N]`. Only `y` or `yes` continues. No terminal means No |
+| outside the share | `--windows` | Windows mode without the question |
+| outside the share | `--sandbox` | Not started. Prints that the folder must be moved into the share, exit code 2 |
+| any | `--model <alias>` | Model override (default: sandbox `~/.maude-model`, or `%USERPROFILE%\.maude-model` in Windows mode, else `opus`) |
+
+Windows mode runs `claude --model <alias> --continue` in the folder. If that exits non-zero it runs `claude --model <alias>`. It looks for `claude` on PATH, then `%USERPROFILE%\.local\bin\claude.exe`. It never passes `--dangerously-skip-permissions` or any bypass mode. If Claude Code is not found it prints `irm https://claude.ai/install.ps1 | iex` and exits with code 3. It installs nothing. (The install command and the `--model` form come from memory of the Claude Code docs. Check them on a Windows machine.)
+
+Security statement: only exe mode, on a folder outside the share, after `y` or `--windows`, runs outside the sandbox. There Claude Code has your full Windows user rights (all your files, SSH keys, browser data), with normal permission prompts. Everything inside the share stays in the isolated WSL distro. The context menu runs `"<exe>" "%V"` without `--windows`, so it always asks first.
 
 ## First run (no admin)
 
@@ -41,4 +50,6 @@ Flags: `--version`, `--uninstall` (removes the keys; then delete `%USERPROFILE%\
 
 ## Build
 
-`.github/workflows/build-maude-exe.yml` builds on `windows-latest` (`pyinstaller --onefile --console`) and uploads the artifact `maude.exe`. It needs no Textual data files. The exe is not signed: Windows SmartScreen or antivirus can warn.
+Install: download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and run it once. Check the hash with `Get-FileHash maude.exe`. The exe is unsigned, so SmartScreen shows "Windows protected your PC": choose More info, then Run anyway.
+
+`.github/workflows/build-maude-exe.yml` builds on `windows-latest` (`pyinstaller --onefile --console`) injects the tag as version (`dev` outside tags), smoke-tests `--version`, and uploads the artifact `maude-exe`. `release.yml` calls it on `v*.*.*` tags and attaches `maude.exe` and `maude.exe.sha256` to the release. It needs no Textual data files. The exe is not signed: Windows SmartScreen or antivirus can warn.

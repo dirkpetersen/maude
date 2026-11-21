@@ -271,6 +271,10 @@ curl.exe --ssl-no-revoke -fSLo $env:TEMP\add-user.ps1 https://raw.githubusercont
 
 Then open the new profile from the Windows Terminal dropdown, or run `wsl -d Maude -u dp --cd ~`. The new user has no Claude Code setup. Install what you need with `sudo`.
 
+## maude.exe (Windows launcher)
+
+`maude.exe` from the GitHub Release adds "Open in Maude" to the Explorer folder menu. Folders in the shared Maude folder open in the sandbox. A folder outside it runs outside the sandbox only after you answer yes (or pass `--windows`). See [docs/windows-exe.md](../docs/windows-exe.md).
+
 ## Troubleshooting
 
 ### `The argument '...setup-wsl-maude.ps1' to the -File parameter does not exist`
