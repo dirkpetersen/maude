@@ -29,7 +29,7 @@ The sandbox is the default. Windows mode is a deliberate choice.
 
 Windows mode runs `claude --model <alias> --continue` in the folder. If that exits non-zero it runs `claude --model <alias>`. It looks for `claude` on PATH, then `%USERPROFILE%\.local\bin\claude.exe`. It never passes `--dangerously-skip-permissions` or any bypass mode. If Claude Code is not found it prints `irm https://claude.ai/install.ps1 | iex` and exits with code 3. It installs nothing.
 
-The share is found like `setup-wsl-maude.ps1` does: `%LOCALAPPDATA%\Maude\Data\Maude` if it has a `Projects` folder, else the first OneDrive `Maude` folder that has one, else the local one. The forced setup flags `-OneDrive` and `-NoOneDrive` cannot be seen at run time.
+The share is read from the drvfs line for `/home/<user>/Maude` in the distro's `/etc/fstab` (`wsl.exe -d Maude -e cat /etc/fstab`; `\040` decoded to a space). If that fails, it falls back to the setup rule: `%LOCALAPPDATA%\Maude\Data\Maude` if it has a `Projects` folder, else the first OneDrive `Maude` folder that has one, else the local one. The forced setup flags `-OneDrive` and `-NoOneDrive` cannot be seen at run time.
 
 Security statement: only exe mode, on a folder outside the share, after `y` or `--windows`, runs outside the sandbox. There Claude Code has your full Windows user rights (all your files, SSH keys, browser data), with normal permission prompts. Everything inside the share stays in the isolated WSL distro. The context menu runs `"<exe>" "%V"` without `--windows`, so it always asks first.
 

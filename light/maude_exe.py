@@ -62,6 +62,25 @@ def share_root(localappdata: str, od_candidates=(), isdir=os.path.isdir) -> str:
     return next((c for c in od_candidates if isdir(str(W(c) / "Projects"))), local)
 
 
+def parse_fstab_share(text: str) -> str | None:
+    """Windows source of the drvfs line mounted at /home/<user>/Maude (root-bootstrap.sh writes it)."""
+    for line in text.splitlines():
+        f = line.split()
+        if (len(f) >= 3 and not f[0].startswith("#") and f[2] == "drvfs"
+                and re.fullmatch(r"/home/[^/]+/Maude", f[1]) and re.match(r"[A-Za-z]:\\", f[0])):
+            return f[0].replace("\\040", " ")  # fstab escapes spaces as \040
+    return None
+
+
+def fstab_share() -> str | None:
+    try:
+        r = subprocess.run(["wsl.exe", "-d", DISTRO, "-e", "cat", "/etc/fstab"],
+                           capture_output=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return parse_fstab_share(r.stdout.decode("utf-8", "replace")) if r.returncode == 0 else None
+
+
 def valid_model(m: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", m))
 
@@ -224,7 +243,7 @@ def main(argv: list[str]) -> int:
         return subprocess.run(tui_cmd(), check=False).returncode
     folder = os.path.realpath(args[0])
     env = os.environ
-    share = os.path.realpath(share_root(env["LOCALAPPDATA"], onedrive_candidates(env)))
+    share = os.path.realpath(fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env)))
     answer, asked = None, False
     while True:
         what = decide(folder, share, flag, answer)
