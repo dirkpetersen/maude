@@ -6,7 +6,9 @@ Explorer entries (HKCU, no admin) and starts the Maude WSL sandbox.
 The Textual TUI (maude.py) stays inside WSL. See docs/windows-exe.md.
 """
 import ntpath
+import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,8 +33,37 @@ def context_cmd(exe: str) -> str:
     return f'"{exe}" "%V"'
 
 
-def share_root(localappdata: str) -> str:
-    return str(W(localappdata) / "Maude" / "Data" / "Maude")
+def onedrive_candidates(env, listdir=os.listdir, isdir=os.path.isdir) -> list[str]:
+    """OneDrive\\Maude candidates in the order of Find-OneDriveMaudeFolder (setup-wsl-maude.ps1)."""
+    c = []
+    if env.get("OneDriveCommercial"):
+        c.append(str(W(env["OneDriveCommercial"]) / "Maude"))
+    if env.get("OneDriveConsumer"):
+        c.append(str(W(env["OneDriveConsumer"]) / "Maude"))
+    if env.get("OneDrive") and not env.get("OneDriveCommercial") and not env.get("OneDriveConsumer"):
+        c.append(str(W(env["OneDrive"]) / "Maude"))
+    up = env.get("USERPROFILE", "")
+    try:
+        biz = next((d for d in sorted(listdir(up)) if d.lower().startswith("onedrive - ")), None)
+    except OSError:
+        biz = None
+    for base in ([str(W(up) / biz)] if biz else []) + ([str(W(up) / "OneDrive")] if isdir(str(W(up) / "OneDrive")) else []):
+        if str(W(base) / "Maude") not in c:
+            c.append(str(W(base) / "Maude"))
+    return c
+
+
+def share_root(localappdata: str, od_candidates=(), isdir=os.path.isdir) -> str:
+    """Same default rule as setup: local share if it has Projects, else the first OneDrive one
+    that has Projects, else local. (-OneDrive/-NoOneDrive forced choices are not visible here.)"""
+    local = str(W(localappdata) / "Maude" / "Data" / "Maude")
+    if isdir(str(W(local) / "Projects")):
+        return local
+    return next((c for c in od_candidates if isdir(str(W(c) / "Projects"))), local)
+
+
+def valid_model(m: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", m))
 
 
 def wsl_dir(folder: str, share: str) -> str | None:
@@ -66,7 +97,13 @@ def decide(folder: str, share: str, flag: str | None, answer: str | None) -> str
 
 
 def sandbox_cmd(d: str, model: str) -> list[str]:
-    return ["wsl.exe", "-d", DISTRO, "--cd", d, "--", "bash", "-lc", OPEN_SH, "maude", model]
+    # -e runs argv without a shell (so model stays $1); MAUDE_WELCOMED=1 stops the welcome TUI.
+    return ["wsl.exe", "-d", DISTRO, "--cd", d, "-e", "/usr/bin/env", "MAUDE_WELCOMED=1",
+            "bash", "-lc", OPEN_SH, "maude", model]
+
+
+def tui_cmd() -> list[str]:
+    return ["wsl.exe", "-d", DISTRO, "--cd", "~"]  # normal login: welcome script starts the TUI
 
 
 def windows_cmd(claude: str, model: str, cont: bool) -> list[str]:
@@ -83,22 +120,24 @@ def find_claude(userprofile: str) -> str | None:
 def windows_model(userprofile: str) -> str:
     try:
         with open(W(userprofile) / ".maude-model", encoding="utf-8") as f:
-            return f.read().strip() or "opus"
+            m = f.read().strip()
     except OSError:
-        return "opus"
+        m = ""
+    return m if valid_model(m) else "opus"
 
 
 BANNER = ("Maude: running OUTSIDE the sandbox in {}. "
           "Claude Code has your full Windows user rights here.")
 
 
-def run_windows(folder: str, model: str) -> int:
+def run_windows(folder: str, model: str, banner: bool = True) -> int:
     env = os.environ
     claude = find_claude(env["USERPROFILE"])
     if not claude:
         print("Maude: Claude Code for Windows was not found.\n" + INSTALL_HINT, file=sys.stderr)
         return 3
-    print(BANNER.format(folder))
+    if banner:
+        print(BANNER.format(folder))
     model = model or windows_model(env["USERPROFILE"])
     rc = subprocess.run(windows_cmd(claude, model, True), cwd=folder, check=False).returncode
     if rc:
@@ -106,29 +145,41 @@ def run_windows(folder: str, model: str) -> int:
     return rc
 
 
-def self_install(env=os.environ) -> str:
-    import shutil
+def self_install(env=os.environ) -> tuple[str, bool]:
+    """Return (exe path used by the menu, whether anything changed)."""
     import winreg
     cur = os.path.abspath(sys.executable)
     target = install_target(env["USERPROFILE"])
-    exe = target
+    exe, changed = target, False
     if os.path.normcase(cur) != os.path.normcase(target):
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp = target + ".new"
         try:
-            shutil.copy2(cur, tmp)
-            os.replace(tmp, target)  # fails with PermissionError while the old copy runs
+            if not (os.path.isfile(target) and os.path.getsize(target) == os.path.getsize(cur)
+                    and open(target, "rb").read() == open(cur, "rb").read()):
+                shutil.copy2(cur, tmp)
+                os.replace(tmp, target)  # fails with PermissionError while the old copy runs
+                changed = True
         except OSError as err:
             print(f"maude: could not update {target}: {err}", file=sys.stderr)
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
             if not os.path.exists(target):
                 exe = cur
     for k in KEYS:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, k + r"\command") as h:
+                if winreg.QueryValueEx(h, None)[0] == context_cmd(exe):
+                    continue
+        except OSError:
+            pass
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, k) as h:
             winreg.SetValueEx(h, "MUIVerb", 0, winreg.REG_SZ, "Open in Maude")
             winreg.SetValueEx(h, "Icon", 0, winreg.REG_SZ, exe)
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, k + r"\command") as h:
             winreg.SetValueEx(h, None, 0, winreg.REG_SZ, context_cmd(exe))
-    return exe
+        changed = True
+    return exe, changed
 
 
 def uninstall() -> None:
@@ -161,26 +212,30 @@ def main(argv: list[str]) -> int:
             flag = a[2:]
         elif a != "--no-install":
             args.append(a)
+    if model and not valid_model(model):
+        print(f"maude: bad model name: {model}", file=sys.stderr)
+        return 2
     if "--no-install" not in argv and not os.environ.get("MAUDE_NO_INSTALL"):
-        exe = self_install()
-        print(f"Maude: installed {exe} and the 'Open in Maude' folder menu.")
-        print(r"Hint: add %USERPROFILE%\.local\bin to your user PATH to type 'maude' in PowerShell.")
+        exe, changed = self_install()
+        if changed:
+            print(f"Maude: installed {exe} and the 'Open in Maude' folder menu.")
+            print(r"Hint: add %USERPROFILE%\.local\bin to your user PATH to type 'maude' in PowerShell.")
     if not args:
-        return subprocess.run(["wsl.exe", "-d", DISTRO, "--cd", "~", "--", "bash", "-lc", "maude tui"],
-                              check=False).returncode
+        return subprocess.run(tui_cmd(), check=False).returncode
     folder = os.path.realpath(args[0])
-    share = os.path.realpath(share_root(os.environ["LOCALAPPDATA"]))
-    answer = None
+    env = os.environ
+    share = os.path.realpath(share_root(env["LOCALAPPDATA"], onedrive_candidates(env)))
+    answer, asked = None, False
     while True:
         what = decide(folder, share, flag, answer)
         if what != "ask":
             break
         print(BANNER.format(folder))
-        answer = ""
+        answer, asked = "", True
         if sys.stdin.isatty():  # no terminal means No
             answer = input("Run Claude Code on Windows outside the sandbox? [y/N] ")
     if what == "windows":
-        return run_windows(folder, model)
+        return run_windows(folder, model, banner=not asked)
     if what in ("deny", "refuse"):
         print(f"Maude: not started. To use the sandbox, move the folder into {share}.", file=sys.stderr)
         if sys.stdin.isatty() and not sys.stdout.closed:
