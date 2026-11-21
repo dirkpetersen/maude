@@ -1,0 +1,26 @@
+name: Build maude.exe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - light/maude_exe.py
+      - .github/workflows/build-maude-exe.yml
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller==6.11.1
+      - run: pyinstaller --onefile --console --name maude light/maude_exe.py
+      - name: Smoke test
+        run: ./dist/maude.exe --version
+        env:
+          MAUDE_NO_INSTALL: '1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maude.exe
+          path: dist/maude.exe
