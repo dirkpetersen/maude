@@ -3,7 +3,8 @@
 
 It copies itself to %USERPROFILE%\\.local\\bin, adds the "Open in Maude"
 Explorer entries (HKCU, no admin) and starts the Maude WSL sandbox.
-The Textual TUI (maude.py) stays inside WSL. See docs/windows-exe.md.
+With no argument it runs the Textual TUI (maude.py, Windows mode) in the
+current console. See docs/windows-exe.md.
 """
 import ntpath
 import contextlib
@@ -121,10 +122,6 @@ def sandbox_cmd(d: str, model: str) -> list[str]:
             "bash", "-lc", OPEN_SH, "maude", model]
 
 
-def tui_cmd() -> list[str]:
-    return ["wsl.exe", "-d", DISTRO, "--cd", "~"]  # normal login: welcome script starts the TUI
-
-
 def windows_cmd(claude: str, model: str, cont: bool) -> list[str]:
     # No bypass or yolo flag here: default permission mode only.
     return [claude, "--model", model] + (["--continue"] if cont else [])
@@ -149,7 +146,19 @@ BANNER = ("Maude: running OUTSIDE the sandbox in {}. "
           "Claude Code has your full Windows user rights here.")
 
 
-def run_windows(folder: str, model: str, banner: bool = True) -> int:
+def shell_cmd(d: str, wt: str | None) -> tuple[list[str], dict]:
+    """New PowerShell window in d (TUI Command Line button). No shell string, so no quoting issue."""
+    if wt:
+        return [wt, "-d", d, "powershell.exe", "-NoLogo"], {}
+    return ["powershell.exe", "-NoLogo"], {"cwd": d, "creationflags": 0x10}  # CREATE_NEW_CONSOLE
+
+
+def projects_dir(env=os.environ) -> str:
+    share = fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env))
+    return str(W(os.path.realpath(share)) / "Projects")
+
+
+def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = False) -> int:
     env = os.environ
     claude = find_claude(env["USERPROFILE"])
     if not claude:
@@ -158,8 +167,8 @@ def run_windows(folder: str, model: str, banner: bool = True) -> int:
     if banner:
         print(BANNER.format(folder))
     model = model or windows_model(env["USERPROFILE"])
-    rc = _run(windows_cmd(claude, model, True), cwd=folder)
-    if rc:
+    rc = _run(windows_cmd(claude, model, not fresh), cwd=folder)
+    if rc and not fresh:
         rc = _run(windows_cmd(claude, model, False), cwd=folder)
     return rc
 
@@ -226,9 +235,22 @@ def uninstall() -> None:
           + install_target(os.environ["USERPROFILE"]) + " (after this program has ended).")
 
 
+def selftest() -> int:
+    """Headless TUI start, for CI on the frozen exe: proves Textual and its data files are bundled."""
+    import asyncio
+    import maude
+    async def go():
+        async with maude.MaudeApp().run_test() as pilot:
+            await pilot.pause()
+            assert pilot.app.query_one("#projects-table")
+    asyncio.run(go())
+    print("selftest ok")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] in (["--version"], ["--help"], ["-h"]):
-        print(f"maude.exe {VERSION}\nUsage: maude.exe [--model ALIAS] [--windows|--sandbox] [folder] | --uninstall | --no-install")
+        print(f"maude.exe {VERSION}\nUsage: maude.exe [--tui] | [--model ALIAS] [--windows|--sandbox] folder | --uninstall | --no-install")
         return 0
     if argv[:1] == ["--uninstall"]:
         uninstall()
@@ -236,13 +258,15 @@ def main(argv: list[str]) -> int:
     if os.name != "nt":
         print("maude.exe runs on Windows only.", file=sys.stderr)
         return 1
+    if argv[:1] == ["--selftest"]:
+        return selftest()
     model, flag, args, it = "", None, [], iter(argv)
     for a in it:
         if a == "--model":
             model = next(it, "")
         elif a in ("--windows", "--sandbox"):
             flag = a[2:]
-        elif a != "--no-install":
+        elif a not in ("--no-install", "--tui"):
             args.append(a)
     if model and not valid_model(model):
         print(f"maude: bad model name: {model}", file=sys.stderr)
@@ -253,7 +277,9 @@ def main(argv: list[str]) -> int:
             print(f"Maude: installed {exe} and the 'Open in Maude' folder menu.")
             print(r"Hint: add %USERPROFILE%\.local\bin to your user PATH to type 'maude' in PowerShell.")
     if not args:
-        return _run(tui_cmd())
+        import maude  # the Textual TUI, Windows mode (light/maude.py)
+        maude.MaudeApp().run()
+        return 0
     folder = os.path.realpath(args[0])
     env = os.environ
     share = os.path.realpath(fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env)))

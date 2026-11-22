@@ -32,7 +32,6 @@ assert_eq "windows cmd continue" "['C:/c.exe', '--model', 'opus', '--continue']"
 assert_eq "windows cmd fallback" "['C:/c.exe', '--model', 'sonnet']" "$(py "m.windows_cmd(r'C:/c.exe','sonnet',False)")"
 assert_eq "no bypass flag" 0 "$(py "int(any('skip' in a or 'bypass' in a for a in m.windows_cmd('c','opus',True)))")"
 assert_eq "sandbox cmd" "['wsl.exe', '-d', 'Maude', '--cd', '~/Maude/p', '-e', '/usr/bin/env', 'MAUDE_WELCOMED=1', 'bash', '-lc', m.OPEN_SH, 'maude', 'fable']" "$(py "str(m.sandbox_cmd('~/Maude/p','fable')).replace(repr(m.OPEN_SH),'m.OPEN_SH')")"
-assert_eq "tui cmd has no command" "['wsl.exe', '-d', 'Maude', '--cd', '~']" "$(py "m.tui_cmd()")"
 for ok in opus fable sonnet haiku claude-opus-4-5 sonnet-4.5; do assert_eq "model ok $ok" True "$(py "m.valid_model('$ok')")"; done
 for bad in '' 'a b' 'x;rm' '$(id)' '-x' 'a/b'; do assert_eq "model bad '$bad'" False "$(py "m.valid_model(r'''$bad''')")"; done
 # share root: local with Projects wins; else first OneDrive with Projects; else local
@@ -49,4 +48,12 @@ assert_eq "fstab 040 spaces" 'C:\Users\bob\OneDrive - Co\Maude' "$(py "m.parse_f
 assert_eq "fstab other mounts ignored" None "$(py "m.parse_fstab_share('C:\\\\ /mnt/c drvfs defaults 0 0\nLABEL=x / ext4 defaults 0 1\n')")"
 assert_eq "fstab garbage" None "$(py "m.parse_fstab_share('\\x00 junk\n\n  \nfoo')")"
 assert_eq "fstab empty" None "$(py "m.parse_fstab_share('')")"
+assert_eq "cli button with wt" "(['C:/wt.exe', '-d', 'C:/p x', 'powershell.exe', '-NoLogo'], {})" "$(py "m.shell_cmd(r'C:/p x', r'C:/wt.exe')")"
+assert_eq "cli button without wt" "(['powershell.exe', '-NoLogo'], {'cwd': 'C:/p x', 'creationflags': 16})" "$(py "m.shell_cmd(r'C:/p x', None)")"
+# Windows mode of maude.py, headless (needs textual; skipped when absent)
+if python3 -I -c "import textual" 2>/dev/null; then
+  assert_exit_zero "win tui smoke" python3 "${SCRIPT_DIR}/win_tui_smoke.py"
+else
+  skip "textual not installed: win tui smoke"
+fi
 suite_summary

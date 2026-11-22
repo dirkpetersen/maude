@@ -32,8 +32,8 @@ cat > "$d/run.py" <<'PY'
 import ast, os, subprocess, sys
 from pathlib import Path
 src = open(sys.argv[1]).read()
-want = {"PERPLEXITY_FLAG", "PERPLEXITY_NAME", "PERPLEXITY_URL", "_claude_mcp", "sync_perplexity", "remove_perplexity"}
-ns = {"os": os, "subprocess": subprocess, "Path": Path}
+want = {"IS_WIN", "PERPLEXITY_FLAG", "PERPLEXITY_NAME", "PERPLEXITY_URL", "_claude_mcp", "sync_perplexity", "remove_perplexity"}
+ns = {"os": os, "sys": sys, "subprocess": subprocess, "Path": Path}
 for n in ast.parse(src).body:
     names = {t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)} | {getattr(n, "name", "")}
     if names & want:

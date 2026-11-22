@@ -2,16 +2,32 @@
 
 ## What it is
 
-`maude.exe` is a small native Windows program built from `light/maude_exe.py` (stdlib only, PyInstaller one-file). It is a launcher. It is not a port of `maude.py`.
+`maude.exe` is a native Windows program built from `light/maude_exe.py` (launcher) and `light/maude.py` (the Textual TUI), packed with PyInstaller (one file, Textual bundled).
 
-Reason: every feature of `maude.py` (Textual TUI, `claude` wrapper, `~/Maude/Projects`, kanna Web UI, `fuser`, `os.killpg`, bash helpers in `~/.local/lib/maude`, `.bashrc` edits, ssh-agent, gpg, `mom`) needs Linux. Maude Light already runs all of this inside the WSL sandbox. So the exe only starts the sandbox. `maude.py` is not changed, and Textual is not bundled.
+With no argument it runs the Maude TUI natively in the current console. Start it from PowerShell and the TUI runs inside that PowerShell. A double-click gives it its own console window. `--tui` does the same as no argument.
 
-| maude.py feature | On Windows (maude.exe) |
+This is Windows mode of the TUI. It lists the projects of the Maude share (the same `Projects` folder the sandbox uses; share found as described below, then `\Projects`). The Linux behaviour of `maude.py` is unchanged.
+
+| TUI feature | On Windows (maude.exe) |
 |---|---|
-| Textual TUI, project list, model picker, git wizard, kanna Web UI, creds, update | Runs unchanged inside WSL. `maude.exe` with no argument starts `maude tui` in the WSL distro |
-| Open project in Claude Code | `maude.exe "<folder>"` runs `claude <model> --continue` in the WSL distro (see below) |
-| `fuser`, `killpg`, bash helpers, `.bashrc`, `mom`, `/tmp` | Not used by the exe. Stay inside WSL |
-| Native Windows `claude.exe` | Used only in Windows mode (see below) |
+| Project list, New, Delete (soft delete to `Projects\.deleted`) | Works on the share's `Projects` folder |
+| Model picker, AI tool picker, Clear context, Perplexity checkbox | Work. State files are in `%USERPROFILE%` (`.maude-model`, `.maude-tool`, `.maude-perplexity`) |
+| Open Project | Runs the selected AI tool natively on Windows in the project folder, OUTSIDE the sandbox, with normal permission prompts (see below) |
+| Command Line | Opens a new PowerShell window in the selected project folder (else the `Projects` folder). The TUI keeps running. Uses `wt.exe -d <dir> powershell.exe -NoLogo` if `wt.exe` is on PATH, else `powershell.exe -NoLogo` in a new console with that working directory |
+| Web UI (kanna), To Github, Setup Git(hub), Set Creds, Update Maude, Autostart | Hidden. They need the sandbox (bash helpers, ssh, gpg, `mom`, `.bashrc`, `fuser`, process groups, the `claude` wrapper). Use the sandbox for them |
+| Daily self-update of `maude.py`, credential gate | Off. The exe is updated by downloading a new release. Native `claude.exe` has its own login |
+
+Open Project runs these commands (working directory is the project folder):
+
+| Tool | Command |
+|---|---|
+| Claude Code | `claude --model <alias> --continue`; if that exits non-zero, `claude --model <alias>`. With Clear context only `claude --model <alias>` |
+| Kiro CLI | `kiro-cli chat --resume` (then `kiro-cli chat` if that fails); fresh: `kiro-cli chat` |
+| OpenCode, Crush | `opencode --continue`, `crush --continue` (fresh: no flag) |
+
+`claude` is found on PATH, else at `%USERPROFILE%\.local\bin\claude.exe`. If it is missing, the TUI prints `irm https://claude.ai/install.ps1 | iex` and waits for Enter. The other tools must be on the Windows PATH, else the TUI prints "<tool> is not installed on Windows" and waits for Enter. A one-line OUTSIDE-the-sandbox banner is printed before every launch. No bypass flag (`--dangerously-skip-permissions` or similar) is ever passed on Windows. Ctrl+C belongs to the child tool and never kills it. With the Perplexity box ticked, the connector is set up with the real `claude` binary before Claude Code starts.
+
+The sandbox and the `claude` wrapper (with its positional model alias) do not exist on Windows. Folder arguments and the Explorer menu keep their behaviour (next sections).
 
 ## Two modes
 
@@ -19,7 +35,7 @@ The sandbox is the default. Windows mode is a deliberate choice.
 
 | Folder | Flags | What happens |
 |---|---|---|
-| none (`maude.exe`) | | `wsl.exe -d Maude --cd ~` (normal login; the welcome script starts the TUI) |
+| none (`maude.exe`, or `--tui`) | | The Windows TUI described above (no WSL needed to start it) |
 | inside `%LOCALAPPDATA%\Maude\Data\Maude` | | Sandbox: `wsl.exe -d Maude --cd ~/Maude/<rel> -e /usr/bin/env MAUDE_WELCOMED=1 bash -lc <script> maude <model>`. `-e` runs argv without a shell, so the model stays `$1`. `MAUDE_WELCOMED=1` stops the welcome TUI. The script runs `claude <model> --continue`, else `claude <model>` |
 | outside the share | none | Prints the OUTSIDE warning and asks `Run Claude Code on Windows outside the sandbox? [y/N]`. Only `y` or `yes` continues. No terminal means No |
 | outside the share | `--windows` | Windows mode without the question |
@@ -57,4 +73,10 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 
 ## Build
 
-`.github/workflows/build-maude-exe.yml` builds on `windows-latest` (`pyinstaller --onefile --console`), injects the tag as version (`dev` outside tags), smoke-tests `--version`, and uploads the artifact `maude-exe`. `release.yml` calls it on `v*.*.*` tags and attaches `maude.exe` and `maude.exe.sha256` to the release. It needs no Textual data files.
+`.github/workflows/build-maude-exe.yml` builds on `windows-latest` with `pyinstaller==6.11.1` and `textual==8.2.8`: `pyinstaller --onefile --console --name maude --paths light --hidden-import maude --hidden-import maude_exe --collect-all textual --collect-all rich light/maude_exe.py`. It injects the tag as version (`dev` outside tags). Checks in CI:
+
+1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE` and share. It checks the project list, the hidden buttons, the Command Line command (with and without `wt.exe`) and the Open Project commands (spawns are patched, nothing opens).
+2. `maude.exe --version`.
+3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled.
+
+It uploads the artifact `maude-exe`. `release.yml` calls it on `v*.*.*` tags and attaches `maude.exe` and `maude.exe.sha256` to the release. The real console behaviour (colours, suspend while a tool runs, new PowerShell window) is not tested in CI.

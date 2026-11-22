@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - light/maude_exe.py
+      - light/maude.py
+      - tests/win_tui_smoke.py
       - .github/workflows/build-maude-exe.yml
 jobs:
   build:
@@ -15,7 +17,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pyinstaller==6.11.1
+      - run: pip install pyinstaller==6.11.1 textual==8.2.8
+      - name: Headless TUI check (Windows mode, from source)
+        run: python tests/win_tui_smoke.py
       - name: Inject version (tag name, else dev)
         shell: bash
         run: |
@@ -23,9 +27,16 @@ jobs:
           [ "$GITHUB_REF_TYPE" = tag ] && V="$GITHUB_REF_NAME"
           sed -i "s/^VERSION = .*/VERSION = \"$V\"/" light/maude_exe.py
           grep '^VERSION' light/maude_exe.py
-      - run: pyinstaller --onefile --console --name maude light/maude_exe.py
+      - run: >-
+          pyinstaller --onefile --console --name maude --paths light
+          --hidden-import maude --hidden-import maude_exe
+          --collect-all textual --collect-all rich light/maude_exe.py
       - name: Smoke test
         run: ./dist/maude.exe --version
+        env:
+          MAUDE_NO_INSTALL: '1'
+      - name: Smoke test, bundled TUI starts headless
+        run: ./dist/maude.exe --selftest
         env:
           MAUDE_NO_INSTALL: '1'
       - uses: actions/upload-artifact@v4

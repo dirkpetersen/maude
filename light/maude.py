@@ -43,7 +43,12 @@ from textual.widgets import (
     TextArea,
 )
 
-PROJECTS_DIR = Path.home() / "Maude" / "Projects"
+# Windows (maude.exe) runs this TUI natively, outside the sandbox. Linux behaviour is unchanged.
+IS_WIN = sys.platform == "win32"
+if IS_WIN:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # maude_exe.py sits next to us
+    import maude_exe as mx
+PROJECTS_DIR = Path(mx.projects_dir()) if IS_WIN else Path.home() / "Maude" / "Projects"
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
 DISABLE_FLAG   = Path.home() / ".maude-tui-disabled"
 PERPLEXITY_FLAG = Path.home() / ".maude-perplexity"
@@ -51,6 +56,9 @@ PERPLEXITY_NAME = "perplexity-computer"
 PERPLEXITY_URL  = "https://www.perplexity.ai/rest/computer/mcp"
 KANNA_CMD    = "kanna"
 KANNA_PORT   = 3210
+# Widgets hidden on Windows: only available inside the Maude sandbox.
+WIN_HIDDEN = ("#btn-web", "#btn-togithub", "#btn-github", "#btn-creds", "#btn-update",
+              "#autostart-label", "#autostart")
 
 UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
@@ -99,6 +107,8 @@ def get_maude_version() -> str:
     'maude update' → 'dev'.
     """
     import subprocess as _sp
+    if IS_WIN:
+        return mx.VERSION
     try:
         v = _sp.check_output(
             ["git", "-C", str(Path(__file__).parent), "describe", "--tags", "--always"],
@@ -341,6 +351,8 @@ def _claude_mcp(*args: str, capture: bool = False):
     model/prompt word and injects --model, which breaks `mcp add --transport`."""
     real = Path.home() / ".local" / "bin" / "claude"
     exe = str(real) if os.access(real, os.X_OK) else "claude"
+    if IS_WIN:
+        exe = mx.find_claude(os.environ["USERPROFILE"]) or "claude"
     if capture:
         return subprocess.run([exe, "mcp", *args], capture_output=True,
                               text=True, timeout=60)
@@ -414,6 +426,26 @@ def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
         subprocess.run(tool_command(tool, model, True), check=False)  # nothing to resume
 
 
+def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
+    """Windows: run the tool natively in the project folder, OUTSIDE the sandbox, with normal
+    permission prompts (no bypass flag anywhere). Children go through mx._run so Ctrl+C
+    never kills them."""
+    if tool == DEFAULT_TOOL:
+        sync_perplexity()
+        rc = mx.run_windows(str(path), model, fresh=fresh)
+        if rc == 3:  # claude missing: run_windows printed the install hint
+            input("Press Enter to go back. ")
+        return
+    cmd = tool_command(tool, model, fresh)
+    exe = shutil.which(cmd[0])
+    if not exe:
+        input(f"{tool} is not installed on Windows. Press Enter to go back. ")
+        return
+    print(mx.BANNER.format(path).replace("Claude Code", tool))
+    if mx._run([exe, *cmd[1:]], cwd=str(path)) and tool == "Kiro CLI" and not fresh:
+        mx._run([exe, *tool_command(tool, model, True)[1:]], cwd=str(path))  # nothing to resume
+
+
 def open_project(project_path: Path, model: str, *, fresh: bool = False,
                  tool: str = DEFAULT_TOOL) -> None:
     """Launch the selected AI tool for a project (Claude Code by default).
@@ -428,6 +460,9 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
     starts with no history.
     """
     os.chdir(project_path)
+    if IS_WIN:
+        _open_project_win(project_path, model, fresh, tool)
+        return
     if tool != DEFAULT_TOOL:
         _open_other_tool(tool, model, fresh)
         return
@@ -3385,6 +3420,9 @@ class MaudeApp(App):
 
     def on_mount(self) -> None:
         self._kanna_proc: subprocess.Popen | None = None
+        if IS_WIN:  # sandbox-only features (bash helpers, ssh/gpg, kanna, wrapper creds)
+            for i in WIN_HIDDEN:
+                self.query_one(i).display = False
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
         # Sync the model RadioSet's keyboard cursor with the actually-
@@ -3423,6 +3461,8 @@ class MaudeApp(App):
         radioset.refresh()
 
     def _maybe_prompt_ssh_unlock(self) -> None:
+        if IS_WIN:
+            return
         if not SSH_KEY_PATH.exists():
             return
         # Start an agent if one isn't already exposed in the env. On a
@@ -3655,6 +3695,14 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
+        if IS_WIN:  # new PowerShell window; the TUI keeps running
+            d = self._selected_project() or PROJECTS_DIR
+            cmd, kw = mx.shell_cmd(str(d), shutil.which("wt.exe"))
+            try:
+                subprocess.Popen(cmd, **kw)
+            except OSError as e:
+                self.notify(f"Could not open PowerShell: {e}", severity="error")
+            return
         self.exit()
 
     @on(DataTable.RowSelected)
@@ -3730,7 +3778,7 @@ class MaudeApp(App):
         # skip `claude --continue` — otherwise it errors ("No conversation to
         # continue"), flashes on screen, and only then falls back to a fresh
         # launch.
-        if not check_credentials():
+        if not IS_WIN and not check_credentials():  # Windows: native claude.exe has its own login
             self._pending_project = path
             self._pending_fresh = fresh
             self.push_screen(CredsEntryScreen(), self._on_creds_for_project)
@@ -3823,7 +3871,8 @@ if __name__ == "__main__":
         changed, msg = fix_bashrc_orphan_fi()
         print(msg)
         sys.exit(0 if (changed or "already clean" in msg) else 1)
-    maybe_self_update()
+    if not IS_WIN:
+        maybe_self_update()
     while True:
         app = MaudeApp()
         rv = app.run()           # app.run() returns the value passed to self.exit()
