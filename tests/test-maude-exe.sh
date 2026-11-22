@@ -93,3 +93,30 @@ assert_eq "path present case+slash" None "$(PW 'c:\users\BOB\.LOCAL\bin\;C:\X')"
 assert_eq "path present %USERPROFILE%" None "$(PW '%USERPROFILE%\.local\bin;C:\X')"
 
 suite_summary
+# tool install offers (pure parts)
+assert_eq "plan present" "[]" "$(py "m.install_plan('Crush', True, False)")"
+assert_eq "plan claude" "[('Claude Code', 'irm https://claude.ai/install.ps1 | iex')]" "$(py "m.install_plan('Claude Code', False, True)")"
+assert_eq "plan kiro quoted url" "[('Kiro CLI', \"irm 'https://cli.kiro.dev/install.ps1' | iex\")]" "$(py "m.install_plan('Kiro CLI', False, False)")"
+assert_eq "plan opencode, bun there" "[('OpenCode', 'bun install -g --trust @opencode/cli')]" "$(py "m.install_plan('OpenCode', False, True)")"
+assert_eq "plan crush, no bun" "['Bun', 'Crush']" "$(py "[l for l, c in m.install_plan('Crush', False, False)]")"
+assert_eq "plan bun cmd" "irm bun.sh/install.ps1 | iex" "$(py "m.install_plan('OpenCode', False, False)[0][1]")"
+assert_eq "path prepend" 'C:\b;C:\a' "$(py "m.path_prepend(r'C:\\a', [r'C:\\b', r'c:\\A'])")"
+assert_eq "path prepend empty" 'C:\b' "$(py "m.path_prepend('', [r'C:\\b'])")"
+assert_eq "find_tool checks bun dir" 'C:\U\.bun\bin' "$(py "m.find_tool('crush', {'USERPROFILE': r'C:\\U'}, lambda b, path=None: path if path and path.endswith('.bun\\\\bin') else None)")"
+assert_eq "find_tool kiro program files" 'C:\PF\Kiro-Cli' "$(py "m.find_tool('kiro-cli', {'USERPROFILE': r'C:\\U', 'ProgramFiles': r'C:\\PF'}, lambda b, path=None: path if path and 'Kiro' in path else None)")"
+# ensure_tool flow with fakes: answers, run results, which binaries appear after each run
+et_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+tool, ans, rc, appears = sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5].split(",")
+log, have = [], {}
+def run(c):
+    log.append(c[-1]); (not rc) and have.update({b: "x" for b in appears}); return rc
+r = m.ensure_tool(tool, have.get, lambda q: log.append(q) or ans, run, lambda s: None, lambda: log.append("refresh"))
+print(r, "|".join(log))
+PY
+}
+assert_eq "ensure: yes installs bun then crush" "x Install Bun now? [Y/n] |irm bun.sh/install.ps1 | iex|refresh|Install Crush now? [Y/n] |bun install -g --trust @charmland/crush|refresh" "$(et_run Crush y 0 bun,crush)"
+assert_eq "ensure: default Enter = yes" "x" "$(et_run 'Claude Code' '' 0 claude | cut -d' ' -f1)"
+assert_eq "ensure: no" "None Install Claude Code now? [Y/n] " "$(et_run 'Claude Code' n 0 claude)"
+assert_eq "ensure: install fails" "None" "$(et_run 'Kiro CLI' y 1 kiro-cli | cut -d' ' -f1)"
+assert_eq "ensure: installed but not found" "None" "$(et_run 'Kiro CLI' y 0 other | cut -d' ' -f1)"

@@ -25,9 +25,29 @@ Open Project runs these commands (working directory is the project folder):
 | Kiro CLI | `kiro-cli chat --resume` (then `kiro-cli chat` if that fails); fresh: `kiro-cli chat` |
 | OpenCode, Crush | `opencode --continue`, `crush --continue` (fresh: no flag) |
 
-`claude` is found on PATH, else at `%USERPROFILE%\.local\bin\claude.exe`. If it is missing, the TUI prints `irm https://claude.ai/install.ps1 | iex` and waits for Enter. The other tools must be on the Windows PATH, else the TUI prints "<tool> is not installed on Windows" and waits for Enter. A one-line OUTSIDE-the-sandbox banner is printed before every launch. No bypass flag (`--dangerously-skip-permissions` or similar) is ever passed on Windows. Ctrl+C belongs to the child tool and never kills it. With the Perplexity box ticked, the connector is set up with the real `claude` binary before Claude Code starts.
+Each tool is found on PATH, else in `%USERPROFILE%\.local\bin` (claude), `%USERPROFILE%\.bun\bin` (bun and its global tools) or `%ProgramFiles%\Kiro-Cli` (Kiro CLI). If it is missing, the TUI is suspended and asks (see "Tool install offers" below). A one-line OUTSIDE-the-sandbox banner is printed before every launch. No bypass flag (`--dangerously-skip-permissions` or similar) is ever passed on Windows. Ctrl+C belongs to the child tool and never kills it. With the Perplexity box ticked, the connector is set up with the real `claude` binary before Claude Code starts.
 
 The sandbox and the `claude` wrapper (with its positional model alias) do not exist on Windows. Folder arguments and the Explorer menu keep their behaviour (next sections).
+
+## Tool install offers (first run on a new PC)
+
+Goal: start `maude.exe` on a new PC and let it set up what is missing. In order:
+
+1. Start: it copies itself to `%USERPROFILE%\.local\bin`, adds the Explorer menu entry and adds that folder to the user PATH (see "First run").
+2. The TUI starts without WSL. With no WSL, no `Maude` distro or no cached share, it tries `wsl.exe` once (no console input, 15 s limit), then uses the setup folder rule. `Projects` is created if missing.
+3. Open Project with a tool that is not installed: the TUI is suspended and Maude prints what is missing and the exact command, then asks `Install <Tool> now? [Y/n]`. Enter or `y` runs it with `powershell -NoProfile -ExecutionPolicy Bypass -Command "<command>"` in the same console. `n` prints a message and waits for Enter.
+
+| Tool | Command |
+|---|---|
+| Claude Code | `irm https://claude.ai/install.ps1 \| iex` |
+| Kiro CLI | `irm 'https://cli.kiro.dev/install.ps1' \| iex` (MSI, installs to `C:\Program Files\Kiro-Cli`, may ask for admin) |
+| OpenCode | `bun install -g --trust @opencode/cli` |
+| Crush | `bun install -g --trust @charmland/crush` |
+| Bun (first, only if OpenCode or Crush is chosen and bun is missing) | `irm bun.sh/install.ps1 \| iex` |
+
+After a successful install Maude adds `%USERPROFILE%\.local\bin` and `%USERPROFILE%\.bun\bin` (when they exist) to the user PATH and to its own PATH, looks the tool up again and starts it. If the install fails or the tool is still not found, Maude prints why and waits for Enter. Other PowerShell windows need a restart to see the new PATH.
+
+Git for Windows is optional for Claude Code (without it Claude Code uses PowerShell as its shell tool), so Maude does not install it. `--trust` is a documented `bun add` flag; its effect together with `-g` is not verified.
 
 ## Outside-sandbox projects
 
@@ -62,7 +82,7 @@ The sandbox is the default. Windows mode is a deliberate choice.
 | inside the share | `--windows` | Windows mode too: an explicit choice is honoured even for a folder inside the share |
 | any | `--model <alias>` | Model override (`opus`, `sonnet`, `haiku`, `fable` or a full model name; letters, digits, `.`, `_`, `-` only; default: sandbox `~/.maude-model`, or `%USERPROFILE%\.maude-model` in Windows mode, else `opus`) |
 
-Windows mode runs `claude --model <alias> --continue` in the folder. If that exits non-zero it runs `claude --model <alias>`. It looks for `claude` on PATH, then `%USERPROFILE%\.local\bin\claude.exe`. It never passes `--dangerously-skip-permissions` or any bypass mode. If Claude Code is not found it prints `irm https://claude.ai/install.ps1 | iex` and exits with code 3. It installs nothing.
+Windows mode runs `claude --model <alias> --continue` in the folder. If that exits non-zero it runs `claude --model <alias>`. It looks for `claude` on PATH, then `%USERPROFILE%\.local\bin\claude.exe`. It never passes `--dangerously-skip-permissions` or any bypass mode. If Claude Code is not found it prints `irm https://claude.ai/install.ps1 | iex` and exits with code 3. Folder mode installs nothing; only the TUI offers installs.
 
 Share detection order (TUI and folder mode):
 

@@ -94,6 +94,13 @@ try:
     assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
     assert not any("skip" in a or "bypass" in a for c, _ in calls for a in c)
+    # Missing non-Claude tool: install offered (declined here), nothing is run, TUI gets control back.
+    calls.clear()
+    asked = []
+    mx.find_tool = lambda b, *a, **k: None
+    import builtins; builtins.input = lambda q="": asked.append(q) or "n"
+    maude.open_project(proj, "opus", tool="OpenCode")
+    assert calls == [] and any("Install Bun now" in q for q in asked), (calls, asked)
     print("win_tui_smoke ok")
 finally:
     os.chdir(LIGHT)

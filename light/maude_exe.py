@@ -76,7 +76,7 @@ def parse_fstab_share(text: str) -> str | None:
 def fstab_share() -> str | None:
     try:
         r = subprocess.run(["wsl.exe", "-d", DISTRO, "-e", "cat", "/etc/fstab"],
-                           capture_output=True, timeout=15, check=False)
+                           capture_output=True, stdin=subprocess.DEVNULL, timeout=15, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return parse_fstab_share(r.stdout.decode("utf-8", "replace")) if r.returncode == 0 else None
@@ -168,10 +168,82 @@ def windows_cmd(claude: str, model: str, cont: bool) -> list[str]:
     return [claude, "--model", model] + (["--continue"] if cont else [])
 
 
+BUN_CMD = "irm bun.sh/install.ps1 | iex"
+# Tool label -> (binary, PowerShell install command). OpenCode and Crush come from bun.
+TOOL_INSTALL = {
+    "Claude Code": ("claude", "irm https://claude.ai/install.ps1 | iex"),
+    "Kiro CLI": ("kiro-cli", "irm 'https://cli.kiro.dev/install.ps1' | iex"),
+    "OpenCode": ("opencode", "bun install -g --trust @opencode/cli"),  # --trust with -g: unverified
+    "Crush": ("crush", "bun install -g --trust @charmland/crush"),
+}
+
+
+def user_dirs(env) -> list[str]:
+    """Per-user install folders: claude (.local\\bin), bun and bun globals (.bun\\bin)."""
+    up = env["USERPROFILE"]
+    return [str(W(up) / ".local" / "bin"), str(W(up) / ".bun" / "bin")]
+
+
+def tool_dirs(env) -> list[str]:
+    """user_dirs plus the Kiro MSI folder (a system install that sets its own PATH)."""
+    return user_dirs(env) + ([str(W(env["ProgramFiles"]) / "Kiro-Cli")] if env.get("ProgramFiles") else [])
+
+
+def find_tool(binary: str, env=os.environ, which=shutil.which) -> str | None:
+    """PATH first, then the installer folders (a fresh install is not on this process's PATH yet)."""
+    return which(binary) or next((r for d in tool_dirs(env) if (r := which(binary, path=d))), None)
+
+
 def find_claude(userprofile: str) -> str | None:
-    return (shutil.which("claude")
-            or next((p for p in [str(W(userprofile) / ".local" / "bin" / "claude.exe")]
-                     if os.path.isfile(p)), None))
+    return find_tool("claude", {**os.environ, "USERPROFILE": userprofile})
+
+
+def install_plan(tool: str, have_tool: bool, have_bun: bool) -> list[tuple[str, str]]:
+    """(label, PowerShell command) steps needed before tool can start. Bun comes first if needed."""
+    if have_tool:
+        return []
+    cmd = TOOL_INSTALL[tool][1]
+    return ([("Bun", BUN_CMD)] if cmd.startswith("bun ") and not have_bun else []) + [(tool, cmd)]
+
+
+def path_prepend(path: str, dirs: list[str]) -> str:
+    """PATH value with dirs in front (dirs already in it are not repeated)."""
+    norm = lambda p: ntpath.normcase(ntpath.normpath(p.strip()))
+    have = {norm(e) for e in path.split(";") if e.strip()}
+    return ";".join([d for d in dirs if norm(d) not in have] + ([path] if path else []))
+
+
+def refresh_path(env=os.environ) -> None:
+    """After an install: add the new bin dirs to the user PATH (HKCU) and to this process's PATH."""
+    for d in user_dirs(env):
+        if os.path.isdir(d):
+            ensure_user_path(d)
+    env["PATH"] = path_prepend(env.get("PATH", ""), [d for d in tool_dirs(env) if os.path.isdir(d)])
+
+
+def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, refresh=lambda: None) -> str | None:
+    """Return the tool's path, offering to install it (and bun) when missing. None = not available
+    (declined, install failed or still not found); the reason has been printed."""
+    exe = find(TOOL_INSTALL[tool][0])
+    if exe:
+        return exe
+    run = run or _run
+    for label, cmd in install_plan(tool, False, find("bun") is not None):
+        say(f"{label} is not installed on Windows.\nInstall command: {cmd}")
+        try:
+            yes = ask(f"Install {label} now? [Y/n] ").strip().lower() in ("", "y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            yes = False
+        if not yes:
+            return None
+        if run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]):
+            say(f"The {label} install failed.")
+            return None
+        refresh()  # bun must be on PATH for the next step
+    exe = find(TOOL_INSTALL[tool][0])
+    if not exe:
+        say(f"{tool} was installed but is not found yet. Open a new PowerShell window and try again.")
+    return exe
 
 
 def windows_model(userprofile: str) -> str:

@@ -461,15 +461,17 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
     permission prompts (no bypass flag anywhere). Children go through mx._run so Ctrl+C
     never kills them."""
     if tool == DEFAULT_TOOL:
+        if not mx.find_claude(os.environ["USERPROFILE"]):  # offer the install; run_windows finds it after
+            mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path)
         sync_perplexity()
         rc = mx.run_windows(str(path), model, fresh=fresh)
         if rc == 3:  # claude missing: run_windows printed the install hint
             input("Press Enter to go back. ")
         return
     cmd = tool_command(tool, model, fresh)
-    exe = shutil.which(cmd[0])
-    if not exe:
-        input(f"{tool} is not installed on Windows. Press Enter to go back. ")
+    exe = mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path)
+    if not exe:  # ensure_tool said why (declined, failed, not found)
+        input("Press Enter to go back. ")
         return
     print(mx.BANNER.format(path))
     if mx._run([exe, *cmd[1:]], cwd=str(path)) and tool == "Kiro CLI" and not fresh:
