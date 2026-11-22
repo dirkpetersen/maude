@@ -305,6 +305,9 @@ def gh_user_login() -> str:
     return r.stdout.strip()
 
 
+REG_ORIG: dict[str, str] = {}  # Windows: resolved registry project path -> path as stored
+
+
 def list_projects() -> list[dict]:
     """Return projects sorted by last-modified time, newest first.
 
@@ -322,6 +325,7 @@ def list_projects() -> list[dict]:
             rp = os.path.realpath(r)
             if mx.project_key(rp) not in have and mx.folder_mode(rp, share) == "windows":
                 dirs.append((Path(rp), True))
+                REG_ORIG[rp] = r  # Delete must remove the value as stored, not the resolved path
     for p, outside in dirs:
         if p.is_dir() and (outside or not p.name.startswith(".")):
             try:
@@ -3896,7 +3900,7 @@ class MaudeApp(App):
         path = self._selected_project()
         if path and self._is_outside(path):  # registry entry only: never touch the folder
             try:
-                mx.remove_project(str(path))
+                mx.remove_project(REG_ORIG.get(str(path), str(path)))
             except OSError as e:
                 self.notify(f"Could not remove '{path.name}': {e}", severity="error")
                 return
