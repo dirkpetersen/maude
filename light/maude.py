@@ -49,7 +49,6 @@ IS_WIN = sys.platform == "win32"
 if IS_WIN:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # maude_exe.py sits next to us
     import maude_exe as mx
-    print("Maude: locating the Maude share (WSL)...", flush=True)
 PROJECTS_DIR = Path(mx.projects_dir()) if IS_WIN else Path.home() / "Maude" / "Projects"
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
 DISABLE_FLAG   = Path.home() / ".maude-tui-disabled"
@@ -472,7 +471,7 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
     if not exe:
         input(f"{tool} is not installed on Windows. Press Enter to go back. ")
         return
-    print(mx.BANNER.format(path).replace("Claude Code", tool))
+    print(mx.BANNER.format(path))
     if mx._run([exe, *cmd[1:]], cwd=str(path)) and tool == "Kiro CLI" and not fresh:
         mx._run([exe, *tool_command(tool, model, True)[1:]], cwd=str(path))  # nothing to resume
 

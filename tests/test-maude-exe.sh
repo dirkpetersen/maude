@@ -76,4 +76,11 @@ if python3 -I -c "import textual" 2>/dev/null; then
 else
   skip "textual not installed: win tui smoke"
 fi
+# share cache: valid -> no lookup; stale -> lookup + store; fstab failure -> heuristic, not stored
+PS() { py "(lambda log: ' '.join([m.pick_share($1, lambda p: p in {r'C:\\G\\Projects'}, lambda: log.append('lookup') or $2, lambda: 'HEUR', lambda s: log.append('store ' + s), lambda t: None)] + log))([])"; }
+assert_eq "cache valid" "C:\\G" "$(PS "r'C:\\G'" "r'C:\\X'")"
+assert_eq "cache stale" "C:\\X lookup store C:\\X" "$(PS "r'C:\\old'" "r'C:\\X'")"
+assert_eq "cache empty" "C:\\X lookup store C:\\X" "$(PS "None" "r'C:\\X'")"
+assert_eq "fstab fails -> heuristic" "HEUR lookup" "$(PS "r'C:\\old'" "None")"
+
 suite_summary

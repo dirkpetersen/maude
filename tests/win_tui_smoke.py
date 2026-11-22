@@ -20,6 +20,8 @@ try:
     os.environ.update(USERPROFILE=str(home), HOME=str(home), LOCALAPPDATA=str(Path(d) / "lad"))
     import maude_exe as mx
     mx.fstab_share = lambda: None            # no wsl.exe call
+    mx.read_share = lambda: None             # no real registry
+    mx.store_share = lambda s: None
     mx.share_root = lambda *a, **k: str(share)
     out1, out2, gone = Path(d) / "out" / "alpha", Path(d) / "out2" / "demo", Path(d) / "gone"
     out1.mkdir(parents=True); out2.mkdir(parents=True)  # out2 has the same basename as the share project

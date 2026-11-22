@@ -46,7 +46,7 @@ Registry (current user, REG_SZ values):
 HKCU\Software\Maude\Projects   <normalised folder path (lower case)> = <full folder path>
 ```
 
-Delete on an outside-sandbox project removes only its registry value. The folder is never moved or deleted. Delete on a share project is still a soft delete. To remove an entry by hand, delete the value in `regedit`. `maude.exe --uninstall` does not remove this key.
+Delete on an outside-sandbox project removes only its registry value. The folder is never moved or deleted. Delete on a share project is still a soft delete. To remove an entry by hand, delete the value in `regedit`. `maude.exe --uninstall` does not remove this key (it removes only the `Share` value of the parent key, see below).
 
 ## Two modes
 
@@ -56,7 +56,7 @@ The sandbox is the default. Windows mode is a deliberate choice.
 |---|---|---|
 | none (`maude.exe`, or `--tui`) | | The Windows TUI described above (no WSL needed to start it) |
 | inside `%LOCALAPPDATA%\Maude\Data\Maude` | | Sandbox: `wsl.exe -d Maude --cd ~/Maude/<rel> -e /usr/bin/env MAUDE_WELCOMED=1 bash -lc <script> maude <model>`. `-e` runs argv without a shell, so the model stays `$1`. `MAUDE_WELCOMED=1` stops the welcome TUI. The script runs `claude <model> --continue`, else `claude <model>` |
-| outside the share | none | Prints the OUTSIDE warning and asks `Run Claude Code on Windows outside the sandbox? [y/N]`. Only `y` or `yes` continues. No terminal means No |
+| outside the share | none | Prints the OUTSIDE warning and asks `Run Maude on Windows outside the sandbox? [y/N]`. Only `y` or `yes` continues. No terminal means No |
 | outside the share | `--windows` | Windows mode without the question |
 | outside the share | `--sandbox` | Not started. Prints that the folder must be moved into the share, exit code 2 |
 | inside the share | `--windows` | Windows mode too: an explicit choice is honoured even for a folder inside the share |
@@ -64,9 +64,15 @@ The sandbox is the default. Windows mode is a deliberate choice.
 
 Windows mode runs `claude --model <alias> --continue` in the folder. If that exits non-zero it runs `claude --model <alias>`. It looks for `claude` on PATH, then `%USERPROFILE%\.local\bin\claude.exe`. It never passes `--dangerously-skip-permissions` or any bypass mode. If Claude Code is not found it prints `irm https://claude.ai/install.ps1 | iex` and exits with code 3. It installs nothing.
 
-The share is read from the drvfs line for `/home/<user>/Maude` in the distro's `/etc/fstab` (`wsl.exe -d Maude -e cat /etc/fstab`; `\040` decoded to a space). If that fails, it falls back to the setup rule: `%LOCALAPPDATA%\Maude\Data\Maude` if it has a `Projects` folder, else the first OneDrive `Maude` folder that has one, else the local one. The forced setup flags `-OneDrive` and `-NoOneDrive` cannot be seen at run time.
+Share detection order (TUI and folder mode):
 
-Security statement: only exe mode, on a folder outside the share, after `y` or `--windows`, runs outside the sandbox. There Claude Code has your full Windows user rights (all your files, SSH keys, browser data), with normal permission prompts. Everything inside the share stays in the isolated WSL distro. The context menu runs `"<exe>" "%V"` without `--windows`, so it always asks first.
+1. Registry cache: `HKCU\Software\Maude`, REG_SZ value `Share`. It is used if the folder exists and has a `Projects` folder. No WSL call, no delay.
+2. Else the drvfs line for `/home/<user>/Maude` in the distro's `/etc/fstab` (`wsl.exe -d Maude -e cat /etc/fstab`; `\040` decoded to a space). Maude prints "Maude: locating the Maude share (WSL)..." and stores the result in `Share`.
+3. Else the setup rule: `%LOCALAPPDATA%\Maude\Data\Maude` if it has a `Projects` folder, else the first OneDrive `Maude` folder that has one, else the local one. This guess is never stored, because it can be wrong. The forced setup flags `-OneDrive` and `-NoOneDrive` cannot be seen at run time.
+
+A failed registry read or write is ignored. To reset the cache, delete the `Share` value in `regedit` or run `maude.exe --uninstall` (it removes `Share` and leaves `HKCU\Software\Maude\Projects` alone).
+
+Security statement: only exe mode, on a folder outside the share, after `y` or `--windows`, runs outside the sandbox. There Maude's AI agents have your full Windows user rights (all your files, SSH keys, browser data), with normal permission prompts. Everything inside the share stays in the isolated WSL distro. The context menu runs `"<exe>" "%V"` without `--windows`, so it always asks first.
 
 ## First run (no admin)
 

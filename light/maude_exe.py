@@ -82,6 +82,47 @@ def fstab_share() -> str | None:
     return parse_fstab_share(r.stdout.decode("utf-8", "replace")) if r.returncode == 0 else None
 
 
+REG_MAUDE = r"Software\Maude"  # HKCU; value "Share" caches the share root (REG_SZ)
+
+
+def read_share() -> str | None:
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_MAUDE) as h:
+            v, t = winreg.QueryValueEx(h, "Share")
+        return v if t == winreg.REG_SZ and v else None
+    except (ImportError, OSError):
+        return None
+
+
+def store_share(share: str) -> None:
+    """Non-fatal: a failed write only means the next start looks it up again."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_MAUDE) as h:
+            winreg.SetValueEx(h, "Share", 0, winreg.REG_SZ, share)
+    except (ImportError, OSError):
+        pass
+
+
+def pick_share(cached, isdir, lookup, heuristic, store, say=print) -> str:
+    """Share root: a cached value that still has Projects (no WSL call); else the fstab lookup
+    (cached when it works); else the heuristic, which is never cached because it may be wrong."""
+    if cached and isdir(str(W(cached) / "Projects")):
+        return cached
+    say("Maude: locating the Maude share (WSL)...")
+    found = lookup()
+    if found:
+        store(found)
+        return found
+    return heuristic()
+
+
+def resolve_share(env=os.environ) -> str:
+    return pick_share(read_share(), os.path.isdir, fstab_share,
+                      lambda: share_root(env["LOCALAPPDATA"], onedrive_candidates(env)), store_share)
+
+
 def valid_model(m: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", m))
 
@@ -207,12 +248,11 @@ def features(github: bool, outside: bool) -> str:
 
 
 BANNER = ("Maude: running OUTSIDE the sandbox in {}. "
-          "Claude Code has your full Windows user rights here.")
+          "Maude's AI agents have your full Windows user rights here.")
 
 
 def projects_dir(env=os.environ) -> str:
-    share = fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env))
-    return str(W(os.path.realpath(share)) / "Projects")
+    return str(W(os.path.realpath(resolve_share(env))) / "Projects")
 
 
 def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = False) -> int:
@@ -288,6 +328,11 @@ def uninstall() -> None:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
             except FileNotFoundError:
                 pass
+    try:  # the cached share root; the Projects key stays
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_MAUDE, 0, winreg.KEY_SET_VALUE) as h:
+            winreg.DeleteValue(h, "Share")
+    except OSError:
+        pass
     print("Context menu removed. To finish, delete "
           + install_target(os.environ["USERPROFILE"]) + " (after this program has ended).")
 
@@ -339,7 +384,7 @@ def main(argv: list[str]) -> int:
         return 0
     folder = os.path.realpath(args[0])
     env = os.environ
-    share = os.path.realpath(fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env)))
+    share = os.path.realpath(resolve_share(env))
     answer, asked = None, False
     while True:
         what = decide(folder, share, flag, answer)
@@ -348,7 +393,7 @@ def main(argv: list[str]) -> int:
         print(BANNER.format(folder))
         answer, asked = "", True
         if sys.stdin.isatty():  # no terminal means No
-            answer = input("Run Claude Code on Windows outside the sandbox? [y/N] ")
+            answer = input("Run Maude on Windows outside the sandbox? [y/N] ")
     if what == "windows":
         if folder_mode(folder, share) == "windows":  # outside the share: list it in the TUI
             with contextlib.suppress(OSError):
