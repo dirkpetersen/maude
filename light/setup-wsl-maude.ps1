@@ -1078,6 +1078,9 @@ foreach ($f in $filesToPipe) {
     }
 }
 
+# Reset the maude.exe share-root cache so it reads the new fstab line.
+Remove-ItemProperty -Path HKCU:\Software\Maude -Name Share -ErrorAction SilentlyContinue
+
 # Push host folder path so root-bootstrap.sh can configure the fstab mount.
 $HostFolder | wsl -d $DistroName -u root -- bash -c "cat > /tmp/maude-hostfolder && sed -i 's/\r$//' /tmp/maude-hostfolder"
 

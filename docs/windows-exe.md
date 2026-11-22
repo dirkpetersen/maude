@@ -86,7 +86,8 @@ HKCU\Software\Classes\Directory\Background\shell\OpenInMaude  MUIVerb = Open in 
 HKCU\Software\Classes\Directory\Background\shell\OpenInMaude\command  (default) = "<exe>" "%V"
 ```
 
-3. Prints a hint to add `%USERPROFILE%\.local\bin` to the user PATH. It does not change PATH.
+3. Adds `%USERPROFILE%\.local\bin` to the user PATH (`HKCU\Environment`, value `Path`, appended, nothing reordered, the system PATH is never touched) if it is not there, and broadcasts a settings change. This runs on every start, so it also repairs a PATH entry that a user removed. Open a new PowerShell window to type `maude`.
+4. When the exe or the menu was newly installed, prints: Shift+right-click any folder in Explorer and select "Open in Maude". When PATH changed, it also says so.
 
 Windows 11 shows these entries under "Show more options".
 
@@ -94,7 +95,7 @@ Flags: `--version`, `--uninstall` (removes the keys; then delete `%USERPROFILE%\
 
 ## Install
 
-Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and run it once. Check the hash with `Get-FileHash maude.exe`. The exe is unsigned, so SmartScreen shows "Windows protected your PC": choose More info, then Run anyway.
+Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and run it once, also from the Downloads folder: it copies itself to `%USERPROFILE%\.local\bin`. Check the hash with `Get-FileHash maude.exe`. The exe is unsigned, so SmartScreen shows "Windows protected your PC": choose More info, then Run anyway.
 
 ## Build
 
@@ -105,3 +106,5 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled.
 
 It uploads the artifact `maude-exe`. `release.yml` calls it on `v*.*.*` tags and attaches `maude.exe` and `maude.exe.sha256` to the release. The real console behaviour (colours, suspend while a tool runs, new PowerShell window) is not tested in CI.
+
+The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software\Maude\Share` value, so a reinstall makes maude.exe look up the share root again.

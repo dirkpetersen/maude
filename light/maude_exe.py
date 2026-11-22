@@ -281,10 +281,38 @@ def _run(cmd: list[str], **kw) -> int:
             continue
 
 
-def self_install(env=os.environ) -> tuple[str, bool]:
-    """Return (exe path used by the menu, whether anything changed)."""
+def path_with(value: str, d: str) -> str | None:
+    """New user PATH value with d appended, or None if d is already an entry."""
+    norm = lambda p: ntpath.normcase(ntpath.normpath(ntpath.expandvars(p.strip()))).rstrip("\\")
+    if any(e.strip() and norm(e) == norm(d) for e in value.split(";")):
+        return None
+    return value.rstrip(";") + (";" if value.rstrip(";") else "") + d
+
+
+def ensure_user_path(d: str) -> bool:
+    """Add d to the user PATH (HKCU only) and tell running shells. True if PATH changed."""
+    import winreg
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as h:
+            try:
+                value, kind = winreg.QueryValueEx(h, "Path")
+            except FileNotFoundError:
+                value, kind = "", winreg.REG_EXPAND_SZ
+            new = path_with(value, d)
+            if new is None:
+                return False
+            winreg.SetValueEx(h, "Path", 0, kind, new)
+        import ctypes
+        ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 2, 5000, None)
+        return True
+    except OSError:
+        return False
+
+
+def self_install(env=os.environ) -> tuple[str, bool, bool]:
+    """Return (exe path used by the menu, whether the exe or menu changed, whether PATH changed)."""
     if not getattr(sys, "frozen", False):  # plain `python maude_exe.py`: never install python.exe
-        return os.path.abspath(sys.executable), False
+        return os.path.abspath(sys.executable), False, False
     import winreg
     cur = os.path.abspath(sys.executable)
     target = install_target(env["USERPROFILE"])
@@ -317,7 +345,7 @@ def self_install(env=os.environ) -> tuple[str, bool]:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, k + r"\command") as h:
             winreg.SetValueEx(h, None, 0, winreg.REG_SZ, context_cmd(exe))
         changed = True
-    return exe, changed
+    return exe, changed, ensure_user_path(os.path.dirname(target))
 
 
 def uninstall() -> None:
@@ -374,10 +402,11 @@ def main(argv: list[str]) -> int:
         print(f"maude: bad model name: {model}", file=sys.stderr)
         return 2
     if "--no-install" not in argv and not os.environ.get("MAUDE_NO_INSTALL"):
-        exe, changed = self_install()
+        exe, changed, path_changed = self_install()
         if changed:
-            print(f"Maude: installed {exe} and the 'Open in Maude' folder menu.")
-            print(r"Hint: add %USERPROFILE%\.local\bin to your user PATH to type 'maude' in PowerShell.")
+            print(f'Maude is installed as {exe}. Shift+right-click any folder in Explorer and select "Open in Maude".')
+        if path_changed:
+            print(r"Added %USERPROFILE%\.local\bin to your user PATH. Open a new PowerShell window to type 'maude' there.")
     if not args:
         import maude  # the Textual TUI, Windows mode (light/maude.py)
         maude.MaudeApp().run()

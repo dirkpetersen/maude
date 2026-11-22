@@ -82,5 +82,14 @@ assert_eq "cache valid" "C:\\G" "$(PS "r'C:\\G'" "r'C:\\X'")"
 assert_eq "cache stale" "C:\\X lookup store C:\\X" "$(PS "r'C:\\old'" "r'C:\\X'")"
 assert_eq "cache empty" "C:\\X lookup store C:\\X" "$(PS "None" "r'C:\\X'")"
 assert_eq "fstab fails -> heuristic" "HEUR lookup" "$(PS "r'C:\\old'" "None")"
+# user PATH append
+PW() { USERPROFILE='C:\Users\bob' py "m.path_with(r'$1', r'C:\Users\bob\.local\bin')"; }
+B='C:\Users\bob\.local\bin'
+assert_eq "path empty" "$B" "$(PW '')"
+assert_eq "path append" "C:\\X;$B" "$(PW 'C:\X')"
+assert_eq "path trailing semicolon" "C:\\X;$B" "$(PW 'C:\X;')"
+assert_eq "path present" None "$(PW "C:\\X;$B")"
+assert_eq "path present case+slash" None "$(PW 'c:\users\BOB\.LOCAL\bin\;C:\X')"
+assert_eq "path present %USERPROFILE%" None "$(PW '%USERPROFILE%\.local\bin;C:\X')"
 
 suite_summary
