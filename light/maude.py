@@ -2928,7 +2928,19 @@ class MaudeApp(App):
     RadioButton.-on {
         color: #f8d090;
         text-style: bold;
-        background: #2b221a;
+    }
+
+    /* Radio cursor: no Textual blue/green block, and none at all when the set is
+       not focused (otherwise a stale cursor row looks like a second selection). */
+    RadioSet:blur > RadioButton.-selected > .toggle--label,
+    RadioButton:blur:hover > .toggle--label {
+        background: transparent;
+    }
+
+    RadioSet:focus > RadioButton.-selected > .toggle--label {
+        background: #3a3030;
+        color: #f8d090;
+        text-style: bold;
     }
 
     ScrollBar {
@@ -3757,8 +3769,16 @@ class MaudeApp(App):
         self.query_one("#projects-table", DataTable).focus()
 
     def _press(self, sel: str, items: tuple, value: str) -> None:
-        """Select a radio button in code; the Changed echo is ignored by the handlers."""
-        self.query_one(sel, RadioSet).query(RadioButton)[items.index(value)].value = True
+        """Select a radio button in code. Set every button and the set's pressed button
+        directly: this runs inside the other RadioSet's prevent(RadioButton.Changed), so the
+        set never sees the change and would leave the old button on (two selected)."""
+        rs = self.query_one(sel, RadioSet)
+        buttons = list(rs.query(RadioButton))
+        idx = items.index(value)
+        with rs.prevent(RadioButton.Changed):
+            for i, b in enumerate(buttons):
+                b.value = i == idx
+        rs._pressed_button = buttons[idx]  # type: ignore[attr-defined]
         self._sync_cursor(sel, items, value)
 
     # ── Callbacks ─────────────────────────────────────────────────────

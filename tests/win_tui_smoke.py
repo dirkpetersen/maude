@@ -39,6 +39,14 @@ try:
                 assert not app.query_one(i).display, i
             for i in ("#btn-open", "#btn-new", "#btn-cli", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i
+            # Radio coupling: fable then Crush must leave exactly one button on per set (opus, Crush).
+            from textual.widgets import RadioButton
+            rb = lambda sel, n: app.query_one(sel).query(RadioButton)[n]
+            await pilot.click(rb("#model-select", 0)); await pilot.pause()
+            await pilot.click(rb("#tool-select", 3)); await pilot.pause()
+            on = {sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
+                  for sel in ("#model-select", "#tool-select")}
+            assert on == {"#model-select": ["opus"], "#tool-select": ["Crush"]}, on
             exited = []
             app.exit = lambda *a, **k: exited.append(1)
             app.query_one("#btn-cli").press()
