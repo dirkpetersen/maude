@@ -1,0 +1,40 @@
+[project]
+site_name = "Maude"
+site_description = "A sandbox for agentic coding on Windows."
+site_url = "https://dirkpetersen.github.io/maude/"
+repo_url = "https://github.com/dirkpetersen/maude"
+docs_dir = "docs"
+site_dir = "site"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Windows" = [
+    "windows-exe.md",
+    "windows-setup.md",
+  ] },
+  { "Using Maude" = [
+    "tui.md",
+    "cli.md",
+    "security.md",
+    "multi-cli-reviewers.md",
+  ] },
+]
+
+[project.theme]
+features = [
+  "content.code.copy",
+  "navigation.sections",
+  "search.highlight",
+]
+
+# Palette toggle for light mode
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+# Palette toggle for dark mode
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
