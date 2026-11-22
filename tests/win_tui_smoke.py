@@ -61,10 +61,13 @@ try:
     calls = []
     mx.find_claude = lambda up: "C:/c.exe"
     mx._run = lambda cmd, **kw: calls.append((cmd, kw.get("cwd"))) or 0
+    cwd0 = os.getcwd()
     maude.open_project(proj, "sonnet", fresh=False)
+    assert os.getcwd() == cwd0  # TUI must not hold the project folder
     maude.open_project(proj, "sonnet", fresh=True)
     assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
+    assert mx.shell_cmd("C:\\x; new-tab cmd", "C:\\wt.exe")[0][0] == "powershell.exe"
     assert not any("skip" in a or "bypass" in a for c, _ in calls for a in c)
     print("win_tui_smoke ok")
 finally:

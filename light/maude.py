@@ -48,6 +48,7 @@ IS_WIN = sys.platform == "win32"
 if IS_WIN:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # maude_exe.py sits next to us
     import maude_exe as mx
+    print("Maude: locating the Maude share (WSL)...", flush=True)
 PROJECTS_DIR = Path(mx.projects_dir()) if IS_WIN else Path.home() / "Maude" / "Projects"
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
 DISABLE_FLAG   = Path.home() / ".maude-tui-disabled"
@@ -459,10 +460,10 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
     When `fresh=True`, skip `--continue` entirely so the conversation
     starts with no history.
     """
-    os.chdir(project_path)
-    if IS_WIN:
+    if IS_WIN:  # no chdir: the TUI must not hold the folder (delete would fail); children get cwd=
         _open_project_win(project_path, model, fresh, tool)
         return
+    os.chdir(project_path)
     if tool != DEFAULT_TOOL:
         _open_other_tool(tool, model, fresh)
         return
@@ -3835,7 +3836,10 @@ class MaudeApp(App):
             return
         path = PROJECTS_DIR / name
         path.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "-C", str(path), "init", "--quiet"], check=False)
+        try:
+            subprocess.run(["git", "-C", str(path), "init", "--quiet"], check=False)
+        except FileNotFoundError:  # Git for Windows missing
+            self.notify("git not found: project created without git init", severity="warning")
         self._refresh_table()
         # A just-created project has no prior session, so launch fresh and
         # skip `claude --continue` (which would error + flash on screen).
@@ -3846,7 +3850,11 @@ class MaudeApp(App):
             return
         path = self._selected_project()
         if path:
-            soft_delete(path)
+            try:
+                soft_delete(path)
+            except OSError as e:  # e.g. folder in use by a shell opened via Command Line
+                self.notify(f"Could not delete '{path.name}': {e}", severity="error")
+                return
             self.notify(f"'{path.name}' moved to .deleted/")
             self._refresh_table()
 
