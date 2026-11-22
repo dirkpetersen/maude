@@ -66,7 +66,7 @@ Registry (current user, REG_SZ values):
 HKCU\Software\Maude\Projects   <normalised folder path (lower case)> = <full folder path>
 ```
 
-Delete on an outside-sandbox project removes only its registry value. The folder is never moved or deleted. Delete on a share project is still a soft delete. To remove an entry by hand, delete the value in `regedit`. `maude.exe --uninstall` does not remove this key (it removes only the `Share` value of the parent key, see below).
+Delete on an outside-sandbox project removes only its registry value. The folder is never moved or deleted. Delete on a share project is still a soft delete. A dim line separates the outside-sandbox projects from the share projects, and after Delete on an outside project a message shows the folder path so you can delete the folder by hand. To remove an entry by hand, delete the value in `regedit`. `maude.exe --uninstall` does not remove this key (it removes only the `Share` value of the parent key, see below).
 
 ## Two modes
 

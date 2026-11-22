@@ -61,12 +61,12 @@ rm -rf "$td"
 # Linux: Features header, no Windows caption
 if python3 -I -c "import textual" 2>/dev/null; then
   td=$(mktemp -d)
-  assert_eq "linux features column, no caption" "Features False" "$(HOME="$td" python3 -I -c "
+  assert_eq "linux features column, no caption, no separator" "Features False False" "$(HOME="$td" python3 -I -c "
 import sys, asyncio; sys.path.insert(0, sys.argv[1]); import maude
 async def go():
     async with maude.MaudeApp().run_test(size=(140, 40)) as p:
         await p.pause(); t = p.app.query_one('#projects-table')
-        print(str(t.columns[list(t.columns)[2]].label), maude.WIN_CAPTION in maude.make_gradient_logo().plain)
+        print(str(t.columns[list(t.columns)[2]].label), maude.WIN_CAPTION in maude.make_gradient_logo().plain, any(k.value == '__sep__' for k in t.rows))
 asyncio.run(go())" "${SCRIPT_DIR}/../light" 2>&1 | tail -1)"
   rm -rf "$td"
 fi

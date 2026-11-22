@@ -47,8 +47,21 @@ try:
             assert str(table.columns[list(table.columns)[2]].label) == "Features"
             cells = [[str(c) for c in table.get_row_at(i)] for i in range(table.row_count)]
             # outside first (newest content first), then share; missing folder hidden; same names get a parent
-            assert [c[0].strip() for c in cells] == ["demo (out2)", "alpha", "demo (Projects)"], cells
-            assert [c[2] for c in cells] == ["No Sandbox"] * 2 + ["·"], cells
+            assert [c[0].strip() for c in cells][:2] == ["demo (out2)", "alpha"] and cells[3][0].strip() == "demo (Projects)", cells
+            assert set(cells[2][0].strip()) == {"─"} and list(table.rows)[2].value == "__sep__", cells
+            assert [c[2] for c in cells] == ["No Sandbox"] * 2 + [cells[2][2], "·"], cells
+            table.move_cursor(row=1); await pilot.pause()
+            await pilot.press("down"); await pilot.pause()
+            assert table.cursor_row == 3, table.cursor_row   # skips the rule: first share project
+            await pilot.press("up"); await pilot.pause()
+            assert table.cursor_row == 1, table.cursor_row   # last outside project
+            from textual.coordinate import Coordinate
+            table.cursor_coordinate = Coordinate(2, 0)       # cursor forced onto the rule (message not yet handled)
+            assert app._selected_project() is None
+            app.action_delete_selected(); await pilot.pause()
+            assert len(app.screen_stack) == 1, "delete on the rule must open nothing"
+            await pilot.pause()
+            assert table.cursor_row != 2, table.cursor_row
             logo = app.query_one("#logo")
             assert logo.size.height >= 6, logo.size
             from textual.geometry import Region
@@ -57,11 +70,12 @@ try:
             table.move_cursor(row=0)
             app.action_delete_selected(); await pilot.pause()
             from textual.widgets import Label
-            assert "folder is not touched" in str(app.screen.query_one("#confirm-sub", Label).render())
+            assert "folder is not deleted" in str(app.screen.query_one("#confirm-sub", Label).render())
             app.screen.query_one("#btn-yes").press(); await pilot.pause()
             assert str(out2) not in reg and str(out1) in reg and out2.is_dir(), reg  # registry entry only
-            assert table.row_count == 2
-            table.move_cursor(row=1)  # share project: still soft-deleted
+            assert any(str(out2) in n.message and "manually" in n.message for n in app._notifications), list(app._notifications)
+            assert table.row_count == 3
+            table.move_cursor(row=2)  # share project: still soft-deleted
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
             for i in maude.WIN_HIDDEN:
                 assert not app.query_one(i).display, i

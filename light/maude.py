@@ -22,7 +22,7 @@ from rich.color import Color
 from datetime import datetime
 from pathlib import Path
 
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
@@ -1696,6 +1696,9 @@ class _CredsValidation(Exception):
     pass
 
 
+SEP_KEY = "__sep__"  # key of the rule row between no-sandbox and share projects (Windows)
+
+
 class ConfirmDeleteScreen(ModalScreen[bool]):
     """Ask the user to confirm deletion."""
 
@@ -1712,7 +1715,7 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Container(id="confirm-box"):
             yield Label(f"Delete project '{self.project_name}'?", id="confirm-title")
-            yield Label("Only the entry is removed from this list. The folder is not touched."
+            yield Label("Removed from the Maude list only. The folder is not deleted."
                         if self.outside else
                         "It will be moved to .deleted/  and can be recovered manually.",
                         id="confirm-sub")
@@ -3538,7 +3541,16 @@ class MaudeApp(App):
         table.clear(columns=True)
         table.add_columns("  Project", "Last modified", "Features")
         now = time.time()
-        for proj in list_projects():
+        projs = list_projects()
+        # Windows: one rule row between the no-sandbox and the share group.
+        sep_at = next((i for i in range(1, len(projs))
+                       if projs[i - 1]["outside"] and not projs[i]["outside"]), None)
+        for n, proj in enumerate(projs):
+            if n == sep_at:
+                w = [max(len(c) for c in col) for col in zip(
+                    ("  Project", "Last modified", "Features"),
+                    *((f"  {q['label']}", q["modified"], features(q["github"], q["outside"]) or "·") for q in projs))]
+                table.add_row(*(Text("─" * x, style="dim") for x in w), key=SEP_KEY)
             age = now - proj["mtime"] if proj["mtime"] else float("inf")
             if age < 86400:            # today
                 name_style  = "bold #f0f0f0"
@@ -3564,8 +3576,27 @@ class MaudeApp(App):
         table = self.query_one("#projects-table", DataTable)
         if table.row_count == 0 or table.cursor_row < 0:
             return None
-        path = Path(table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value)
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+        if key == SEP_KEY:
+            return None
+        path = Path(key)
         return path if path.exists() else None
+
+    @on(events.MouseDown, "#projects-table")
+    def _table_mouse_down(self) -> None:
+        self._clicked = True
+
+    @on(DataTable.RowHighlighted, "#projects-table")
+    def _skip_separator(self, event: DataTable.RowHighlighted) -> None:
+        """The rule row is not selectable: step over it in the direction of travel."""
+        row, last = event.cursor_row, getattr(self, "_last_row", -1)
+        if event.row_key is None or event.row_key.value != SEP_KEY:
+            self._last_row = row
+            return
+        down = getattr(self, "_clicked", False) or row >= last
+        self._clicked = False
+        self._last_row = row + 1 if down else row - 1
+        event.data_table.move_cursor(row=self._last_row)
 
     def _is_outside(self, path: Path) -> bool:
         return IS_WIN and path.parent != PROJECTS_DIR
@@ -3753,6 +3784,8 @@ class MaudeApp(App):
     @on(DataTable.RowSelected)
     def row_selected(self, event: DataTable.RowSelected) -> None:
         """Double-click / Enter on a row opens the project."""
+        if event.row_key.value == SEP_KEY:
+            return
         path = Path(event.row_key.value)
         if path.exists():
             self._launch_project(path)
@@ -3906,7 +3939,8 @@ class MaudeApp(App):
             except OSError as e:
                 self.notify(f"Could not remove '{path.name}': {e}", severity="error")
                 return
-            self.notify(f"'{path.name}' removed from the list (folder untouched)")
+            self.notify(f"'{path.name}' was removed from the Maude list. The folder still exists: {REG_ORIG.get(str(path), str(path))}. "
+                        "Delete it manually if you no longer need it.", timeout=10)
             self._refresh_table()
         elif path:
             try:
