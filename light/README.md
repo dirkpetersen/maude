@@ -273,7 +273,7 @@ Then open the new profile from the Windows Terminal dropdown, or run `wsl -d Mau
 
 ## maude.exe (Windows launcher)
 
-`maude.exe` from the GitHub Release runs the Maude TUI in PowerShell (no argument). It lists the projects of the shared Maude folder. Open Project runs the AI tool natively on Windows, outside the sandbox, with normal permission prompts. Command Line exits back to the same PowerShell. Web UI, Git setup, credentials and update stay in the sandbox. It also adds "Open in Maude" to the Explorer folder menu. Folders in the shared Maude folder open in the sandbox. A folder outside it runs outside the sandbox only after you answer yes (or pass `--windows`). See [docs/windows-exe.md](../docs/windows-exe.md).
+`maude.exe` from the GitHub Release runs the Maude TUI in PowerShell (no argument). It lists the projects of the shared Maude folder, and the folders you added with "Open in Maude" (outside the sandbox, shown first, stored in `HKCU\Software\Maude\Projects`). The third column "Features" shows `GitHub` and `No Sandbox`; the logo is red with the caption "running outside the sandbox". Open Project runs the AI tool natively on Windows, outside the sandbox, with normal permission prompts. Command Line exits back to the same PowerShell. Web UI, Git setup, credentials and update stay in the sandbox. It also adds "Open in Maude" to the Explorer folder menu. Folders in the shared Maude folder open in the sandbox. A folder outside it runs outside the sandbox only after you answer yes (or pass `--windows`). See [docs/windows-exe.md](../docs/windows-exe.md).
 
 ## Troubleshooting
 

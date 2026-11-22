@@ -48,6 +48,28 @@ assert_eq "fstab 040 spaces" 'C:\Users\bob\OneDrive - Co\Maude' "$(py "m.parse_f
 assert_eq "fstab other mounts ignored" None "$(py "m.parse_fstab_share('C:\\\\ /mnt/c drvfs defaults 0 0\nLABEL=x / ext4 defaults 0 1\n')")"
 assert_eq "fstab garbage" None "$(py "m.parse_fstab_share('\\x00 junk\n\n  \nfoo')")"
 assert_eq "fstab empty" None "$(py "m.parse_fstab_share('')")"
+# outside-sandbox project list helpers
+assert_eq "project key" 'c:\x\proj' "$(py "m.project_key(r'C:\\X\\y\\..\\Proj')")"
+assert_eq "features none" "''" "$(py "repr(m.features(False, False))")"
+assert_eq "features github" GitHub "$(py "m.features(True, False)")"
+assert_eq "features both" "GitHub, No Sandbox" "$(py "m.features(True, True)")"
+assert_eq "merge order+labels" "b:True a (X):True s:False a (Projects):False" "$(py "' '.join(d['label'] + ':' + str(d['outside']) for d in m.merge_projects([{'path': r'C:\\X\\a', 'mtime': 1}, {'path': r'C:\\Y\\b', 'mtime': 9}], [{'path': r'C:\\P\\Projects\\a', 'mtime': 1}, {'path': r'C:\\P\\Projects\\s', 'mtime': 5}]))")"
+td=$(mktemp -d); mkdir -p "$td/p/.git" "$td/p/sub"; touch -d '@978307200' "$td/p"; touch -d '@1700000000' "$td/p/.git"; touch -d '@1577836800' "$td/p/sub"
+assert_eq "content mtime ignores .git, sees children" 1577836800.0 "$(py "m.content_mtime(r'$td/p')")"
+assert_eq "content mtime missing" 0.0 "$(py "m.content_mtime(r'$td/none')")"
+rm -rf "$td"
+# Linux: Features header, no Windows caption
+if python3 -I -c "import textual" 2>/dev/null; then
+  td=$(mktemp -d)
+  assert_eq "linux features column, no caption" "Features False" "$(HOME="$td" python3 -I -c "
+import sys, asyncio; sys.path.insert(0, sys.argv[1]); import maude
+async def go():
+    async with maude.MaudeApp().run_test(size=(140, 40)) as p:
+        await p.pause(); t = p.app.query_one('#projects-table')
+        print(str(t.columns[list(t.columns)[2]].label), maude.WIN_CAPTION in maude.make_gradient_logo().plain)
+asyncio.run(go())" "${SCRIPT_DIR}/../light" 2>&1 | tail -1)"
+  rm -rf "$td"
+fi
 # Windows mode of maude.py, headless (needs textual; skipped when absent)
 if python3 -I -c "import textual" 2>/dev/null; then
   assert_exit_zero "win tui smoke" python3 "${SCRIPT_DIR}/win_tui_smoke.py"

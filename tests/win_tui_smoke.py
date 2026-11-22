@@ -21,6 +21,15 @@ try:
     import maude_exe as mx
     mx.fstab_share = lambda: None            # no wsl.exe call
     mx.share_root = lambda *a, **k: str(share)
+    out1, out2, gone = Path(d) / "out" / "alpha", Path(d) / "out2" / "demo", Path(d) / "gone"
+    out1.mkdir(parents=True); out2.mkdir(parents=True)  # out2 has the same basename as the share project
+    (out1 / "f.txt").write_text("x")
+    os.utime(out1, (1, 1)); os.utime(out1 / "f.txt", (5000, 5000))  # newest content decides
+    os.utime(out2, (9000, 9000))
+    os.utime(share / "Projects" / "demo", (99999, 99999))
+    reg = [str(gone), str(out1), str(out2), str(share / "Projects" / "demo") + os.sep, str(share / "Projects" / "demo" / "sub")]  # fake registry: one folder is missing
+    mx.read_projects = lambda: list(reg)
+    mx.remove_project = lambda f: reg.remove(f)
     import maude
     if os.name != "nt":                      # Linux: force Windows mode for the checks below
         maude.IS_WIN, maude.mx = True, mx
@@ -33,8 +42,25 @@ try:
             app = pilot.app
             await pilot.pause()
             table = app.query_one("#projects-table")
-            assert table.row_count == 1, table.row_count
-            assert "demo" in str(table.get_row_at(0)[0]), table.get_row_at(0)
+            assert str(table.columns[list(table.columns)[2]].label) == "Features"
+            cells = [[str(c) for c in table.get_row_at(i)] for i in range(table.row_count)]
+            # outside first (newest content first), then share; missing folder hidden; same names get a parent
+            assert [c[0].strip() for c in cells] == ["demo (out2)", "alpha", "demo (Projects)"], cells
+            assert [c[2] for c in cells] == ["No Sandbox"] * 2 + ["·"], cells
+            logo = app.query_one("#logo")
+            assert logo.size.height >= 6, logo.size
+            from textual.geometry import Region
+            shown = "".join(s.text for s in logo.render_lines(Region(0, 0, logo.size.width, logo.size.height))[5]) if hasattr(logo, "render_lines") else ""
+            assert maude.WIN_CAPTION in shown, shown
+            table.move_cursor(row=0)
+            app.action_delete_selected(); await pilot.pause()
+            from textual.widgets import Label
+            assert "folder is not touched" in str(app.screen.query_one("#confirm-sub", Label).render())
+            app.screen.query_one("#btn-yes").press(); await pilot.pause()
+            assert str(out2) not in reg and str(out1) in reg and out2.is_dir(), reg  # registry entry only
+            assert table.row_count == 2
+            table.move_cursor(row=1)  # share project: still soft-deleted
+            assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
             for i in maude.WIN_HIDDEN:
                 assert not app.query_one(i).display, i
             for i in ("#btn-open", "#btn-new", "#btn-cli", "#fresh-context", "#perplexity"):

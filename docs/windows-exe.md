@@ -10,7 +10,7 @@ This is Windows mode of the TUI. It lists the projects of the Maude share (the s
 
 | TUI feature | On Windows (maude.exe) |
 |---|---|
-| Project list, New, Delete (soft delete to `Projects\.deleted`) | Works on the share's `Projects` folder |
+| Project list, New, Delete | Works on the share's `Projects` folder (Delete = soft delete to `Projects\.deleted`) plus the outside-sandbox projects (see next section). New always creates the folder in the share |
 | Model picker, AI tool picker, Clear context, Perplexity checkbox | Work. State files are in `%USERPROFILE%` (`.maude-model`, `.maude-tool`, `.maude-perplexity`) |
 | Open Project | Runs the selected AI tool natively on Windows in the project folder, OUTSIDE the sandbox, with normal permission prompts (see below) |
 | Command Line | Exits the TUI and returns to the PowerShell that started `maude.exe` (same as on Linux). Run `maude.exe` again to come back. |
@@ -28,6 +28,25 @@ Open Project runs these commands (working directory is the project folder):
 `claude` is found on PATH, else at `%USERPROFILE%\.local\bin\claude.exe`. If it is missing, the TUI prints `irm https://claude.ai/install.ps1 | iex` and waits for Enter. The other tools must be on the Windows PATH, else the TUI prints "<tool> is not installed on Windows" and waits for Enter. A one-line OUTSIDE-the-sandbox banner is printed before every launch. No bypass flag (`--dangerously-skip-permissions` or similar) is ever passed on Windows. Ctrl+C belongs to the child tool and never kills it. With the Perplexity box ticked, the connector is set up with the real `claude` binary before Claude Code starts.
 
 The sandbox and the `claude` wrapper (with its positional model alias) do not exist on Windows. Folder arguments and the Explorer menu keep their behaviour (next sections).
+
+## Outside-sandbox projects
+
+The Windows TUI shows two groups of projects. The red logo with the caption "running outside the sandbox" tells you that you are in this mode.
+
+- Outside-sandbox projects come first. They are folders that you opened with "Open in Maude" (or `maude.exe <folder>`) outside the share and then confirmed Windows mode (`y`, `yes` or `--windows`). A folder inside the share is not added, because it is already listed.
+- Then come the share projects. The outside-sandbox projects are not shown when the TUI runs in the sandbox.
+
+Each group is sorted by last change, newest first. Last change = the newest modification time of the folder and its direct children (no deep scan, `.git` is skipped). A folder that no longer exists is hidden, but its registry value stays. If two projects have the same folder name, the list shows `name (parent folder)`.
+
+The third column is "Features". It lists `GitHub` (the project has a GitHub remote) and `No Sandbox` (outside-sandbox project), joined with `, `. In the sandbox only `GitHub` can appear.
+
+Registry (current user, REG_SZ values):
+
+```
+HKCU\Software\Maude\Projects   <normalised folder path (lower case)> = <full folder path>
+```
+
+Delete on an outside-sandbox project removes only its registry value. The folder is never moved or deleted. Delete on a share project is still a soft delete. To remove an entry by hand, delete the value in `regedit`. `maude.exe --uninstall` does not remove this key.
 
 ## Two modes
 
@@ -75,7 +94,7 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 
 `.github/workflows/build-maude-exe.yml` builds on `windows-latest` with `pyinstaller==6.11.1` and `textual==8.2.8`: `pyinstaller --onefile --console --name maude --paths light --hidden-import maude --hidden-import maude_exe --collect-all textual --collect-all rich light/maude_exe.py`. It injects the tag as version (`dev` outside tags). Checks in CI:
 
-1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE` and share. It checks the project list, the hidden buttons, that Command Line exits the TUI and the Open Project commands (spawns are patched, nothing opens).
+1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE`, share and registry. It checks the project list and its order, the Features cells, that Delete on an outside project removes only the registry entry, the logo caption, the hidden buttons, that Command Line exits the TUI and the Open Project commands (spawns are patched, nothing opens).
 2. `maude.exe --version`.
 3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled.
 

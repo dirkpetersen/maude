@@ -26,6 +26,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -91,11 +92,17 @@ _LOGO_GRADIENT = [
     "#148177",  # row 4 — deep teal (brighter than #0a8880 for contrast)
 ]
 
+_LOGO_GRADIENT_WIN = ["#ff9a9a", "#f27474", "#e05252", "#c93a3a", "#a82a2a"]  # reds: outside the sandbox
+WIN_CAPTION = "running outside the sandbox"
+
 def make_gradient_logo() -> Text:
+    grad = _LOGO_GRADIENT_WIN if IS_WIN else _LOGO_GRADIENT
     text = Text()
     for i, line in enumerate(LOGO.splitlines()):
-        colour = _LOGO_GRADIENT[i] if i < len(_LOGO_GRADIENT) else _LOGO_GRADIENT[-1]
+        colour = grad[i] if i < len(grad) else grad[-1]
         text.append(line + "\n", style=f"bold {colour}")
+    if IS_WIN:
+        text.append(" " + WIN_CAPTION + "\n", style="dim #e05252")
     return text
 
 
@@ -299,13 +306,22 @@ def gh_user_login() -> str:
 
 
 def list_projects() -> list[dict]:
-    """Return projects sorted by last-modified time, newest first."""
+    """Return projects sorted by last-modified time, newest first.
+
+    Windows: outside-sandbox projects (registry) first, then share projects, each group sorted
+    by the newest mtime of the folder content. Missing registry folders are hidden."""
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     projects = []
-    for p in PROJECTS_DIR.iterdir():
-        if p.is_dir() and not p.name.startswith("."):
+    dirs = [(p, False) for p in PROJECTS_DIR.iterdir()]
+    if IS_WIN:
+        have = {mx.project_key(str(p)) for p, _ in dirs}  # a registry entry must not duplicate a share row
+        share = str(PROJECTS_DIR.parent)
+        dirs += [(Path(r), True) for r in mx.read_projects()
+                 if mx.project_key(r) not in have and mx.folder_mode(r, share) == "windows"]
+    for p, outside in dirs:
+        if p.is_dir() and (outside or not p.name.startswith(".")):
             try:
-                mtime = p.stat().st_mtime
+                mtime = mx.content_mtime(str(p)) if IS_WIN else p.stat().st_mtime
             except OSError:
                 mtime = 0.0
             modified = (datetime.fromtimestamp(mtime).strftime("%b %d, %Y")
@@ -318,7 +334,12 @@ def list_projects() -> list[dict]:
                 "mtime":    mtime,
                 "origin":   origin,
                 "github":   is_github_remote(origin),
+                "outside":  outside,
+                "label":    p.name,
             })
+    if IS_WIN:
+        return mx.merge_projects([d for d in projects if d["outside"]],
+                                 [d for d in projects if not d["outside"]])
     projects.sort(key=lambda d: d["mtime"], reverse=True)
     return projects
 
@@ -514,6 +535,10 @@ def save_tool(name: str) -> None:
             TOOL_FILE.write_text(name)
         except OSError:
             pass
+
+
+def features(github: bool, outside: bool) -> str:
+    return mx.features(github, outside) if IS_WIN else "GitHub" if github else ""
 
 
 def soft_delete(project_path: Path) -> None:
@@ -1669,14 +1694,17 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
-    def __init__(self, project_name: str) -> None:
+    def __init__(self, project_name: str, outside: bool = False) -> None:
         super().__init__()
         self.project_name = project_name
+        self.outside = outside
 
     def compose(self) -> ComposeResult:
         with Container(id="confirm-box"):
             yield Label(f"Delete project '{self.project_name}'?", id="confirm-title")
-            yield Label("It will be moved to .deleted/  and can be recovered manually.",
+            yield Label("Only the entry is removed from this list. The folder is not touched."
+                        if self.outside else
+                        "It will be moved to .deleted/  and can be recovered manually.",
                         id="confirm-sub")
             with Horizontal(id="confirm-buttons"):
                 yield Button("Delete", variant="error",   id="btn-yes")
@@ -3436,6 +3464,7 @@ class MaudeApp(App):
         if IS_WIN:  # sandbox-only features (bash helpers, ssh/gpg, kanna, wrapper creds)
             for i in WIN_HIDDEN:
                 self.query_one(i).display = False
+            self.query_one("#logo").styles.height = 6  # room for the caption line
         self._refresh_table()
         self.query_one("#projects-table", DataTable).focus()
         # Sync the model RadioSet's keyboard cursor with the actually-
@@ -3497,7 +3526,7 @@ class MaudeApp(App):
     def _refresh_table(self) -> None:
         table = self.query_one("#projects-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("  Project", "Last modified", "GitHub")
+        table.add_columns("  Project", "Last modified", "Features")
         now = time.time()
         for proj in list_projects():
             age = now - proj["mtime"] if proj["mtime"] else float("inf")
@@ -3513,22 +3542,23 @@ class MaudeApp(App):
             else:                      # older — use dim+italic so text stays readable
                 name_style  = "dim #a09090"
                 time_style  = "italic #888080"
-            gh_style = "#72c09a" if proj["github"] else "#504040"
+            feats = features(proj["github"], proj["outside"])
             table.add_row(
-                Text(f"  {proj['name']}", style=name_style),
+                Text(f"  {proj['label']}", style=name_style),
                 Text(proj["modified"],    style=time_style),
-                Text("⎇ yes" if proj["github"] else "·", style=gh_style),
-                key=proj["name"],
+                Text(feats or "·", style="#72c09a" if feats else "#504040"),
+                key=str(proj["path"]),
             )
 
     def _selected_project(self) -> Path | None:
         table = self.query_one("#projects-table", DataTable)
-        if table.cursor_row < 0:
+        if table.row_count == 0 or table.cursor_row < 0:
             return None
-        row_key = table.get_row_at(table.cursor_row)
-        name = str(row_key[0]).strip()
-        path = PROJECTS_DIR / name
+        path = Path(table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value)
         return path if path.exists() else None
+
+    def _is_outside(self, path: Path) -> bool:
+        return IS_WIN and path.parent != PROJECTS_DIR
 
     # ── Actions ───────────────────────────────────────────────────────
 
@@ -3543,7 +3573,7 @@ class MaudeApp(App):
     def action_delete_selected(self) -> None:
         path = self._selected_project()
         if path:
-            self.push_screen(ConfirmDeleteScreen(path.name), self._on_confirm_delete)
+            self.push_screen(ConfirmDeleteScreen(path.name, self._is_outside(path)), self._on_confirm_delete)
 
     def action_quit_to_shell(self) -> None:
         self.exit()
@@ -3713,8 +3743,7 @@ class MaudeApp(App):
     @on(DataTable.RowSelected)
     def row_selected(self, event: DataTable.RowSelected) -> None:
         """Double-click / Enter on a row opens the project."""
-        name = str(event.row_key.value).strip()
-        path = PROJECTS_DIR / name
+        path = Path(event.row_key.value)
         if path.exists():
             self._launch_project(path)
 
@@ -3807,7 +3836,6 @@ class MaudeApp(App):
             self._launch_project_now(path, fresh=fresh)
 
     def _launch_project_now(self, path: Path, *, fresh: bool | None = None) -> None:
-        name = path.name
         # Honour the sidebar checkbox when the caller didn't force a value:
         # when checked, skip --continue so Claude starts with a clean
         # conversation.
@@ -3826,10 +3854,11 @@ class MaudeApp(App):
             except Exception:
                 pass
         self._refresh_table()
-        self._select_project(name)
+        self._select_project(path)
 
-    def _select_project(self, name: str) -> None:
-        """Move the table cursor to the row whose key is `name`, if it exists."""
+    def _select_project(self, path: Path) -> None:
+        """Move the table cursor to the row of `path`, if it exists."""
+        name = str(path)
         table = self.query_one("#projects-table", DataTable)
         try:
             index = table.get_row_index(name)
@@ -3861,7 +3890,15 @@ class MaudeApp(App):
         if not confirmed:
             return
         path = self._selected_project()
-        if path:
+        if path and self._is_outside(path):  # registry entry only: never touch the folder
+            try:
+                mx.remove_project(str(path))
+            except OSError as e:
+                self.notify(f"Could not remove '{path.name}': {e}", severity="error")
+                return
+            self.notify(f"'{path.name}' removed from the list (folder untouched)")
+            self._refresh_table()
+        elif path:
             try:
                 soft_delete(path)
             except OSError as e:  # e.g. folder in use by a shell opened via Command Line

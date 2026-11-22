@@ -203,6 +203,8 @@ WT auto-generates profiles with `source=Microsoft.WSL` — they cannot be delete
 
 Full-screen Textual TUI — default welcome experience for every new terminal session.
 
+Projects table columns: Project, Last modified, Features (`GitHub` when the project has a GitHub remote; on Windows also `No Sandbox`). On Windows (`maude.exe`, no sandbox) the logo is red with the caption "running outside the sandbox", and the list is the outside-sandbox projects (registry `HKCU\Software\Maude\Projects`, added by "Open in Maude") first, then the share projects, each sorted by newest folder content. Delete of an outside project removes only the registry value. See `docs/windows-exe.md`.
+
 ```
 ┌─ Maude ──────────────────────────────────────────────────────────────┐
 │  ASCII logo (green)         │  Projects                              │

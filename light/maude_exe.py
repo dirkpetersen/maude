@@ -142,6 +142,70 @@ def windows_model(userprofile: str) -> str:
     return m if valid_model(m) else "opus"
 
 
+REG_PROJECTS = r"Software\Maude\Projects"  # HKCU; value name = project_key(folder), data = folder
+
+
+def project_key(folder: str) -> str:
+    return ntpath.normcase(ntpath.normpath(folder))
+
+
+def read_projects() -> list[str]:
+    """Folders registered by "Open in Maude" (outside the share). Empty off Windows or on error."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PROJECTS) as h:
+            n = winreg.QueryInfoKey(h)[1]
+            return [v for _, v, t in (winreg.EnumValue(h, i) for i in range(n)) if t == winreg.REG_SZ and v]
+    except (ImportError, OSError):
+        return []
+
+
+def add_project(folder: str) -> None:
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PROJECTS) as h:
+        winreg.SetValueEx(h, project_key(folder), 0, winreg.REG_SZ, folder)
+
+
+def remove_project(folder: str) -> None:
+    """Remove the registry value only. The folder itself is never touched."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PROJECTS, 0, winreg.KEY_SET_VALUE) as h:
+            winreg.DeleteValue(h, project_key(folder))
+    except FileNotFoundError:
+        pass  # other OSError (e.g. access denied) goes to the caller
+
+
+def content_mtime(folder: str) -> float:
+    """Newest mtime of the folder and its direct children (no tree walk; .git is skipped). 0.0 if unreadable."""
+    try:
+        m = os.stat(folder).st_mtime
+        with os.scandir(folder) as it:
+            for e in it:
+                if e.name != ".git":
+                    with contextlib.suppress(OSError):
+                        m = max(m, e.stat().st_mtime)
+        return m
+    except OSError:
+        return 0.0
+
+
+def merge_projects(outside: list[dict], share: list[dict]) -> list[dict]:
+    """Outside-sandbox projects first, then share projects; each group newest "mtime" first.
+    Labels get "name (parent)" when a basename occurs twice. Dicts need "path" (str-like) and "mtime"."""
+    rows = ([dict(d, outside=True) for d in sorted(outside, key=lambda d: -d["mtime"])]
+            + [dict(d, outside=False) for d in sorted(share, key=lambda d: -d["mtime"])])
+    names = [W(str(d["path"])).name or str(d["path"]) for d in rows]
+    for d, n in zip(rows, names):
+        par = W(str(d["path"])).parent.name
+        d["label"] = f"{n} ({par})" if names.count(n) > 1 and par else n
+    return rows
+
+
+def features(github: bool, outside: bool) -> str:
+    return ", ".join(f for f, on in (("GitHub", github), ("No Sandbox", outside)) if on)
+
+
 BANNER = ("Maude: running OUTSIDE the sandbox in {}. "
           "Claude Code has your full Windows user rights here.")
 
@@ -286,6 +350,9 @@ def main(argv: list[str]) -> int:
         if sys.stdin.isatty():  # no terminal means No
             answer = input("Run Claude Code on Windows outside the sandbox? [y/N] ")
     if what == "windows":
+        if folder_mode(folder, share) == "windows":  # outside the share: list it in the TUI
+            with contextlib.suppress(OSError):
+                add_project(folder)
         return run_windows(folder, model, banner=not asked)
     if what in ("deny", "refuse"):
         print(f"Maude: not started. To use the sandbox, move the folder into {share}.", file=sys.stderr)
