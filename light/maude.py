@@ -314,10 +314,14 @@ def list_projects() -> list[dict]:
     projects = []
     dirs = [(p, False) for p in PROJECTS_DIR.iterdir()]
     if IS_WIN:
-        have = {mx.project_key(str(p)) for p, _ in dirs}  # a registry entry must not duplicate a share row
-        share = str(PROJECTS_DIR.parent)
-        dirs += [(Path(r), True) for r in mx.read_projects()
-                 if mx.project_key(r) not in have and mx.folder_mode(r, share) == "windows"]
+        # A registry entry must not duplicate a share row: compare fully resolved paths
+        # (realpath expands 8.3 short names and drops trailing separators).
+        have = {mx.project_key(os.path.realpath(p)) for p, _ in dirs}
+        share = os.path.realpath(PROJECTS_DIR.parent)
+        for r in mx.read_projects():
+            rp = os.path.realpath(r)
+            if mx.project_key(rp) not in have and mx.folder_mode(rp, share) == "windows":
+                dirs.append((Path(rp), True))
     for p, outside in dirs:
         if p.is_dir() and (outside or not p.name.startswith(".")):
             try:
