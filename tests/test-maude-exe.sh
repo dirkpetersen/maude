@@ -48,9 +48,6 @@ assert_eq "fstab 040 spaces" 'C:\Users\bob\OneDrive - Co\Maude' "$(py "m.parse_f
 assert_eq "fstab other mounts ignored" None "$(py "m.parse_fstab_share('C:\\\\ /mnt/c drvfs defaults 0 0\nLABEL=x / ext4 defaults 0 1\n')")"
 assert_eq "fstab garbage" None "$(py "m.parse_fstab_share('\\x00 junk\n\n  \nfoo')")"
 assert_eq "fstab empty" None "$(py "m.parse_fstab_share('')")"
-assert_eq "cli button with wt" "(['C:/wt.exe', '-d', 'C:/p x', 'powershell.exe', '-NoLogo'], {})" "$(py "m.shell_cmd(r'C:/p x', r'C:/wt.exe')")"
-assert_eq "cli button without wt" "(['powershell.exe', '-NoLogo'], {'cwd': 'C:/p x', 'creationflags': 16})" "$(py "m.shell_cmd(r'C:/p x', None)")"
-assert_eq "cli button semicolon never uses wt" "(['powershell.exe', '-NoLogo'], {'cwd': 'C:/x; new-tab cmd', 'creationflags': 16})" "$(py "m.shell_cmd(r'C:/x; new-tab cmd', r'C:/wt.exe')")"
 # Windows mode of maude.py, headless (needs textual; skipped when absent)
 if python3 -I -c "import textual" 2>/dev/null; then
   assert_exit_zero "win tui smoke" python3 "${SCRIPT_DIR}/win_tui_smoke.py"

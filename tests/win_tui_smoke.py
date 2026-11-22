@@ -39,21 +39,11 @@ try:
                 assert not app.query_one(i).display, i
             for i in ("#btn-open", "#btn-new", "#btn-cli", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i
-            spawned = []
-            real_popen, real_which = subprocess.Popen, shutil.which
-            subprocess.Popen = lambda cmd, **kw: spawned.append((cmd, kw))
-            try:
-                shutil.which = lambda n: "C:\\wt\\wt.exe" if n == "wt.exe" else None
-                app.query_one("#btn-cli").press()
-                await pilot.pause()
-                shutil.which = lambda n: None
-                app.query_one("#btn-cli").press()
-                await pilot.pause()
-            finally:
-                subprocess.Popen, shutil.which = real_popen, real_which
-            assert spawned[0] == (["C:\\wt\\wt.exe", "-d", str(proj), "powershell.exe", "-NoLogo"], {}), spawned[0]
-            assert spawned[1] == (["powershell.exe", "-NoLogo"], {"cwd": str(proj), "creationflags": 0x10}), spawned[1]
-            assert app.is_running  # the TUI stays up
+            exited = []
+            app.exit = lambda *a, **k: exited.append(1)
+            app.query_one("#btn-cli").press()
+            await pilot.pause()
+            assert exited  # Command Line returns to the PowerShell that started maude.exe
 
     asyncio.run(check())
 
@@ -67,7 +57,6 @@ try:
     maude.open_project(proj, "sonnet", fresh=True)
     assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
-    assert mx.shell_cmd("C:\\x; new-tab cmd", "C:\\wt.exe")[0][0] == "powershell.exe"
     assert not any("skip" in a or "bypass" in a for c, _ in calls for a in c)
     print("win_tui_smoke ok")
 finally:

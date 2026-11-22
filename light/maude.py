@@ -3696,15 +3696,7 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
-        if IS_WIN:  # new PowerShell window; the TUI keeps running
-            d = self._selected_project() or PROJECTS_DIR
-            cmd, kw = mx.shell_cmd(str(d), shutil.which("wt.exe"))
-            try:
-                subprocess.Popen(cmd, **kw)
-            except OSError as e:
-                self.notify(f"Could not open PowerShell: {e}", severity="error")
-            return
-        self.exit()
+        self.exit()  # back to the shell that started the TUI (bash, or PowerShell on Windows)
 
     @on(DataTable.RowSelected)
     def row_selected(self, event: DataTable.RowSelected) -> None:

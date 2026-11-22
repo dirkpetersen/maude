@@ -13,7 +13,7 @@ This is Windows mode of the TUI. It lists the projects of the Maude share (the s
 | Project list, New, Delete (soft delete to `Projects\.deleted`) | Works on the share's `Projects` folder |
 | Model picker, AI tool picker, Clear context, Perplexity checkbox | Work. State files are in `%USERPROFILE%` (`.maude-model`, `.maude-tool`, `.maude-perplexity`) |
 | Open Project | Runs the selected AI tool natively on Windows in the project folder, OUTSIDE the sandbox, with normal permission prompts (see below) |
-| Command Line | Opens a new PowerShell window in the selected project folder (else the `Projects` folder). The TUI keeps running. Uses `wt.exe -d <dir> powershell.exe -NoLogo` if `wt.exe` is on PATH, else `powershell.exe -NoLogo` in a new console with that working directory |
+| Command Line | Exits the TUI and returns to the PowerShell that started `maude.exe` (same as on Linux). Run `maude.exe` again to come back. |
 | Web UI (kanna), To Github, Setup Git(hub), Set Creds, Update Maude, Autostart | Hidden. They need the sandbox (bash helpers, ssh, gpg, `mom`, `.bashrc`, `fuser`, process groups, the `claude` wrapper). Use the sandbox for them |
 | Daily self-update of `maude.py`, credential gate | Off. The exe is updated by downloading a new release. Native `claude.exe` has its own login |
 
@@ -75,7 +75,7 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 
 `.github/workflows/build-maude-exe.yml` builds on `windows-latest` with `pyinstaller==6.11.1` and `textual==8.2.8`: `pyinstaller --onefile --console --name maude --paths light --hidden-import maude --hidden-import maude_exe --collect-all textual --collect-all rich light/maude_exe.py`. It injects the tag as version (`dev` outside tags). Checks in CI:
 
-1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE` and share. It checks the project list, the hidden buttons, the Command Line command (with and without `wt.exe`) and the Open Project commands (spawns are patched, nothing opens).
+1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE` and share. It checks the project list, the hidden buttons, that Command Line exits the TUI and the Open Project commands (spawns are patched, nothing opens).
 2. `maude.exe --version`.
 3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled.
 

@@ -146,13 +146,6 @@ BANNER = ("Maude: running OUTSIDE the sandbox in {}. "
           "Claude Code has your full Windows user rights here.")
 
 
-def shell_cmd(d: str, wt: str | None) -> tuple[list[str], dict]:
-    """New PowerShell window in d (TUI Command Line button). No shell string, so no quoting issue."""
-    if wt and ";" not in d:  # wt splits its argv on ";" (new-tab etc.): a project name could inject commands
-        return [wt, "-d", d, "powershell.exe", "-NoLogo"], {}
-    return ["powershell.exe", "-NoLogo"], {"cwd": d, "creationflags": 0x10}  # CREATE_NEW_CONSOLE
-
-
 def projects_dir(env=os.environ) -> str:
     share = fstab_share() or share_root(env["LOCALAPPDATA"], onedrive_candidates(env))
     return str(W(os.path.realpath(share)) / "Projects")
