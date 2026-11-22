@@ -27,7 +27,7 @@ try:
     os.utime(out1, (1, 1)); os.utime(out1 / "f.txt", (5000, 5000))  # newest content decides
     os.utime(out2, (9000, 9000))
     os.utime(share / "Projects" / "demo", (99999, 99999))
-    reg = [str(gone), str(out1), str(out2), str(share / "Projects" / "demo") + os.sep, str(share / "Projects" / "demo" / "sub")]  # fake registry: one folder is missing
+    reg = [str(gone), str(out1), str(out2), str(out1) + os.sep, str(share / "Projects" / "demo") + os.sep, str(share / "Projects" / "demo" / "sub")]  # fake registry: one folder is missing
     mx.read_projects = lambda: list(reg)
     mx.remove_project = lambda f: reg.remove(f)
     import maude

@@ -326,6 +326,7 @@ def list_projects() -> list[dict]:
             if mx.project_key(rp) not in have and mx.folder_mode(rp, share) == "windows":
                 dirs.append((Path(rp), True))
                 REG_ORIG[rp] = r  # Delete must remove the value as stored, not the resolved path
+                have.add(mx.project_key(rp))  # two values for one folder (short/long name, junction) -> one row
     for p, outside in dirs:
         if p.is_dir() and (outside or not p.name.startswith(".")):
             try:
