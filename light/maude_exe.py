@@ -374,89 +374,220 @@ def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, re
 
 
 GIT_LINK = "https://git-scm.com/download/win"
+MINGIT_API = "https://api.github.com/repos/git-for-windows/git/releases/latest"
+MINGIT_DL = "https://github.com/git-for-windows/git/releases/download/"
 _git_done = False  # offer Git once per Maude process
 
 
-def git_plan(have_git: bool, have_winget: bool):
-    """None = nothing to do, "link" = cannot install here (print the download link), else the winget
-    argument list (fixed strings). Always --scope user (no UAC, even for an admin) and no installer UI."""
+def mingit_dest(env=os.environ) -> str | None:
+    """Per-user install folder of MinGit (cmd\\git.exe inside). The whole tree must stay together:
+    cmd\\git.exe is a small launcher that finds the real git relative to its own path."""
+    return str(W(env["LOCALAPPDATA"]) / "Programs" / "MinGit") if env.get("LOCALAPPDATA") else None
+
+
+def mingit_arch(env=os.environ) -> str | None:
+    """Asset suffix of the MinGit zip for this Windows ("64-bit"/"arm64"), None if there is no such zip."""
+    return {"amd64": "64-bit", "arm64": "arm64"}.get(gh_arch(env) or "")
+
+
+def mingit_plan(have_git: bool, arch: str | None, dest: str | None):
+    """None = nothing to do, "link" = cannot install here, else the one-line description of the install."""
     if have_git:
         return None
-    if not have_winget:
+    if not arch or not dest:
         return "link"
-    return ["winget", "install", "--id", "Git.Git", "-e", "--source", "winget",
-            "--accept-package-agreements", "--accept-source-agreements",
-            "--scope", "user", "--silent", "--disable-interactivity"]
+    return (f"download the latest MinGit-<version>-{arch}.zip (about 40 MB) from github.com/git-for-windows/git, "
+            f"check its SHA-256 and unpack it to {dest} (about 100 MB, this user only, no admin)")
 
 
 def git_dirs(env=os.environ) -> list[str]:
-    return [str(W(env[k]) / sub) for k, sub in (("ProgramFiles", "Git/cmd"), ("LOCALAPPDATA", "Programs/Git/cmd"))
-            if env.get(k)]
+    """Where git.exe may be: our per-user MinGit, then an existing Git for Windows (machine or per-user)."""
+    d = mingit_dest(env)
+    return ([str(W(d) / "cmd")] if d else []) + [
+        str(W(env[k]) / sub) for k, sub in (("ProgramFiles", "Git/cmd"), ("LOCALAPPDATA", "Programs/Git/cmd"))
+        if env.get(k)]
 
 
 def find_git(env=os.environ, which=shutil.which) -> str | None:
     return which("git") or next((r for d in git_dirs(env) if (r := which("git", path=d))), None)
 
 
-def winget_works(which=shutil.which, run=subprocess.run) -> str | None:
-    """Full path of a working winget (App Installer can be disabled by policy), else None."""
-    w = which("winget")
-    try:
-        if w and run([w, "--version"], stdin=subprocess.DEVNULL, capture_output=True, timeout=5).returncode == 0:
-            return w
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return None
+def _mingit_body_shas(body, name: str) -> set[str]:
+    """All distinct sha256 values listed for name in the release notes table ("<name> | <hex>" rows)."""
+    found = set()
+    for line in body.splitlines() if isinstance(body, str) else []:
+        cells = [c.strip() for c in line.split("|") if c.strip()]
+        if len(cells) == 2 and cells[0] == name and _SHA_RE.fullmatch(cells[1]):
+            found.add(cells[1].lower())
+    return found
 
 
-# APPINSTALLER_CLI_ERROR_INVALID_CL_ARGUMENTS = 0x8A150002 (winget-cli doc/windows/package-manager/winget/returnCodes.md);
-# Popen reports it unsigned (2316632066), other callers see it signed (-1978335230).
-WINGET_INVALID_ARGS = (0x8A150002, 0x8A150002 - 2**32)
+def mingit_body_sha(body, name: str) -> str | None:
+    """sha256 of name from the release notes table (Git for Windows publishes its hashes there, not as
+    a file). None if there is no row, or if rows for the same name disagree."""
+    found = _mingit_body_shas(body, name)
+    return next(iter(found)) if len(found) == 1 else None
 
 
-def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, run, say) -> None:
-    """Body of offer_git: nothing if found, link text without winget, else show the command, ask Y/n,
-    run winget directly (one retry without --disable-interactivity if winget rejects that flag),
-    then put the install dir on this process's PATH."""
-    if find(env):
+def _use_found(env, found: str, own: str | None, add_path) -> None:
+    """A tool was found outside PATH (or on it): put its folder on this process's PATH, and, if it is our
+    own per-user folder (own), also on the user PATH, so later shells and the AI tools see it too."""
+    d = ntpath.dirname(found.replace("/", "\\"))
+    if not d or not ntpath.isabs(d):  # never put "." or a relative folder on PATH
         return
-    w = winget()
-    plan = plan_for(w is not None)
+    env["PATH"] = path_prepend(env.get("PATH", ""), [d])
+    norm = lambda p: ntpath.normcase(ntpath.normpath(p))
+    if own and norm(d) == norm(own):
+        add_path(d)
+
+
+def mingit_release(rel, arch: str):
+    """(tag, zip name, sha256) of the plain MinGit zip for arch from a releases/latest JSON, else None.
+    Exactly one asset must match MinGit-<version>-<arch>.zip (the -busybox variants never match). The hash
+    is the asset's API digest and/or the release-notes table row; if both exist they must agree.
+    Names only: the download URL is rebuilt from MINGIT_DL and the tag, which must look like vX.Y.Z.windows.N."""
+    if not isinstance(rel, dict):
+        return None
+    tag = rel.get("tag_name")
+    if not isinstance(tag, str) or not re.fullmatch(r"v\d+\.\d+\.\d+\.windows\.\d+", tag):
+        return None
+    pat = re.compile(rf"MinGit-\d+(?:\.\d+)+-{re.escape(arch)}\.zip")
+    assets = rel.get("assets")
+    hits = [a for a in (assets if isinstance(assets, list) else [])
+            if isinstance(a, dict) and isinstance(a.get("name"), str) and pat.fullmatch(a["name"])]
+    if len(hits) != 1:
+        return None
+    name, dig = hits[0]["name"], hits[0].get("digest")
+    sha_api = (dig[7:].lower() if isinstance(dig, str) and dig.startswith("sha256:") and _SHA_RE.fullmatch(dig[7:])
+               else None)
+    bodies = _mingit_body_shas(rel.get("body"), name)
+    if len(bodies) > 1 or (sha_api and bodies and bodies != {sha_api}):  # ambiguous or disagreeing: refuse
+        return None
+    sha = sha_api or next(iter(bodies), None)
+    return (tag, name, sha) if sha else None
+
+
+# top-level names of the current 64-bit (ucrt64) and arm64 (clangarm64) MinGit zips; Maude never installed
+# an older layout (mingw64), so that is not listed
+_MINGIT_TOP = {"LICENSE.txt", "cmd", "etc", "usr", "ucrt64", "clangarm64"}
+
+
+def mingit_dir_replaceable(dest: str) -> bool:
+    """True if dest may be swapped out: missing, empty, or a MinGit tree (an old install or a partial one):
+    it has cmd or LICENSE.txt and nothing but what a MinGit zip unpacks to. Anything else is user data."""
+    if not os.path.lexists(dest):
+        return True
+    try:
+        if not os.path.isdir(dest) or os.path.islink(dest):
+            return False
+        names = os.listdir(dest)
+        return not names or ({"cmd", "LICENSE.txt"} & set(names) != set() and all(
+            n in _MINGIT_TOP and not os.path.islink(os.path.join(dest, n)) for n in names))
+    except OSError:
+        return False
+
+
+def install_mingit(env=os.environ, say=print, urlopen=urllib.request.urlopen, tmp_root=None, dest=None) -> int:
+    """Install MinGit for this user from the official Git for Windows release zip (SHA-256 checked, no admin).
+    0 = installed to mingit_dest(env) (cmd\\git.exe); otherwise the reason has been printed."""
+    arch, dest = mingit_arch(env), dest or mingit_dest(env)
+    if not arch or not dest:
+        say("No MinGit release zip for this Windows.")
+        return 1
+    tmp = stage = aside = None
+    # if the old folder could not be put back (or Ctrl+C landed between the renames), tell the user where it is
+    kept = lambda a: f"\nYour previous MinGit folder is kept at {a}" if a and os.path.isdir(a) else ""
+    try:
+        if not mingit_dir_replaceable(dest):
+            say(f"{dest} already exists and holds other files; not touching it. Move it away and try again.")
+            return 1
+        tmp = tempfile.mkdtemp(prefix="maude-git-", dir=tmp_root)
+        rel = mingit_release(json.loads(_http_get(MINGIT_API, urlopen)), arch)
+        if not rel:
+            say("The latest Git for Windows release has no MinGit zip with a SHA-256 for this PC.")
+            return 1
+        tag, zname, sha = rel
+        say(f"Downloading MinGit {tag} (about 40 MB)...")
+        zpath = os.path.join(tmp, zname)
+        download_verified(f"{MINGIT_DL}{tag}/{zname}", zpath, sha, urlopen, timeout=120)
+        parent = os.path.dirname(dest)
+        os.makedirs(parent, exist_ok=True)
+        stage = tempfile.mkdtemp(prefix=".git-new-", dir=parent)  # same drive as dest: the move is a rename
+        with zipfile.ZipFile(zpath) as zf:
+            members = zf.infolist()
+            bad = unsafe_zip_names(m.filename for m in members) + [
+                m.filename for m in members if (m.external_attr >> 16) & 0o170000 == 0o120000]
+            if bad or "cmd/git.exe" not in {m.filename for m in members}:
+                say(f"The MinGit zip looks wrong ({bad[0] if bad else 'no cmd/git.exe'}); not installing it.")
+                return 1
+            zf.extractall(stage)
+        if os.path.lexists(dest):  # an old or partial MinGit folder (re-checked): move it aside, swap, delete it
+            if not mingit_dir_replaceable(dest):
+                say(f"{dest} changed while downloading; not touching it.")
+                return 1
+            aside = f"{dest}.old-{os.getpid()}-{os.urandom(3).hex()}"
+            os.replace(dest, aside)
+        try:
+            os.replace(stage, dest)
+        except BaseException:
+            if aside:
+                os.replace(aside, dest)  # put the old folder back
+                aside = None
+            raise
+        if aside:
+            shutil.rmtree(aside, ignore_errors=True)
+            aside = None
+        return 0
+    except KeyboardInterrupt:
+        say("Git install cancelled." + kept(aside))
+        return 1
+    except Exception as err:  # URLError, HTTPException, BadZipFile, bad JSON, ...: never crash the TUI
+        say(f"The MinGit download or install failed: {err}" + kept(aside))
+        return 1
+    finally:
+        for d in (tmp, stage):
+            if d:
+                shutil.rmtree(d, ignore_errors=True)  # stage is gone already after a successful move
+
+
+def offer_git(env=os.environ, find=find_git, install=install_mingit, add_path=lambda d: ensure_user_path(d),
+              ask=lambda q: input(q), say=print) -> None:
+    """Offer MinGit (per-user zip install, no winget, no admin), once per process.
+    Never blocks opening a project. On success its cmd folder goes on the user PATH and this process's PATH."""
+    global _git_done
+    if _git_done:
+        return
+    _git_done = True
+    found = find(env)
+    if found:  # may be found only through git_dirs: make sure this process (and our own folder's HKCU PATH) has it
+        own = mingit_dest(env)
+        _use_found(env, found, str(W(own) / "cmd") if own else None, add_path)
+        return
+    plan = mingit_plan(False, mingit_arch(env), mingit_dest(env))
     if plan == "link":
-        say(f"{label} is not installed. Get it from {link} (optional).")
+        say(f"Git is not installed. Get it from {GIT_LINK} (optional).")
         return
-    plan[0] = w
-    say(f"{label} is not installed ({intro}).\nInstall command: {subprocess.list2cmdline(plan)}")
+    say(f"Git is not installed (optional; the AI tools work better with it).\nInstall plan: {plan}")
     try:
-        yes = ask(f"Install {label} now? [Y/n] ").strip().lower() in ("", "y", "yes")
+        yes = ask("Install Git now? [Y/n] ").strip().lower() in ("", "y", "yes")
     except (EOFError, KeyboardInterrupt):
         yes = False
     if not yes:
         return
     try:
-        rc = (run or _run)(plan)
-        if rc in WINGET_INVALID_ARGS and "--disable-interactivity" in plan:  # winget older than 1.4 rejects that flag
-            say("Retrying without --disable-interactivity (older winget)...")
-            rc = (run or _run)([a for a in plan if a != "--disable-interactivity"])
-    except OSError:
-        rc = 1
+        rc = install(env, say)
+    except KeyboardInterrupt:
+        say("Git install cancelled.")
+        return
+    except Exception as err:  # backstop: an offer never takes the TUI down
+        say(f"The Git install failed: {err}")
+        return
     if rc:
-        say(f"The {label} install failed.")
+        say(f"The Git install failed. Get Git from {GIT_LINK} (optional).")
         return
-    d = next((d for d in dirs(env) if os.path.isdir(d)), None)  # the installer sets the persisted PATH itself
-    if d:
-        env["PATH"] = path_prepend(env.get("PATH", ""), [d])
-
-
-def offer_git(env=os.environ, find=find_git, winget=winget_works,
-              ask=lambda q: input(q), run=None, say=print) -> None:
-    """Offer Git for Windows via winget, once per process. Never blocks opening a project."""
-    global _git_done
-    if _git_done:
-        return
-    _git_done = True
-    _offer_winget("Git for Windows", GIT_LINK, "optional; the AI tools work better with it", find, winget,
-                  lambda have_w: git_plan(False, have_w), git_dirs, env, ask, run, say)
+    d = str(W(mingit_dest(env)) / "cmd")
+    add_path(d)  # persisted for new shells (HKCU PATH)
+    env["PATH"] = path_prepend(env.get("PATH", ""), [d])
 
 
 GH_LINK = "https://cli.github.com"
@@ -625,7 +756,10 @@ def offer_gh(env=os.environ, find=find_gh, install=install_gh, add_path=lambda d
     if _gh_done:
         return
     _gh_done = True
-    if find(env):
+    found = find(env)
+    if found:  # may be found only through gh_dirs: make sure this process (and our own bin's HKCU PATH) has it
+        own = gh_dest(env)
+        _use_found(env, found, str(W(own) / "bin") if own else None, add_path)
         return
     plan = gh_plan(False, gh_arch(env), gh_dest(env))
     if plan == "link":

@@ -225,28 +225,6 @@ assert_eq "ensure: installed but not found" "None" "$(et_run 'Kiro CLI' y 0 othe
 assert_eq "ensure: kiro uses the native installer" "kiro-x Install Kiro CLI now? [Y/n] |native|refresh" "$(et_run 'Kiro CLI' y 0 kiro-cli | sed 's/^x/kiro-x/')"
 assert_eq "ps_cmd non-interactive" "['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'x']" "$(py "m.ps_cmd('x')")"
 
-# git offer: pure plan (always per user, silent, no admin)
-G="winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --scope user --silent --disable-interactivity"
-assert_eq "git plan: have git" "None" "$(py "m.git_plan(True, True)")"
-assert_eq "git plan: no winget" "link" "$(py "m.git_plan(False, False)")"
-assert_eq "git plan: user scope, silent" "$G" "$(py "' '.join(m.git_plan(False, True))")"
-# git offer flow with fakes: log has the messages and "RUN <args>" for each process started
-git_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
-import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
-ans, wg = sys.argv[2], sys.argv[3] or None
-log = []
-def go():
-    m.offer_git({}, lambda e: None, lambda: wg, lambda q: ans, lambda c: log.append("RUN " + " ".join(c)) or 0, log.append)
-go(); go()  # second call in the same process must do nothing
-print("\n".join(log))
-PY
-}
-assert_eq "git offer: declined runs nothing" "0" "$(git_run n W | grep -c '^RUN')"
-assert_contains "git offer: shows command" "Install command: W install --id Git.Git" "$(git_run n W)"
-assert_eq "git offer: accepted runs once, user scope, silent" "1" "$(git_run y W | grep -c '^RUN .*--scope user --silent --disable-interactivity$')"
-assert_eq "git offer: no winget, link only" "0" "$(git_run y '' | grep -c '^RUN')"
-assert_contains "git offer: link text" "Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional)." "$(git_run y '')"
-
 # Kiro CLI: manifest parsing, msiexec argv, download + install flow with a fake network
 Z64=$(printf '0%.0s' $(seq 64))
 kpk() { py "m.kiro_package({'packages': [{'kind': 'msi', 'os': 'windows', 'architecture': 'x86_64', 'download': '$1', 'sha256': '$2'}]})"; }
@@ -471,7 +449,7 @@ assert_eq "gh offer: no admin-approval wording" "0" "$(gh_run n AMD64 0 | grep -
 assert_contains "gh offer: link text for an unsupported arch" "GitHub CLI is not installed. Get it from https://cli.github.com (optional)." "$(gh_run y x86 0)"
 assert_eq "gh offer: no install for an unsupported arch" "0" "$(gh_run y x86 0 | grep -c '^INSTALL')"
 
-# backstops: a native installer, an offer or a winget run must never take the TUI down
+# backstops: a native installer or an offer must never take the TUI down
 bs_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
 kind, exc = sys.argv[2], {"ctrlc": KeyboardInterrupt, "boom": RuntimeError}[sys.argv[3]]
@@ -491,25 +469,274 @@ assert_eq "ensure: native installer Ctrl+C" "None Kiro CLI install cancelled." "
 assert_eq "ensure: native installer unexpected error" "None The Kiro CLI install failed: x" "$(bs_run ensure boom)"
 assert_eq "gh offer: install Ctrl+C" "True GitHub CLI install cancelled." "$(bs_run gh ctrlc)"
 assert_eq "gh offer: install unexpected error" "True The GitHub CLI install failed: x" "$(bs_run gh boom)"
-# winget older than 1.4 rejects --disable-interactivity: one retry without it
-wr_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+# Git: MinGit per-user release zip (no winget, no admin)
+assert_eq "mingit dest" 'C:\L\Programs\MinGit' "$(py "m.mingit_dest({'LOCALAPPDATA': r'C:\\L'})")"
+assert_eq "mingit arch amd64" 64-bit "$(py "m.mingit_arch({'PROCESSOR_ARCHITECTURE': 'AMD64'})")"
+assert_eq "mingit arch arm64" arm64 "$(py "m.mingit_arch({'PROCESSOR_ARCHITECTURE': 'ARM64'})")"
+assert_eq "mingit arch x86 unsupported" None "$(py "m.mingit_arch({'PROCESSOR_ARCHITECTURE': 'x86'})")"
+assert_eq "git plan: have git" None "$(py "m.mingit_plan(True, '64-bit', 'C:/d')")"
+assert_eq "git plan: no arch -> link" link "$(py "m.mingit_plan(False, None, 'C:/d')")"
+assert_contains "git plan: describes the per-user zip" "MinGit-<version>-64-bit.zip" "$(py "m.mingit_plan(False, '64-bit', 'C:/d')")"
+assert_eq "git dirs: MinGit first, then machine Git, then per-user Git" 'C:\L\Programs\MinGit\cmd;C:\PF\Git\cmd;C:\L\Programs\Git\cmd' "$(py "';'.join(m.git_dirs({'LOCALAPPDATA': r'C:\\L', 'ProgramFiles': r'C:\\PF'}))")"
+assert_eq "git dirs: no LOCALAPPDATA" 'C:\PF\Git\cmd' "$(py "';'.join(m.git_dirs({'ProgramFiles': r'C:\\PF'}))")"
+# find_git: PATH first, then MinGit, then existing Git for Windows installs
+fg() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
-mode = sys.argv[2]; log = []
-def run(c):
-    log.append("flag" if "--disable-interactivity" in c else "noflag")
-    if "--disable-interactivity" in c:
-        return {"old": 0x8A150002, "oldsigned": 0x8A150002 - 2**32, "fail": 1, "other": 0x8A150056}.get(mode, 0)
-    return 1 if mode == "fail" else 0
-m._git_done = False
-m.offer_git({}, lambda e: None, lambda: "W", lambda q: "y", run, lambda s: None)
-print(",".join(log))
+present = set(sys.argv[3:]); onpath = sys.argv[2] == "path"
+env = {"LOCALAPPDATA": r"C:\L", "ProgramFiles": r"C:\PF"}
+print(m.find_git(env, lambda b, path=None: ("ON-PATH" if onpath else None) if path is None else (path if path in present else None)))
 PY
 }
-assert_eq "git: ok first time, no retry" "flag" "$(wr_run ok)"
-assert_eq "git: old winget retries once without the flag" "flag,noflag" "$(wr_run old)"
-assert_eq "git: old winget (signed code) retries too" "flag,noflag" "$(wr_run oldsigned)"
-assert_eq "git: a real failure is not retried" "flag" "$(wr_run fail)"
-assert_eq "git: another winget error is not retried" "flag" "$(wr_run other)"
+MG='C:\L\Programs\MinGit\cmd'; PG='C:\PF\Git\cmd'; UG='C:\L\Programs\Git\cmd'
+assert_eq "find_git: PATH wins" ON-PATH "$(fg path "$MG" "$PG")"
+assert_eq "find_git: MinGit before Git for Windows" "$MG" "$(fg none "$PG" "$MG" "$UG")"
+assert_eq "find_git: machine Git for Windows" "$PG" "$(fg none "$PG" "$UG")"
+assert_eq "find_git: per-user Git for Windows" "$UG" "$(fg none "$UG")"
+assert_eq "find_git: nothing" None "$(fg none)"
+# release JSON: exactly the plain MinGit zip (never -busybox), hash from the asset digest and/or the notes table
+mj() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys, json; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+mode, arch = sys.argv[2], sys.argv[3]
+A, B, C = "a" * 64, "b" * 64, "c" * 64
+names = ["MinGit-2.56.1-busybox-64-bit.zip", "MinGit-2.56.1-64-bit.zip", "MinGit-2.56.1-arm64.zip", "MinGit-2.56.1-busybox-arm64.zip", "Git-2.56.1-64-bit.exe"]
+shas = {"MinGit-2.56.1-64-bit.zip": A, "MinGit-2.56.1-arm64.zip": B}
+body = "Hash | SHA\r\n--- | ---\r\n" + "".join(f"{n} | {h}\r\n" for n, h in shas.items()) + f"MinGit-2.56.1-busybox-64-bit.zip | {C}\r\n"
+def asset(n, dig=True):
+    d = {"name": n}
+    if dig and n in shas:
+        d["digest"] = "sha256:" + shas[n]
+    return d
+rel = {"tag_name": "v2.56.1.windows.1", "body": body, "assets": [asset(n) for n in names]}
+if mode == "bodyonly":
+    rel["assets"] = [asset(n, False) for n in names]
+if mode == "digestonly":
+    rel["body"] = "no table here"
+if mode == "disagree":
+    rel["body"] = body.replace(A, C)
+if mode == "nohash":
+    rel["body"] = "x"; rel["assets"] = [asset(n, False) for n in names]
+if mode == "busyboxonly":
+    rel["assets"] = [asset(n) for n in names if "busybox" in n]
+if mode == "badtag":
+    rel["tag_name"] = "v2.56.1/../x"
+if mode == "plaintag":
+    rel["tag_name"] = "v2.56.1"
+if mode == "shortbody":
+    rel["body"] = body.replace(A, "abc"); rel["assets"] = [asset(n, False) for n in names]
+if mode == "dupbody":  # two rows for the same asset, different hashes (the digest matches the first)
+    rel["body"] = body + f"MinGit-2.56.1-64-bit.zip | {C}\r\n"
+if mode == "dupsame":  # the same row twice is harmless
+    rel["body"] = body + f"MinGit-2.56.1-64-bit.zip | {A}\r\n"
+if mode == "dupnodigest":
+    rel["body"] = body + f"MinGit-2.56.1-64-bit.zip | {C}\r\n"; rel["assets"] = [asset(n, False) for n in names]
+if mode == "twice":
+    rel["assets"].append(asset("MinGit-2.56.1-64-bit.zip"))
+if mode == "shape":
+    rel = {"tag_name": "v2.56.1.windows.1", "assets": 5, "body": 7}
+if mode == "notdict":
+    rel = [1]
+if mode == "badname":
+    rel["assets"] = [{"name": [1]}, None, 5]
+r = m.mingit_release(rel, arch)
+print(r if r is None else (r[0], r[1], r[2][:2]))
+PY
+}
+assert_eq "mingit release: digest + body, plain zip not busybox" "('v2.56.1.windows.1', 'MinGit-2.56.1-64-bit.zip', 'aa')" "$(mj ok 64-bit)"
+assert_eq "mingit release: arm64" "('v2.56.1.windows.1', 'MinGit-2.56.1-arm64.zip', 'bb')" "$(mj ok arm64)"
+assert_eq "mingit release: hash from the notes table only" "('v2.56.1.windows.1', 'MinGit-2.56.1-64-bit.zip', 'aa')" "$(mj bodyonly 64-bit)"
+assert_eq "mingit release: hash from the digest only" "('v2.56.1.windows.1', 'MinGit-2.56.1-64-bit.zip', 'aa')" "$(mj digestonly 64-bit)"
+assert_eq "mingit release: digest and table disagree" None "$(mj disagree 64-bit)"
+assert_eq "mingit release: no hash anywhere" None "$(mj nohash 64-bit)"
+assert_eq "mingit release: a short hash is ignored" None "$(mj shortbody 64-bit)"
+assert_eq "mingit release: only busybox zips" None "$(mj busyboxonly 64-bit)"
+assert_eq "mingit release: odd tag rejected" None "$(mj badtag 64-bit)"
+assert_eq "mingit release: tag without .windows.N rejected" None "$(mj plaintag 64-bit)"
+assert_eq "mingit release: conflicting table rows for one asset" None "$(mj dupbody 64-bit)"
+assert_eq "mingit release: conflicting table rows, no digest" None "$(mj dupnodigest 64-bit)"
+assert_eq "mingit release: the same table row twice is fine" "('v2.56.1.windows.1', 'MinGit-2.56.1-64-bit.zip', 'aa')" "$(mj dupsame 64-bit)"
+assert_eq "mingit body sha: conflicting rows" None "$(py "m.mingit_body_sha('a.zip | $Z64\n a.zip | $O64\n', 'a.zip')")"
+assert_eq "mingit body sha: one row" "$O64" "$(py "m.mingit_body_sha('a.zip | $O64\n', 'a.zip')")"
+assert_eq "mingit release: ambiguous (two matching assets)" None "$(mj twice 64-bit)"
+assert_eq "mingit release: wrong types do not raise" None "$(mj shape 64-bit)"
+assert_eq "mingit release: not a dict" None "$(mj notdict 64-bit)"
+assert_eq "mingit release: odd asset entries" None "$(mj badname 64-bit)"
+mg_flow() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys, io, os, json, hashlib, zipfile, urllib.error, http.client
+sys.path.insert(0, sys.argv[1]); import maude_exe as m
+mode, td = sys.argv[2], sys.argv[3]
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as z:
+    z.writestr("LICENSE.txt", "mit")
+    z.writestr("etc/gitconfig", "x")
+    if mode != "nogit":
+        z.writestr("cmd/git.exe", "MZ")
+    if mode == "slip":
+        z.writestr("../evil.txt", "x")
+    if mode == "symlink":
+        zi = zipfile.ZipInfo("link"); zi.external_attr = 0o120777 << 16
+        z.writestr(zi, "cmd/git.exe")
+zb = buf.getvalue()
+sha = hashlib.sha256(zb).hexdigest() if mode != "badsha" else "0" * 64
+zn = "MinGit-2.56.1-64-bit.zip"
+base = m.MINGIT_DL + "v2.56.1.windows.1/"
+rel = {"tag_name": "v2.56.1.windows.1", "body": f"{zn} | {sha}\r\n", "assets": [
+    {"name": "MinGit-2.56.1-busybox-64-bit.zip"}, {"name": zn, "digest": "sha256:" + sha}]}
+if mode == "noasset":  # the plain zip is not published (only busybox)
+    rel["assets"] = rel["assets"][:1]
+routes = {m.MINGIT_API: json.dumps(rel).encode(), base + zn: zb}
+if mode == "nonet":
+    routes = {}
+if mode == "shape":
+    routes[m.MINGIT_API] = b'{"tag_name": "v2.56.1.windows.1", "assets": 5}'
+def urlopen(req, timeout=None):
+    if mode == "ctrlc" and req.full_url.endswith(".zip"):
+        raise KeyboardInterrupt
+    if mode == "httperr" and req.full_url.endswith(".zip"):
+        raise http.client.IncompleteRead(b"x")
+    if req.full_url not in routes:
+        raise urllib.error.URLError("unreachable")
+    return io.BytesIO(routes[req.full_url])
+said = []
+prog = os.path.join(td, "Programs")
+dest = os.path.join(prog, "MinGit")
+def put(rel_path, txt=""):
+    p = os.path.join(dest, *rel_path.split("/")); os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "w").write(txt)
+if mode == "stale":  # a partial earlier attempt: LICENSE.txt and an empty cmd
+    put("LICENSE.txt"); os.makedirs(os.path.join(dest, "cmd"), exist_ok=True)
+if mode in ("oldinstall", "swapfail", "restorefail"):  # a complete old install
+    put("cmd/git.exe", "OLD"); put("usr/bin/ssh.exe", "OLD")
+if mode == "junk":  # somebody's files: must never be touched
+    put("junk")
+if mode == "restorefail":  # the swap fails and so does putting the old folder back
+    real = os.replace
+    def bad(a, b):
+        if a.startswith(os.path.join(prog, ".git-new-")) or ".old-" in a:
+            raise PermissionError("locked")
+        return real(a, b)
+    os.replace = bad
+if mode == "swapfail":  # the final rename fails: the old folder must come back
+    real = os.replace
+    def bad(a, b):
+        if a.startswith(os.path.join(prog, ".git-new-")):
+            raise PermissionError("locked")
+        return real(a, b)
+    os.replace = bad
+rc = m.install_mingit({"PROCESSOR_ARCHITECTURE": "AMD64"}, said.append, urlopen, td, dest)
+left = [f for f in os.listdir(td) if f.startswith("maude-git-")] + (
+    [f for f in os.listdir(prog) if f.startswith(".git-new-") or ".old-" in f] if os.path.isdir(prog) else [])
+exe = os.path.join(dest, "cmd", "git.exe")
+print(rc, "git.exe=%s" % (open(exe).read() if os.path.isfile(exe) else "-"), "junk=%s" % os.path.exists(os.path.join(dest, "junk")),
+      "evil=%s" % os.path.exists(os.path.join(prog, "evil.txt")), "left=%s" % left, "|".join(said))
+PY
+}
+td=$(mktemp -d)
+assert_eq "git install ok" "0 git.exe=MZ junk=False evil=False left=[] Downloading MinGit v2.56.1.windows.1 (about 40 MB)..." "$(mg_flow ok "$td")"
+assert_file_exists "git install keeps etc/gitconfig, not only git.exe" "$td/Programs/MinGit/etc/gitconfig"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git install over a stale folder" "0 git.exe=MZ junk=False evil=False left=[]" "$(mg_flow stale "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git install replaces an old install, aside folder deleted" "0 git.exe=MZ junk=False evil=False left=[]" "$(mg_flow oldinstall "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git checksum mismatch installs nothing" "1 git.exe=- junk=False evil=False left=[] Downloading MinGit v2.56.1.windows.1 (about 40 MB)...|The MinGit download or install failed: checksum mismatch" "$(mg_flow badsha "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git: plain zip missing from the release" "1 git.exe=- junk=False evil=False left=[] The latest Git for Windows release has no MinGit zip" "$(mg_flow noasset "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+out=$(mg_flow slip "$td")
+assert_contains "git zip slip is refused, nothing extracted" "1 git.exe=- junk=False evil=False left=[]" "$out"
+assert_contains "git zip slip message" "looks wrong (../evil.txt)" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git zip without cmd/git.exe is refused" "looks wrong (no cmd/git.exe)" "$(mg_flow nogit "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git symlink zip member is refused" "1 git.exe=- junk=False evil=False left=[] Downloading MinGit v2.56.1.windows.1 (about 40 MB)...|The MinGit zip looks wrong (link)" "$(mg_flow symlink "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git: no network is reported, not raised" "1 git.exe=- junk=False evil=False left=[] The MinGit download or install failed:" "$(mg_flow nonet "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git Ctrl+C: cancelled, nothing left" "1 git.exe=- junk=False evil=False left=[] Downloading MinGit v2.56.1.windows.1 (about 40 MB)...|Git install cancelled." "$(mg_flow ctrlc "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+out=$(mg_flow httperr "$td")
+assert_contains "git HTTPException is reported, nothing left" "1 git.exe=- junk=False evil=False left=[]" "$out"
+assert_contains "git HTTPException message" "download or install failed: IncompleteRead" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+assert_contains "git release JSON with a wrong type does not raise" "1 git.exe=- junk=False evil=False left=[] The latest Git for Windows release has no MinGit zip" "$(mg_flow shape "$td")"
+rm -rf "$td"; td=$(mktemp -d)
+out=$(mg_flow junk "$td")
+assert_contains "git refuses a folder holding other files, keeps them" "1 git.exe=- junk=True evil=False left=[]" "$out"
+assert_contains "git refusal message" "holds other files; not touching it" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+out=$(mg_flow swapfail "$td")
+assert_contains "git failed swap puts the old folder back" "1 git.exe=OLD junk=False evil=False left=[]" "$out"
+assert_contains "git failed swap is reported" "install failed: locked" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+out=$(mg_flow restorefail "$td")
+assert_contains "git failed swap and failed restore names the old folder" "Your previous MinGit folder is kept at $td/Programs/MinGit.old-" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+# mingit_dir_replaceable: only what a MinGit zip unpacks to, no links
+rp2() { py "m.mingit_dir_replaceable(r'$1')"; }
+mkdir -p "$td/ok/cmd" "$td/ok/usr" "$td/other" "$td/lnk"; : > "$td/ok/LICENSE.txt"; : > "$td/other/notes.txt"; ln -s "$td/ok/cmd" "$td/lnk/cmd"
+assert_eq "mingit replaceable: a MinGit tree" True "$(rp2 "$td/ok")"
+assert_eq "mingit replaceable: missing" True "$(rp2 "$td/none")"
+assert_eq "mingit replaceable: empty" True "$( mkdir "$td/empty"; rp2 "$td/empty")"
+assert_eq "mingit replaceable: other files" False "$(rp2 "$td/other")"
+assert_eq "mingit replaceable: cmd is a symlink" False "$(rp2 "$td/lnk")"
+mkdir -p "$td/onlyetc/etc" "$td/onlyusr/usr" "$td/old/mingw64" "$td/old/cmd" "$td/lic"; : > "$td/lic/LICENSE.txt"
+assert_eq "mingit replaceable: only etc (no cmd, no LICENSE.txt)" False "$(rp2 "$td/onlyetc")"
+assert_eq "mingit replaceable: only usr" False "$(rp2 "$td/onlyusr")"
+assert_eq "mingit replaceable: cmd plus an unknown folder (mingw64)" False "$(rp2 "$td/old")"
+assert_eq "mingit replaceable: LICENSE.txt alone (partial)" True "$(rp2 "$td/lic")"
+rm -rf "$td"
+mgo_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+ans, arch, rc, found = sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5] == "found"
+log = []; env = {"LOCALAPPDATA": r"C:\L", "PROCESSOR_ARCHITECTURE": arch, "PATH": r"C:\P"}
+def go():
+    m.offer_git(env, lambda e: "G" if found else None, lambda e, say: log.append("INSTALL") or rc, lambda d: log.append("PATH " + d), lambda q: ans, log.append)
+go(); go()  # second call in the same process must do nothing
+print("\n".join(log)); print("ENV", env["PATH"])
+PY
+}
+assert_eq "git offer: declined installs nothing" "0" "$(mgo_run n AMD64 0 none | grep -c '^INSTALL')"
+assert_eq "git offer: accepted installs once" "1" "$(mgo_run y AMD64 0 none | grep -c '^INSTALL')"
+assert_eq "git offer: Enter = yes" "1" "$(mgo_run '' AMD64 0 none | grep -c '^INSTALL')"
+assert_eq "git offer: user PATH and process PATH get the cmd dir" 'PATH C:\L\Programs\MinGit\cmd
+ENV C:\L\Programs\MinGit\cmd;C:\P' "$(mgo_run y AMD64 0 none | grep -E '^(PATH|ENV)')"
+assert_eq "git offer: failed install leaves PATH alone" 'ENV C:\P' "$(mgo_run y AMD64 1 none | grep -E '^(PATH|ENV)')"
+assert_contains "git offer: failed install shows the link" "The Git install failed. Get Git from https://git-scm.com/download/win (optional)." "$(mgo_run y AMD64 1 none)"
+assert_contains "git offer: shows the plan" "Install plan: download the latest MinGit-<version>-64-bit.zip" "$(mgo_run n AMD64 0 none)"
+assert_eq "git offer: found git, nothing to do" "0" "$(mgo_run y AMD64 0 found | grep -c -E '^(INSTALL|PATH)')"
+# git found only through git_dirs (not on this process's PATH): PATH gets its folder; our own folder also goes to the user PATH
+fo_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+kind, exe, path = sys.argv[2], sys.argv[3], sys.argv[4]
+log = []; env = {"LOCALAPPDATA": r"C:\L", "ProgramFiles": r"C:\PF", "PROCESSOR_ARCHITECTURE": "AMD64", "PATH": path}
+fn = m.offer_git if kind == "git" else m.offer_gh
+fn(env, lambda e: exe, lambda e, say: log.append("INSTALL") or 0, lambda d: log.append("PATH " + d), lambda q: "y", log.append)
+assert "INSTALL" not in log  # found: never installs
+print("".join(l + "\n" for l in log if l.startswith("PATH ")), end=""); print("ENV", env["PATH"])
+PY
+}
+assert_eq "git found via MinGit dir: process PATH + user PATH, no install" 'PATH C:\L\Programs\MinGit\cmd
+ENV C:\L\Programs\MinGit\cmd;C:\P' "$(fo_run git 'C:\L\Programs\MinGit\cmd\git.exe' 'C:\P')"
+assert_eq "git found via MinGit dir already on PATH: PATH unchanged, user PATH ensured" 'PATH C:\L\Programs\MinGit\cmd
+ENV C:\X;c:\l\programs\mingit\cmd\' "$(fo_run git 'C:\L\Programs\MinGit\cmd\git.exe' 'C:\X;c:\l\programs\mingit\cmd\')"
+assert_eq "git found in Program Files: process PATH only, user PATH untouched" 'ENV C:\PF\Git\cmd;C:\P' "$(fo_run git 'C:\PF\Git\cmd\git.exe' 'C:\P')"
+assert_eq "gh found via our bin dir: process PATH + user PATH, no install" 'PATH C:\L\Programs\GitHub CLI\bin
+ENV C:\L\Programs\GitHub CLI\bin;C:\P' "$(fo_run gh 'C:\L\Programs\GitHub CLI\bin\gh.exe' 'C:\P')"
+assert_eq "gh found in Program Files: process PATH only" 'ENV C:\PF\GitHub CLI;C:\P' "$(fo_run gh 'C:\PF\GitHub CLI\gh.exe' 'C:\P')"
+assert_contains "git offer: link text for an unsupported arch" "Git is not installed. Get it from https://git-scm.com/download/win (optional)." "$(mgo_run y x86 0 none)"
+assert_eq "git offer: no install for an unsupported arch" "0" "$(mgo_run y x86 0 none | grep -c '^INSTALL')"
+bg_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+exc = {"ctrlc": KeyboardInterrupt, "boom": RuntimeError}[sys.argv[2]]
+say = []
+def boom(*a, **k):
+    raise exc("x")
+env = {"LOCALAPPDATA": r"C:\L", "PROCESSOR_ARCHITECTURE": "AMD64", "PATH": ""}
+m.offer_git(env, lambda e: None, boom, lambda d: say.append("PATH"), lambda q: "y", say.append)
+print(env["PATH"] == "", "|".join(say[1:]))
+PY
+}
+assert_eq "git offer: install Ctrl+C" "True Git install cancelled." "$(bg_run ctrlc)"
+assert_eq "git offer: install unexpected error" "True The Git install failed: x" "$(bg_run boom)"
 
 # find_tool looks in the Kiro per-user folder too
 assert_eq "find_tool kiro localappdata" 'K' "$(py "m.find_tool('kiro-cli', {'USERPROFILE': r'C:\\u', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: 'K' if path == r'C:\\L\\Programs\\Kiro-Cli' else None)")"

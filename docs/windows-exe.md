@@ -49,15 +49,22 @@ After a successful install Maude adds `%USERPROFILE%\.local\bin` and `%USERPROFI
 
 `--trust` is a documented `bun add`/`bun install` flag (it lets the packages' postinstall scripts run). Checked with bun 1.4.5: `bun install -g --trust opencode-ai` and `bun install -g --trust @charmland/crush` both install a working `opencode.exe` and `crush.exe` into the global bin folder.
 
-### Git for Windows (optional, once per Maude run)
+### Git (MinGit, optional, once per Maude run)
 
-On the first Open Project in a Maude run, before the tool check, Maude looks for `git` (PATH, `%ProgramFiles%\Git\cmd`, `%LOCALAPPDATA%\Programs\Git\cmd`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install Git for Windows now? [Y/n]`. It runs `winget` directly (not through PowerShell), always per user and without the installer UI, also for members of Administrators (so there is no UAC prompt):
+On the first Open Project in a Maude run, before the tool check, Maude looks for `git` (PATH, then `%LOCALAPPDATA%\Programs\MinGit\cmd`, `%ProgramFiles%\Git\cmd`, `%LOCALAPPDATA%\Programs\Git\cmd`, so an existing Git for Windows is still used) and asks `Install Git now? [Y/n]`. winget and the big Git for Windows installer are not used. `install_mingit` in `light/maude_exe.py` (same flow as the GitHub CLI):
 
-`winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --scope user --silent --disable-interactivity`
+1. Reads `https://api.github.com/repos/git-for-windows/git/releases/latest`. The tag looks like `v2.56.1.windows.1`. Exactly one asset must match `MinGit-<version>-64-bit.zip` (`-arm64.zip` on ARM). The `-busybox-*` zips never match.
+2. Gets the SHA-256 from the asset's `digest` field (`sha256:<hex>`) and from the release notes: Git for Windows publishes its hashes as `<asset name> | <hex>` table rows in the release body, not as a file. If both are present they must agree, else nothing is installed. The zip is downloaded from `https://github.com/git-for-windows/git/releases/download/<tag>/<asset>` and checked. This catches corruption and truncation; the hash comes from the same release, so HTTPS is the trust root.
+3. Refuses a zip with an absolute path, a drive or stream (`:`), a `..` part, a symbolic link or no `cmd/git.exe`, unpacks it into a staging folder next to the target and renames that to `%LOCALAPPDATA%\Programs\MinGit`. An existing target is only replaced when it holds nothing but MinGit's own top-level folders (an old or partial install); it is renamed aside first, deleted after the swap and renamed back if the swap fails. Anything else is left alone.
+4. Adds `...\MinGit\cmd` to the user PATH (HKCU) and to Maude's own PATH, so `git` works at once in Maude and in the AI tools it starts.
 
-`--disable-interactivity` needs winget 1.4 or newer. If the first run fails because winget does not know that flag, Maude prints a note and runs it once more without it (still `--scope user --silent`). That is detected by winget's its invalid-argument code `0x8A150002` (`APPINSTALLER_CLI_ERROR_INVALID_CL_ARGUMENTS`, seen as 2316632066 or -1978335230); any other failure is reported once.
+Why not just `git.exe` in `%USERPROFILE%\.local\bin`: `cmd\git.exe` is a launcher. Copied alone it fails with `error launching git: The system cannot find the path specified.` (checked with v2.56.1). It needs the whole tree (`etc\`, `usr\`, `ucrt64\` or `clangarm64\`), so the tree lives in `Programs\MinGit` (the same per-user place as the GitHub CLI) and only its `cmd` folder goes on PATH. A `.cmd` shim in `.local\bin` would not work, because `CreateProcess("git")` and Node's `spawn` do not resolve `.cmd` files.
 
-If winget is missing or blocked by policy (App Installer disabled), Maude does not offer an install. It prints `Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the Git `cmd` folder to its own PATH (the installer sets the saved PATH).
+Size: the 64-bit zip is about 38 MB and unpacks to about 96 MB (not 30-60 MB; it bundles Git Credential Manager). Checked on v2.56.1: `cmd\git.exe --version` works, `git ls-remote https://github.com/git-for-windows/git HEAD` works, and so does `git ls-remote git@github.com:...` (git calls the Windows `C:\Windows\System32\OpenSSH\ssh.exe`, not MinGit's own).
+
+What MinGit does not contain (checked on the 64-bit and arm64 zips): `ssh-keygen.exe`, `gpg.exe`, `scp.exe`, `sftp.exe`. It has `usr\bin\ssh.exe`, `ssh-add.exe`, `ssh-agent.exe` (not on PATH, only `cmd` is) and `git-credential-manager.exe` (in `ucrt64\bin`). A Windows "Setup Git" feature must therefore take `ssh-keygen` and `ssh-agent` from Windows OpenSSH (an optional Windows feature, normally present) and has no `gpg` (use SSH signing or install Gpg4win).
+
+If this PC has no zip (not AMD64 or ARM64), the release has no matching asset, there is no network or the API rate limit (60 requests per hour per IP, unauthenticated) is hit, Maude prints the failure and `https://git-scm.com/download/win` (optional) and continues. A "no", a failed install or Ctrl+C never stops the project from opening. No admin rights, no UAC, no installer window.
 
 ### GitHub CLI (optional, once per Maude run)
 
@@ -183,7 +190,7 @@ Open items:
 How to work on it:
 
 - `python3 -m py_compile light/maude_exe.py` and `bash tests/test-maude-exe.sh` are quick. `make test-fast` takes about 3 minutes.
-- The pure helpers (`path_with`, `find_tool`, `git_plan`, `install_plan`, `kiro_package`, `msiexec_cmd`, `gh_release`, `checksum_for`, `unsafe_zip_names`) and the Kiro/GitHub CLI download flows (fake network, fake `msiexec`) are tested on Linux. Registry, `ctypes` and real `winget`/`msiexec` calls only run on Windows. `tests/win_tui_smoke.py` runs in CI on `windows-latest`.
+- The pure helpers (`path_with`, `find_tool`, `mingit_plan`, `mingit_release`, `install_plan`, `kiro_package`, `msiexec_cmd`, `gh_release`, `checksum_for`, `unsafe_zip_names`) and the Kiro/GitHub CLI/MinGit download flows (fake network, fake `msiexec`) are tested on Linux. Registry, `ctypes` and real `msiexec` calls only run on Windows. `tests/win_tui_smoke.py` runs in CI on `windows-latest`.
 - Release: `make tag VERSION=vX.Y.Z` runs `release.yml`, which builds `maude.exe` and the WSL tarball. A run takes a few minutes. Check with `gh run list`.
 - Docs site (https://dirkpetersen.github.io/maude/): the Documentation workflow runs only when `docs/**`, `zensical.toml` or the workflow file change. Pages was enabled with `gh api -X POST repos/dirkpetersen/maude/pages -f build_type=workflow`.
 - `setup-wsl-maude.ps1` must keep CRLF line endings (check with `file`).

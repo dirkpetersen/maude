@@ -315,7 +315,7 @@ try:
     asyncio.run(check_caption(False))
 
     # Open project: native claude, continue first, no bypass flag, cwd = project.
-    mx.offer_git = lambda: None  # never look for git or winget on the real system
+    mx.offer_git = lambda: None  # never look for git, or offer to install MinGit, on the real system
     mx.offer_gh = lambda: None
     calls = []
     mx.find_claude = lambda up: "C:/c.exe"
