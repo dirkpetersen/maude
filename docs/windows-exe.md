@@ -145,3 +145,22 @@ The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software
 - The docs site needs Pages source "GitHub Actions" and the v4 `upload-pages-artifact` and `deploy-pages` actions. The v5 pair did not upload the artifact, and Python 3.15 is not used.
 - `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
 
+
+## Status and next steps (v0.3.2)
+
+Released: v0.3.2 (exe, WSL tarball). The Kiro lookup fix (`9babfcf`) is on `main` only, so it needs a new tag (`make tag VERSION=v0.3.3`).
+
+Open items:
+
+1. Test on Windows: run `maude.exe` from Downloads. Check the copy to `%USERPROFILE%\.local\bin`, the user PATH entry (`HKCU\Environment`, key `Path`, type kept), the new-window `maude` command, and the two printed messages.
+2. Find out why Kiro CLI was offered although `kiro-cli` was on PATH (see the notes above).
+3. Offer the GitHub CLI (`winget install --id GitHub.cli -e --source winget`) next to the Git for Windows offer (`git_plan` in `light/maude_exe.py`).
+4. The Kiro MSI exit code 1603: find the cause (try `msiexec /i <msi> /l*v kiro.log`).
+
+How to work on it:
+
+- `python3 -m py_compile light/maude_exe.py` and `bash tests/test-maude-exe.sh` are quick. `make test-fast` takes about 3 minutes.
+- The pure helpers (`path_with`, `find_tool`, `git_plan`, `install_plan`) are tested on Linux. Registry, `ctypes` and `winget` code only runs on Windows. `tests/win_tui_smoke.py` runs in CI on `windows-latest`.
+- Release: `make tag VERSION=vX.Y.Z` runs `release.yml`, which builds `maude.exe` and the WSL tarball. A run takes a few minutes. Check with `gh run list`.
+- Docs site (https://dirkpetersen.github.io/maude/): the Documentation workflow runs only when `docs/**`, `zensical.toml` or the workflow file change. Pages was enabled with `gh api -X POST repos/dirkpetersen/maude/pages -f build_type=workflow`.
+- `setup-wsl-maude.ps1` must keep CRLF line endings (check with `file`).
