@@ -92,7 +92,6 @@ assert_eq "path present" None "$(PW "C:\\X;$B")"
 assert_eq "path present case+slash" None "$(PW 'c:\users\BOB\.LOCAL\bin\;C:\X')"
 assert_eq "path present %USERPROFILE%" None "$(PW '%USERPROFILE%\.local\bin;C:\X')"
 
-suite_summary
 # tool install offers (pure parts)
 assert_eq "plan present" "[]" "$(py "m.install_plan('Crush', True, False)")"
 assert_eq "plan claude" "[('Claude Code', 'irm https://claude.ai/install.ps1 | iex')]" "$(py "m.install_plan('Claude Code', False, True)")"
@@ -120,3 +119,5 @@ assert_eq "ensure: default Enter = yes" "x" "$(et_run 'Claude Code' '' 0 claude 
 assert_eq "ensure: no" "None Install Claude Code now? [Y/n] " "$(et_run 'Claude Code' n 0 claude)"
 assert_eq "ensure: install fails" "None" "$(et_run 'Kiro CLI' y 1 kiro-cli | cut -d' ' -f1)"
 assert_eq "ensure: installed but not found" "None" "$(et_run 'Kiro CLI' y 0 other | cut -d' ' -f1)"
+
+suite_summary

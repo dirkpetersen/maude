@@ -451,6 +451,9 @@ def selftest() -> int:
 
 
 def main(argv: list[str]) -> int:
+    # Never resolve programs from the current folder: a cloned repo could plant claude.cmd etc.
+    # Read by shutil.which and CreateProcess, and inherited by the AI tools.
+    os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
     if argv[:1] in (["--version"], ["--help"], ["-h"]):
         print(f"maude.exe {VERSION}\nUsage: maude.exe [--tui] | [--model ALIAS] [--windows|--sandbox] folder | --uninstall | --no-install")
         return 0

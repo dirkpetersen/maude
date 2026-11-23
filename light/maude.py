@@ -462,7 +462,9 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
     never kills them."""
     if tool == DEFAULT_TOOL:
         if not mx.find_claude(os.environ["USERPROFILE"]):  # offer the install; run_windows finds it after
-            mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path)
+            if not mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path):
+                input("Press Enter to go back. ")
+                return
         sync_perplexity()
         rc = mx.run_windows(str(path), model, fresh=fresh)
         if rc == 3:  # claude missing: run_windows printed the install hint
@@ -3592,6 +3594,7 @@ class MaudeApp(App):
         row, last = event.cursor_row, getattr(self, "_last_row", -1)
         if event.row_key is None or event.row_key.value != SEP_KEY:
             self._last_row = row
+            self._clicked = False  # a click on a normal row must not steer the next key press
             return
         down = getattr(self, "_clicked", False) or row >= last
         self._clicked = False
