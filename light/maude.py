@@ -4019,8 +4019,10 @@ class MaudeApp(App):
     def _register_selected(self, path: Path) -> None:
         """Windows: the folder the app was started on (select=) is written to the registry only when
         it is really opened, not when the TUI starts. A registry error is ignored (_extra keeps the
-        row listed for this session)."""
-        if IS_WIN and self._select and mx.project_key(str(path)) == mx.project_key(self._select):
+        row listed for this session). A folder inside the share is never written to the Projects key
+        (the share projects are listed anyway)."""
+        if (IS_WIN and self._select and mx.project_key(str(path)) == mx.project_key(self._select)
+                and mx.folder_mode(self._select, os.path.realpath(PROJECTS_DIR.parent)) == "windows"):
             try:
                 mx.add_project(self._select)
             except OSError:
@@ -4071,15 +4073,15 @@ class MaudeApp(App):
             return
         path = self._selected_project()
         if path and self._is_outside(path):  # registry entry only: never touch the folder
+            try:
+                mx.remove_project(REG_ORIG.get(str(path), str(path)))
+            except OSError as e:  # the row stays, so keep it in _extra and keep the bar
+                self.notify(f"Could not remove '{path.name}': {e}", severity="error")
+                return
             self._extra = tuple(e for e in self._extra if mx.project_key(e) != mx.project_key(str(path)))
             if self._select and mx.project_key(self._select) == mx.project_key(str(path)):
                 self._bar_on = False  # the folder the bar is about is gone from the list
                 self.query_one("#win-warning", Static).display = False
-            try:
-                mx.remove_project(REG_ORIG.get(str(path), str(path)))
-            except OSError as e:
-                self.notify(f"Could not remove '{path.name}': {e}", severity="error")
-                return
             self.notify(f"'{path.name}' was removed from the Maude list. The folder still exists: {REG_ORIG.get(str(path), str(path))}. "
                         "Delete it manually if you no longer need it.", timeout=10)
             self._refresh_table()

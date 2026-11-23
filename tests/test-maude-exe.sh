@@ -54,8 +54,10 @@ fake.MaudeApp = B
 print("rc", m.run_tui(d)); calls.clear()
 fake.MaudeApp = A
 print("rc", m.run_tui(d + "/missing"), calls)  # not a folder: nothing started, nothing registered
-for s in (r'C:"', r'C:\foo"', r'C:\x y', r'D:', 'C:' + chr(92)):
+for s in (r'C:"', r'C:\foo"', r'C:\x y', r'D:', 'C:' + chr(92), '"', '', '  ""'):
     print(m.fix_folder_arg(s))
+calls.clear()
+print("rc", m.run_tui("", "haiku"), calls)  # --model without a folder reaches the app
 PY
 )"
 rm -rf "$rtd"
@@ -67,8 +69,12 @@ assert_eq "run_tui missing folder -> rc 2, nothing started" "rc 2 []" "$(sed -n 
 assert_eq "drive root arg (quote eaten by argv) -> root" 'C:\' "$(sed -n 6p <<<"$RT_OUT")"
 assert_eq "arg trailing quote stripped" 'C:\foo' "$(sed -n 7p <<<"$RT_OUT")"
 assert_eq "arg unchanged" 'C:\x y' "$(sed -n 8p <<<"$RT_OUT")"
-assert_eq "bare drive -> root" 'D:\' "$(sed -n 9p <<<"$RT_OUT")"
+assert_eq "bare drive without quote stays (cwd on that drive)" 'D:' "$(sed -n 9p <<<"$RT_OUT")"
 assert_eq "root unchanged" 'C:\' "$(sed -n 10p <<<"$RT_OUT")"
+assert_eq "lone quote -> error" None "$(sed -n 11p <<<"$RT_OUT")"
+assert_eq "empty arg -> error" None "$(sed -n 12p <<<"$RT_OUT")"
+assert_eq "blank + quotes -> error" None "$(sed -n 13p <<<"$RT_OUT")"
+assert_eq "run_tui --model without folder" "rc 0 [('app', '', 'haiku'), ('run',)]" "$(sed -n 14p <<<"$RT_OUT")"
 # lxss_names with a fake winreg: missing key, denied key, denied subkey, subkey without DistributionName, other distros
 LX_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" 2>&1 <<'PY'
 import sys, types

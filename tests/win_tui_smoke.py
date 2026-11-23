@@ -180,6 +180,41 @@ try:
                 assert all(mx.project_key(str(r.value)) != mx.project_key(want) for r in app.query_one("#projects-table").rows)
         finally:
             mx.remove_project = saved
+        # registry delete denied: the row stays, so the bar and _extra stay too
+        def denied(f): raise OSError("denied")
+        mx.remove_project, saved = denied, mx.remove_project
+        try:
+            async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
+                app = pilot.app
+                await pilot.pause()
+                app._on_confirm_delete(True); await pilot.pause()
+                assert app.query_one("#win-warning").display and app._bar_on and app._extra, "bar must stay"
+                assert any(mx.project_key(str(r.value)) == mx.project_key(want) for r in app.query_one("#projects-table").rows)
+        finally:
+            mx.remove_project = saved
+        # opening another row, or a share folder given as select=, never writes the Projects key
+        added.clear()
+        async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app.suspend = contextlib.nullcontext
+            app._launch_project_now(Path(os.path.realpath(out1)))
+            assert not added, added
+        async with maude.MaudeApp(select=str(proj)).run_test(size=(140, 40)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app.suspend = contextlib.nullcontext
+            app._launch_project_now(proj)
+            assert not added, added  # share folder: listed anyway, never registered
+        if os.name == "nt":  # a drive root (Explorer on a drive background) is listed and selected
+            root = os.path.splitdrive(os.getcwd())[0] + "\\"
+            async with maude.MaudeApp(select=root).run_test(size=(140, 40)) as pilot:
+                app = pilot.app
+                await pilot.pause(); await pilot.pause()
+                table = app.query_one("#projects-table")
+                key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+                assert mx.project_key(key) == mx.project_key(root), (key, root)
+                assert "Press Enter" in str(app.query_one("#win-warning").render())
         async with maude.MaudeApp(select=str(Path(d) / "nonexistent")).run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             bar = str(pilot.app.query_one("#win-warning").render())

@@ -885,11 +885,16 @@ def selftest() -> int:
     return 0
 
 
-def fix_folder_arg(arg: str) -> str:
+def fix_folder_arg(arg: str) -> str | None:
     """Explorer's "%V" on a drive root is "C:\\" and the closing quote is eaten by argv parsing (\\"),
-    which gives C:" . Strip trailing quotes and turn a bare drive back into its root: C: -> C:\\."""
+    which gives C:" . Strip trailing quotes; only if one was stripped is a bare drive turned back
+    into its root (C:" -> C:\\). A plain `C:` stays as it is (current directory on that drive).
+    Returns None for an empty argument or a lone quote: that is an error, not the current folder."""
+    stripped = arg.endswith('"')
     arg = arg.rstrip('"')
-    return arg + "\\" if re.fullmatch(r"[A-Za-z]:", arg) else arg
+    if not arg.strip():
+        return None
+    return arg + "\\" if stripped and re.fullmatch(r"[A-Za-z]:", arg) else arg
 
 
 def run_tui(folder: str = "", model: str = "") -> int:
@@ -955,8 +960,15 @@ def main(argv: list[str]) -> int:
         if path_changed:
             print(r"Added %USERPROFILE%\.local\bin to your user PATH. Open a new PowerShell window to type 'maude' there.")
     if not args:
-        return run_tui()
-    folder = os.path.realpath(fix_folder_arg(args[0]))
+        return run_tui("", model)  # --model preselects the model in the picker, as with a folder
+    arg = fix_folder_arg(args[0])
+    if arg is None:
+        print("Maude: not started. The folder argument is empty.", file=sys.stderr)
+        if sys.stdin.isatty() and not sys.stdout.closed:
+            with contextlib.suppress(EOFError, OSError):
+                input("Press Enter to close.")
+        return 2
+    folder = os.path.realpath(arg)
     env = os.environ
     share = os.path.realpath(resolve_share(env))
     what = decide(folder, share, flag)
