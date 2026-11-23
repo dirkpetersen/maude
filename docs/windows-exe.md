@@ -191,6 +191,12 @@ From the first Python line on, `maude.exe` prints `Starting Maude, please wait .
 - `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
 
 
+## Platform layer and macOS (prepared, untested)
+
+`light/maude.py` is the single source for the TUI on every platform. It derives `PLATFORM` (`windows`, `macos` or `linux-sandbox`) from `sys.platform`; the buttons that depend on the platform come from the `FEATURES` map (one line per feature). Today Windows and macOS hide the same six widgets: Web UI, To Github, Setup Git(hub), Set Creds, Update Maude and Autostart. Web UI and Autostart stay hidden on both platforms for good; the later packages flip the other lines.
+
+macOS is prepared and has never been run on a Mac. What exists: a red logo without the caption (no sandbox), projects in `~/Maude/Projects`, outside projects in `~/.maude/projects.json` (a JSON list of folder paths, shown first), and Open Project with the real `claude` (`--model <model>`, found in `~/.local/bin`, PATH, `/opt/homebrew/bin` or `/usr/local/bin`) instead of the sandbox wrapper. There are no tool installers on macOS yet: if Claude Code or another tool is missing, Maude prints a hint. `from __future__ import annotations` keeps the file importable by the 3.9 system Python on macOS.
+
 ## Status and next steps (v0.3.4)
 
 Released: v0.3.4 (exe, WSL tarball). It adds validated `maude.py` self-updates and `checksums.txt` for pinned installs. v0.3.3 had the Kiro lookup fix (`9babfcf`) and the GitHub CLI offer.

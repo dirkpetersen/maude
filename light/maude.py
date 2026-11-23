@@ -3,6 +3,7 @@
 maude.py — Textual TUI for the Maude sandbox.
 Always launched via:  maude tui
 """
+from __future__ import annotations  # macOS /usr/bin/python3 is 3.9: `X | None` annotations must not run at def time
 
 import asyncio
 import json
@@ -11,6 +12,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,7 @@ from rich.text import Text
 from rich.color import Color
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from textual import events, on
 from textual.app import App, ComposeResult
@@ -44,12 +47,207 @@ from textual.widgets import (
     TextArea,
 )
 
-# Windows (maude.exe) runs this TUI natively, outside the sandbox. Linux behaviour is unchanged.
-IS_WIN = sys.platform == "win32"
+# ── Platform layer ─────────────────────────────────────────────────────────
+# One source for every platform. Any platform that is neither Windows nor macOS keeps the
+# Linux sandbox behaviour. Windows (maude.exe) and macOS run natively, outside the sandbox.
+FROZEN = bool(getattr(sys, "frozen", False))  # inside maude.exe (PyInstaller)
+PLATFORM = "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux-sandbox"
+IS_WIN = PLATFORM == "windows"
+IS_MAC = PLATFORM == "macos"
+SANDBOXED = PLATFORM == "linux-sandbox"  # running inside the Maude WSL sandbox (or any Linux)
+NATIVE = not SANDBOXED                   # running on the host OS, outside any sandbox
 if IS_WIN:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # maude_exe.py sits next to us
     import maude_exe as mx
-PROJECTS_DIR = Path(mx.projects_dir()) if IS_WIN else Path.home() / "Maude" / "Projects"
+
+# Feature map: one line per feature, one column per platform. Later packages flip their own line.
+# Web UI and Autostart stay off on Windows and macOS permanently.
+FEATURES = {
+    #  feature      linux-sandbox  windows  macos
+    "web":       {"linux-sandbox": True, "windows": False, "macos": False},
+    "togithub":  {"linux-sandbox": True, "windows": False, "macos": False},
+    "github":    {"linux-sandbox": True, "windows": False, "macos": False},  # Setup Git(hub)
+    "creds":     {"linux-sandbox": True, "windows": False, "macos": False},
+    "update":    {"linux-sandbox": True, "windows": False, "macos": False},
+    "autostart": {"linux-sandbox": True, "windows": False, "macos": False},
+}
+FEATURE_WIDGETS = {"web": "#btn-web", "togithub": "#btn-togithub", "github": "#btn-github",
+                   "creds": "#btn-creds", "update": "#btn-update", "autostart": "#autostart"}
+
+
+def current_platform() -> str:
+    """PLATFORM, re-derived from IS_WIN/IS_MAC so tests that force those flags are honoured."""
+    return "windows" if IS_WIN else "macos" if IS_MAC else "linux-sandbox"
+
+
+def feature_on(name: str) -> bool:
+    return FEATURES[name][current_platform()]
+
+
+def hidden_widgets() -> tuple:
+    """CSS ids of the buttons/toggles to hide on this platform."""
+    return tuple(w for f, w in FEATURE_WIDGETS.items() if not feature_on(f))
+
+
+def plat_projects_dir() -> Path:
+    return Path(mx.projects_dir()) if IS_WIN else Path.home() / "Maude" / "Projects"
+
+
+def _outside_json(file: Path | None = None) -> Path:
+    return file or (Path.home() / ".maude" / "projects.json")
+
+
+def _load_outside_json(file: Path | None = None) -> tuple[list, bool]:
+    """(folders, ok). ok is False when the file exists but is not a JSON list (or cannot be read)."""
+    f = _outside_json(file)
+    try:
+        data = json.loads(f.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return [], True
+    except (OSError, ValueError, RecursionError):
+        return [], False
+    if not isinstance(data, list):
+        return [], False
+    return [p for p in data if isinstance(p, str) and p], True
+
+
+def read_outside_json(file: Path | None = None) -> list:
+    """macOS: folders outside the share, from ~/.maude/projects.json (a JSON list of paths)."""
+    return _load_outside_json(file)[0]
+
+
+def _write_outside_json(items: list, file: Path | None = None) -> None:
+    """Atomic write via a unique temp file in the same dir, mode 0600."""
+    f = _outside_json(file)
+    f.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f.name + ".", suffix=".tmp", dir=str(f.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(items, indent=2))
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, f)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _update_outside_json(change, file: Path | None = None) -> None:
+    """Read-modify-write under an advisory lock (POSIX). An unparseable file is never overwritten
+    silently: a copy is kept as projects.json.bad[.N] first."""
+    f = _outside_json(file)
+    f.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = None
+    try:
+        import fcntl
+        lock = open(str(f) + ".lock", "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        pass
+    try:
+        items, ok = _load_outside_json(file)
+        if not ok and f.exists():
+            n, bad = 0, Path(str(f) + ".bad")
+            while bad.exists():
+                n += 1
+                bad = Path(f"{f}.bad.{n}")
+            try:
+                shutil.copy2(f, bad)
+            except OSError:
+                return  # cannot keep a copy: refuse to overwrite
+        new = change(items)
+        if new != items or not ok:
+            _write_outside_json(new, file)
+    finally:
+        if lock is not None:
+            lock.close()
+
+
+def add_outside_json(folder: str, file: Path | None = None) -> None:
+    _update_outside_json(lambda items: items if folder in items else items + [folder], file)
+
+
+def remove_outside_json(folder: str, file: Path | None = None) -> None:
+    _update_outside_json(lambda items: [p for p in items if p != folder], file)
+
+
+def plat_outside_projects() -> list:
+    """Folders registered outside the share: Windows registry (via mx), macOS JSON, else none."""
+    return list(mx.read_projects()) if IS_WIN else read_outside_json() if IS_MAC else []
+
+
+def plat_add_outside(folder: str) -> None:
+    if IS_WIN:
+        mx.add_project(folder)
+    elif IS_MAC:
+        add_outside_json(folder)
+
+
+def plat_remove_outside(folder: str) -> None:
+    if IS_WIN:
+        mx.remove_project(folder)
+    elif IS_MAC:
+        remove_outside_json(folder)
+
+
+MAC_TOOL_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
+def plat_tool(name: str) -> str | None:
+    """Full path of an executable, or None. Windows delegates to maude_exe; macOS also looks in the
+    Homebrew and per-user bin dirs (a GUI-launched or fresh shell may not have them on PATH)."""
+    if IS_WIN:
+        return mx.find_git() if name == "git" else mx.find_gh() if name == "gh" else mx.find_tool(name)
+    found = shutil.which(name)
+    if found or not IS_MAC:
+        return found
+    home = Path.home()
+    for d in (*MAC_TOOL_DIRS, str(home / ".local" / "bin"), str(home / ".bun" / "bin")):
+        found = shutil.which(name, path=d)
+        if found:
+            return found
+    return None
+
+
+def plat_real_claude() -> str:
+    """The real claude binary (never the ~/bin/claude sandbox wrapper). Falls back to plain "claude"."""
+    if IS_WIN:
+        return mx.find_claude(os.environ["USERPROFILE"]) or "claude"
+    real = Path.home() / ".local" / "bin" / "claude"
+    if os.access(real, os.X_OK):
+        return str(real)
+    return (plat_tool("claude") or "claude") if IS_MAC else "claude"
+
+
+def plat_claude_env() -> dict:
+    """Extra environment for every AI tool Maude starts. Empty everywhere for now (the credentials
+    package fills it in for Windows/macOS)."""
+    return {}
+
+
+def _child_env() -> dict | None:
+    """env= for child processes: None (inherit) unless claude_env() has something to add."""
+    extra = plat_claude_env()
+    return {**os.environ, **extra} if extra else None
+
+
+def plat_open_url(url: str) -> bool:
+    """Open a URL in the user's browser. No-op in the sandbox (interop is off there)."""
+    if not (IS_WIN or IS_MAC):
+        return False
+    try:
+        import webbrowser
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
+
+
+PROJECTS_DIR = plat_projects_dir()
 DELETED_DIR  = PROJECTS_DIR / ".deleted"
 DISABLE_FLAG   = Path.home() / ".maude-tui-disabled"
 PERPLEXITY_FLAG = Path.home() / ".maude-perplexity"
@@ -57,10 +255,6 @@ PERPLEXITY_NAME = "perplexity-computer"
 PERPLEXITY_URL  = "https://www.perplexity.ai/rest/computer/mcp"
 KANNA_CMD    = "kanna"
 KANNA_PORT   = 3210
-# Widgets hidden on Windows: only available inside the Maude sandbox.
-WIN_HIDDEN = ("#btn-web", "#btn-togithub", "#btn-github", "#btn-creds", "#btn-update",
-              "#autostart")
-
 UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
 UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
@@ -102,10 +296,11 @@ _LOGO_GRADIENT_WIN = ["#ff9a9a", "#f27474", "#e05252", "#c93a3a", "#a82a2a"]  # 
 WIN_CAPTION = "running outside the sandbox"
 # Windows only: is the Maude WSL distro installed? The red logo is always used on Windows, but the
 # caption only makes sense when there is a sandbox to be outside of. Unknown counts as installed.
-HAS_SANDBOX = mx.has_sandbox() if IS_WIN else True
+# macOS has no sandbox at all: red logo, no caption (like Windows without the WSL distro).
+HAS_SANDBOX = mx.has_sandbox() if IS_WIN else not IS_MAC
 
 def make_gradient_logo() -> Text:
-    grad = _LOGO_GRADIENT_WIN if IS_WIN else _LOGO_GRADIENT
+    grad = _LOGO_GRADIENT_WIN if (IS_WIN or IS_MAC) else _LOGO_GRADIENT
     text = Text()
     for i, line in enumerate(LOGO.splitlines()):
         colour = grad[i] if i < len(grad) else grad[-1]
@@ -342,10 +537,139 @@ def check_credentials() -> bool:
     return False
 
 
+_GIT_SECTION = re.compile(r'^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\](.*)$')
+
+
+def _git_config_value(raw: str) -> str | None:
+    """Value part of a git config line (after '='): handles quotes, escapes and #/; comments.
+    None for constructs we do not handle (line continuation)."""
+    out, quoted, i = [], False, 0
+    raw = raw.strip()
+    while i < len(raw):
+        c = raw[i]
+        if c == "\\":
+            if i + 1 >= len(raw):
+                return None  # line continuation
+            out.append({"n": "\n", "t": "\t", "b": "\b"}.get(raw[i + 1], raw[i + 1]))
+            i += 2
+            continue
+        if c == '"':
+            quoted = not quoted
+        elif not quoted and c in "#;":
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out).strip() if not quoted else None
+
+
+def parse_git_origin_url(text: str) -> str | None:
+    """remote.origin.url from the text of a git config file ('' if none). The last url wins, like
+    `git config --get`. None when the file uses [include]/[includeIf] or something we cannot parse
+    (the caller then asks git itself)."""
+    # Only the repo config (.git/config) is read: not config.worktree, ~/.gitconfig or /etc/gitconfig.
+    in_origin, url = False, ""
+    if "\x00" in text:
+        return None
+    lines = text.lstrip("\ufeff").split("\n")  # git breaks lines on \n only
+    if any(ln.rstrip().endswith("\\") for ln in lines):
+        return None  # a line continuation anywhere: let git parse the file
+    for line in lines:
+        s = line.strip()
+        if not s or s[0] in "#;":
+            continue
+        rest = s
+        if s[0] == "[":
+            m = _GIT_SECTION.match(s)
+            if not m:
+                return None
+            name, sub, rest = m.group(1).lower(), m.group(2), m.group(3).strip()
+            if name in ("include", "includeif"):
+                return None
+            in_origin = (name == "remote" and sub == "origin") or name == "remote.origin"
+            if not rest or rest[0] in "#;":
+                continue
+        if in_origin:
+            key, eq, val = rest.partition("=")
+            if key.strip().lower() == "url":
+                if not eq:
+                    return None  # `url` without a value
+                v = _git_config_value(val)
+                if v is None:
+                    return None
+                url = v
+    return url
+
+
+def _git_config_path(project_path: Path) -> Path | None:
+    """Path of the config file git reads for the project: <p>/.git/config, or for a `.git` FILE
+    (worktree/submodule: `gitdir: <path>`) the target dir's config (worktrees: its commondir's)."""
+    dotgit = project_path / ".git"
+    if stat.S_ISDIR(os.stat(dotgit).st_mode):
+        return dotgit / "config"
+    text = _read_small(dotgit)
+    first = text.split("\n")[0].strip() if text else ""
+    if not first.lower().startswith("gitdir:"):
+        return None
+    gitdir = Path(first[7:].strip())
+    if not gitdir.is_absolute():
+        gitdir = project_path / gitdir
+    cd = gitdir / "commondir"
+    if os.path.lexists(cd):
+        ctext = _read_small(cd)
+        if not ctext or not ctext.strip():
+            return None
+        common = Path(ctext.strip())
+        gitdir = common if common.is_absolute() else gitdir / common
+    return gitdir / "config"
+
+
+_SMALL_FILE_MAX = 1 << 20  # 1 MB: git config/.git/commondir files are tiny
+
+
+def _read_small(path: Path) -> str | None:
+    """Text of a regular file of at most 1 MB (BOM dropped); None for FIFOs, devices, big files.
+    The file is opened first (O_NONBLOCK, so a FIFO swapped in at any time cannot block) and the
+    checks run on the open handle, so there is no stat/open race."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > _SMALL_FILE_MAX:
+            return None
+        data = b""
+        while len(data) <= _SMALL_FILE_MAX:
+            chunk = os.read(fd, _SMALL_FILE_MAX + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        os.close(fd)
+    return None if len(data) > _SMALL_FILE_MAX else data.decode("utf-8-sig", errors="replace")
+
+
+def git_origin_from_config(project_path: Path) -> str | None:
+    """Fast pure-Python read of remote.origin.url (no subprocess). None = could not tell (any
+    problem at all: the caller then asks git itself, so this can never break startup)."""
+    try:
+        cfg = _git_config_path(project_path)
+        if cfg is None:
+            return None
+        text = _read_small(cfg)
+        return None if text is None else parse_git_origin_url(text)
+    except Exception:
+        return None
+
+
 def git_remote_origin_url(project_path: Path) -> str:
-    """Return `git config --get remote.origin.url` for the project, or ''."""
+    """Return `git config --get remote.origin.url` for the project, or ''.
+    Reads .git/config directly (a git subprocess costs ~100 ms each on Windows); asks git only
+    when that cannot be parsed."""
     if not (project_path / ".git").exists():
         return ""
+    fast = git_origin_from_config(project_path)
+    if fast is not None:
+        return fast
     try:
         r = subprocess.run(
             ["git", "-C", str(project_path), "config", "--get", "remote.origin.url"],
@@ -393,7 +717,31 @@ def gh_user_login() -> str:
     return r.stdout.strip()
 
 
-REG_ORIG: dict[str, str] = {}  # Windows: resolved registry project path -> path as stored
+REG_ORIG: dict[str, str] = {}  # Windows/macOS: resolved registered project path -> path as stored
+
+
+def _pkey(folder: str) -> str:
+    """Comparison key for a project folder (case-insensitive on Windows and macOS)."""
+    if IS_WIN:
+        return mx.project_key(folder)
+    k = os.path.normpath(folder)
+    return k.casefold() if IS_MAC else k
+
+
+def plat_banner_text(folder: str) -> str:
+    """The red warning bar text (Windows: maude_exe's wording; macOS: the same, for macOS)."""
+    if IS_WIN:
+        return mx.banner_text(folder, HAS_SANDBOX)
+    return (f"Maude: running on macOS in {folder}. "
+            "Maude's AI agents have your full macOS user rights here.")
+
+
+def _outside_share(folder: str, share: str) -> bool:
+    """True if folder (realpath()ed) is not the share or inside it."""
+    if IS_WIN:
+        return mx.folder_mode(folder, share) == "windows"
+    f, s = _pkey(folder), _pkey(share)
+    return not (f == s or f.startswith(s.rstrip(os.sep) + os.sep))
 
 
 def list_projects(extra: tuple = ()) -> list[dict]:
@@ -404,17 +752,17 @@ def list_projects(extra: tuple = ()) -> list[dict]:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     projects = []
     dirs = [(p, False) for p in PROJECTS_DIR.iterdir()]
-    if IS_WIN:
+    if IS_WIN or IS_MAC:
         # A registry entry must not duplicate a share row: compare fully resolved paths
         # (realpath expands 8.3 short names and drops trailing separators).
-        have = {mx.project_key(os.path.realpath(p)) for p, _ in dirs}
+        have = {_pkey(os.path.realpath(p)) for p, _ in dirs}
         share = os.path.realpath(PROJECTS_DIR.parent)
-        for r in list(mx.read_projects()) + [str(e) for e in extra]:  # extra: shown even if the registry write failed
+        for r in plat_outside_projects() + [str(e) for e in extra]:  # extra: shown even if the registry write failed
             rp = os.path.realpath(r)
-            if mx.project_key(rp) not in have and mx.folder_mode(rp, share) == "windows":
+            if _pkey(rp) not in have and _outside_share(rp, share):
                 dirs.append((Path(rp), True))
                 REG_ORIG[rp] = r  # Delete must remove the value as stored, not the resolved path
-                have.add(mx.project_key(rp))  # two values for one folder (short/long name, junction) -> one row
+                have.add(_pkey(rp))  # two values for one folder (short/long name, junction) -> one row
     for p, outside in dirs:
         if p.is_dir() and (outside or not p.name.startswith(".")):
             try:
@@ -437,6 +785,8 @@ def list_projects(extra: tuple = ()) -> list[dict]:
     if IS_WIN:
         return mx.merge_projects([d for d in projects if d["outside"]],
                                  [d for d in projects if not d["outside"]])
+    if IS_MAC:  # outside projects first, then share projects, each newest first
+        return sorted(projects, key=lambda d: (not d["outside"], -d["mtime"]))
     projects.sort(key=lambda d: d["mtime"], reverse=True)
     return projects
 
@@ -468,14 +818,11 @@ def _claude_mcp(*args: str, capture: bool = False):
 
     Uses the real Claude Code binary: the ~/bin/claude wrapper treats `mcp` as a
     model/prompt word and injects --model, which breaks `mcp add --transport`."""
-    real = Path.home() / ".local" / "bin" / "claude"
-    exe = str(real) if os.access(real, os.X_OK) else "claude"
-    if IS_WIN:
-        exe = mx.find_claude(os.environ["USERPROFILE"]) or "claude"
+    exe = plat_real_claude()
     if capture:
         return subprocess.run([exe, "mcp", *args], capture_output=True,
-                              text=True, timeout=60)
-    return subprocess.run([exe, "mcp", *args], check=False)
+                              text=True, timeout=60, env=_child_env())
+    return subprocess.run([exe, "mcp", *args], check=False, env=_child_env())
 
 
 def sync_perplexity() -> None:
@@ -550,15 +897,23 @@ def reconcile(model: str, tool: str, changed: str) -> tuple[str, str]:
 
 def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
     cmd = tool_command(tool, model, fresh)
-    if not shutil.which(cmd[0]):
+    env = _child_env()
+    if IS_MAC:  # no installers on macOS yet: say how to get the tool
+        exe = plat_tool(cmd[0])
+        if not exe:
+            input(f"{tool} is not installed. Install it first (Homebrew or the vendor's installer), "
+                  "then try again. Press Enter to go back. ")
+            return
+        cmd = [exe, *cmd[1:]]
+    elif not shutil.which(cmd[0]):
         input(f"{tool} is not installed; run 'maude update'. Press Enter to go back. ")
         return
-    if tool == "Kiro CLI" and subprocess.run([cmd[0], "whoami"], capture_output=True).returncode != 0:
+    if tool == "Kiro CLI" and subprocess.run([cmd[0], "whoami"], capture_output=True, env=env).returncode != 0:
         # Interop is off in the sandbox, so a browser cannot open: use the device code flow.
-        subprocess.run([cmd[0], "login", "--use-device-flow"], check=False)
-    ret = subprocess.run(cmd, check=False).returncode
+        subprocess.run([cmd[0], "login", "--use-device-flow"], check=False, env=env)
+    ret = subprocess.run(cmd, check=False, env=env).returncode
     if ret != 0 and tool == "Kiro CLI" and not fresh:
-        subprocess.run(tool_command(tool, model, True), check=False)  # nothing to resume
+        subprocess.run([cmd[0], *tool_command(tool, model, True)[1:]], check=False, env=env)  # nothing to resume
 
 
 def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: str = "") -> None:
@@ -607,16 +962,24 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
     if tool != DEFAULT_TOOL:
         _open_other_tool(tool, model, fresh)
         return
+    head, env = ["claude", model], _child_env()  # sandbox: the ~/bin/claude wrapper takes the model as a word
+    if IS_MAC:  # no wrapper outside the sandbox: the real claude (--model) with Maude's env
+        real = plat_real_claude()
+        if real == "claude":  # not found anywhere
+            input("Claude Code is not installed. Install it with: curl -fsSL https://claude.ai/install.sh | bash"
+                  "  then try again. Press Enter to go back. ")
+            return
+        head = [real, "--model", model]
     sync_perplexity()
     eff = effort_args(effort)
     if fresh:
-        subprocess.run(["claude", model, *eff], check=False)
+        subprocess.run([*head, *eff], check=False, env=env)
         return
-    ret = subprocess.run(["claude", model, *eff, "--continue"], check=False).returncode
+    ret = subprocess.run([*head, *eff, "--continue"], check=False, env=env).returncode
     if ret != 0 and _has_claude_sessions(project_path):
-        ret = subprocess.run(["claude", model, *eff, "--resume"], check=False).returncode
+        ret = subprocess.run([*head, *eff, "--resume"], check=False, env=env).returncode
     if ret != 0:
-        subprocess.run(["claude", model, *eff], check=False)
+        subprocess.run([*head, *eff], check=False, env=env)
 
 
 def maude_dir() -> Path:
@@ -1977,7 +2340,7 @@ class SSHKeyUnlockScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-class NewProjectScreen(ModalScreen[str | None]):
+class NewProjectScreen(ModalScreen[Optional[str]]):  # not `str | None`: evaluated at runtime, Python 3.9 fails
     """Prompt for a new project name."""
 
     BINDINGS = [Binding("escape", "cancel", show=False)]
@@ -3567,11 +3930,11 @@ class MaudeApp(App):
     ]
 
     def __init__(self, select: str = "", model: str = "") -> None:
-        """select: Windows only. Folder (outside the share) preselected in the list, with the
+        """select: Windows/macOS only. Folder (outside the share) preselected in the list, with the
         outside-the-sandbox warning shown; it is listed even if it is not in the registry.
         model: optional model alias to preselect (ignored unless it is one of MODELS)."""
         super().__init__()
-        self._select = os.path.realpath(select) if (IS_WIN and select) else ""
+        self._select = os.path.realpath(select) if ((IS_WIN or IS_MAC) and select) else ""
         self._extra: tuple = (self._select,) if self._select else ()
         self._bar_on = False  # the warning bar (#win-warning) is active
         self._tool = read_tool()
@@ -3594,8 +3957,9 @@ class MaudeApp(App):
                 yield Label("Tips", id="tips-title")
                 yield Static(
                     "Screen split:  Alt+Shift+Plus | Minus\n"
-                    + ("Paste image:   Alt+V\n" if IS_WIN else "Share image:   drop into ~/Maude\n") +
-                    "Voice dictate: Win+H (Windows mic)",
+                    + ("Paste image:   Alt+V\n" if IS_WIN else "Paste image:   Ctrl+V\n" if IS_MAC
+                       else "Share image:   drop into ~/Maude\n") +
+                    ("Voice dictate: Fn twice (macOS Dictation)" if IS_MAC else "Voice dictate: Win+H (Windows mic)"),
                     id="tips",
                 )
                 yield Static("─" * 28, id="divider2")
@@ -3647,9 +4011,9 @@ class MaudeApp(App):
 
     def on_mount(self) -> None:
         self._kanna_proc: subprocess.Popen | None = None
-        if IS_WIN:  # sandbox-only features (bash helpers, ssh/gpg, kanna, wrapper creds)
-            for i in WIN_HIDDEN:
-                self.query_one(i).display = False
+        for i in hidden_widgets():  # per-platform feature map (FEATURES)
+            self.query_one(i).display = False
+        if IS_WIN:
             if HAS_SANDBOX:
                 self.query_one("#logo").styles.height = 6  # room for the caption line
         warn = self.query_one("#win-warning", Static)
@@ -3698,7 +4062,7 @@ class MaudeApp(App):
         radioset.refresh()
 
     def _maybe_prompt_ssh_unlock(self) -> None:
-        if IS_WIN:
+        if IS_WIN or IS_MAC:  # not yet supported natively (SSH/Git setup package)
             return
         if not SSH_KEY_PATH.exists():
             return
@@ -3783,7 +4147,7 @@ class MaudeApp(App):
         event.data_table.move_cursor(row=self._last_row)
 
     def _is_outside(self, path: Path) -> bool:
-        return IS_WIN and path.parent != PROJECTS_DIR
+        return (IS_WIN or IS_MAC) and path.parent != PROJECTS_DIR
 
     # ── Actions ───────────────────────────────────────────────────────
 
@@ -4057,7 +4421,7 @@ class MaudeApp(App):
         # skip `claude --continue` — otherwise it errors ("No conversation to
         # continue"), flashes on screen, and only then falls back to a fresh
         # launch.
-        if not IS_WIN and not check_credentials():  # Windows: native claude.exe has its own login
+        if not (IS_WIN or IS_MAC) and not check_credentials():  # native: claude has its own login (until the creds package)
             self._pending_project = path
             self._pending_fresh = fresh
             self.push_screen(CredsEntryScreen(), self._on_creds_for_project)
@@ -4099,10 +4463,10 @@ class MaudeApp(App):
         it is really opened, not when the TUI starts. A registry error is ignored (_extra keeps the
         row listed for this session). A folder inside the share is never written to the Projects key
         (the share projects are listed anyway)."""
-        if (IS_WIN and self._select and mx.project_key(str(path)) == mx.project_key(self._select)
-                and mx.folder_mode(self._select, os.path.realpath(PROJECTS_DIR.parent)) == "windows"):
+        if ((IS_WIN or IS_MAC) and self._select and _pkey(str(path)) == _pkey(self._select)
+                and _outside_share(self._select, os.path.realpath(PROJECTS_DIR.parent))):
             try:
-                mx.add_project(self._select)
+                plat_add_outside(self._select)
             except OSError:
                 pass
 
@@ -4110,9 +4474,9 @@ class MaudeApp(App):
         """The "Press Enter" sentence only while the cursor is on the folder the bar is about."""
         if not self._select or not self._bar_on:
             return
-        on_row = key is not None and key != SEP_KEY and mx.project_key(key) == mx.project_key(self._select)
+        on_row = key is not None and key != SEP_KEY and _pkey(key) == _pkey(self._select)
         self.query_one("#win-warning", Static).update(Text(
-            mx.banner_text(self._select, HAS_SANDBOX)
+            plat_banner_text(self._select)
             + ("\nPress Enter to open it, or pick another project, model or tool first." if on_row else "")))
 
     def _select_project(self, path: Path) -> bool:
@@ -4152,12 +4516,12 @@ class MaudeApp(App):
         path = self._selected_project()
         if path and self._is_outside(path):  # registry entry only: never touch the folder
             try:
-                mx.remove_project(REG_ORIG.get(str(path), str(path)))
+                plat_remove_outside(REG_ORIG.get(str(path), str(path)))
             except OSError as e:  # the row stays, so keep it in _extra and keep the bar
                 self.notify(f"Could not remove '{path.name}': {e}", severity="error")
                 return
-            self._extra = tuple(e for e in self._extra if mx.project_key(e) != mx.project_key(str(path)))
-            if self._select and mx.project_key(self._select) == mx.project_key(str(path)):
+            self._extra = tuple(e for e in self._extra if _pkey(e) != _pkey(str(path)))
+            if self._select and _pkey(self._select) == _pkey(str(path)):
                 self._bar_on = False  # the folder the bar is about is gone from the list
                 self.query_one("#win-warning", Static).display = False
             self.notify(f"'{path.name}' was removed from the Maude list. The folder still exists: {REG_ORIG.get(str(path), str(path))}. "
@@ -4193,7 +4557,7 @@ if __name__ == "__main__":
         changed, msg = fix_bashrc_orphan_fi()
         print(msg)
         sys.exit(0 if (changed or "already clean" in msg) else 1)
-    if not IS_WIN:
+    if not (IS_WIN or IS_MAC):  # sandbox only: maude.exe is replaced as a whole, macOS comes with its package
         maybe_self_update()
     while True:
         app = MaudeApp()

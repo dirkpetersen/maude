@@ -39,7 +39,7 @@ imp()    { python3 "$d/run.py" import "$MAUDE_PY" "$1"; }
 cp "$MAUDE_PY" "$d/good.py"
 sed 's/^import urllib\.error$/import urllib.erro/' "$MAUDE_PY" > "$d/badimport.py"
 sed 's/^from pathlib import Path$/from pathlib import Pat/' "$MAUDE_PY" > "$d/badfrom.py"
-sed 's/^IS_WIN = sys\.platform/IS_WIN = sy.platform/' "$MAUDE_PY" > "$d/nameerror.py"
+sed 's/^PLATFORM = "windows" if sys\.platform/PLATFORM = "windows" if sy.platform/' "$MAUDE_PY" > "$d/nameerror.py"
 { echo "<html><body>"; for i in $(seq 1 500); do echo "Blocked by proxy policy $i"; done; echo "</body></html>"; } > "$d/page.html"
 half=$(( $(wc -c < "$MAUDE_PY") / 2 ))
 head -c "$half" "$MAUDE_PY" > "$d/half.py"

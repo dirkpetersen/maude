@@ -83,7 +83,10 @@ try:
             assert table.row_count == 3
             table.move_cursor(row=2)  # share project: still soft-deleted
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
-            for i in maude.WIN_HIDDEN:
+            assert maude.current_platform() == "windows"
+            hidden = maude.hidden_widgets()  # from the FEATURES map: everything off on Windows for now
+            assert set(hidden) == {"#btn-web", "#btn-togithub", "#btn-github", "#btn-creds", "#btn-update", "#autostart"}, hidden
+            for i in hidden:
                 assert not app.query_one(i).display, i
             for i in ("#btn-open", "#btn-new", "#btn-cli", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i

@@ -199,6 +199,16 @@ $clean = $raw -replace "`0", ""
 ### Windows Terminal profiles
 WT auto-generates profiles with `source=Microsoft.WSL` — they cannot be deleted, only hidden with pre-hidden stubs. WT profile cleanup must run **before** self-elevation (elevated process has a different `$env:LOCALAPPDATA`).
 
+## Platforms (`maude.py`)
+
+One `light/maude.py` serves all platforms: the Linux WSL sandbox (fetched daily from main), Windows (bundled in `maude.exe`, entry `maude_exe.py`) and macOS (prepared, untested; see `docs/windows-exe.md`). The platform section sits right after the imports:
+
+- `PLATFORM` is `"windows"`, `"macos"` or `"linux-sandbox"` (anything else keeps Linux behaviour). Also `FROZEN`, `IS_WIN`, `IS_MAC`, `SANDBOXED`, `NATIVE` (= not sandboxed) and `HAS_SANDBOX` (Windows: WSL distro present; macOS: False = no-sandbox mode, red logo, no caption). Do not detect WSL via WSLInterop (interop is off in the sandbox).
+- `FEATURES` is the feature map, one line per feature (`web`, `togithub`, `github`, `creds`, `update`, `autostart`) with a column per platform. `on_mount` hides the widgets of the features that are off (`hidden_widgets()`); a package that ports a feature flips its own line. Web UI and Autostart stay off on Windows and macOS.
+- `plat_*` helpers hold the per-platform code, Linux bodies unchanged: `plat_projects_dir()`, `plat_outside_projects()`/`plat_add_outside()`/`plat_remove_outside()` (Windows registry via `mx`, macOS JSON `~/.maude/projects.json`), `plat_tool(name)`, `plat_real_claude()`, `plat_claude_env()` (empty for now; `_child_env()` merges it into child processes), `plat_open_url()`.
+- `from __future__ import annotations` must stay (macOS system Python is 3.9). Keep the shebang, `def maybe_self_update` and the column-0 `if __name__ == "__main__":` (the self-update validators grep for them). Tested by `tests/test-platform.sh`.
+- `list_projects()` reads `origin` from `.git/config` in Python (`git_origin_from_config`, follows `gitdir:` files and worktree `commondir`); it asks `git config` only when the file uses `[include]` or cannot be parsed.
+
 ## Maude TUI (`maude tui` / `maude.py`)
 
 Full-screen Textual TUI — default welcome experience for every new terminal session.
