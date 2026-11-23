@@ -47,7 +47,16 @@ Goal: start `maude.exe` on a new PC and let it set up what is missing. In order:
 
 After a successful install Maude adds `%USERPROFILE%\.local\bin` and `%USERPROFILE%\.bun\bin` (when they exist) to the user PATH and to its own PATH, looks the tool up again and starts it. If the install fails or the tool is still not found, Maude prints why and waits for Enter. Other PowerShell windows need a restart to see the new PATH.
 
-Git for Windows is optional for Claude Code (without it Claude Code uses PowerShell as its shell tool), so Maude does not install it. `--trust` is a documented `bun add` flag; its effect together with `-g` is not verified.
+`--trust` is a documented `bun add` flag; its effect together with `-g` is not verified.
+
+### Git for Windows (optional, once per Maude run)
+
+On the first Open Project in a Maude run, before the tool check, Maude looks for `git` (PATH, `%ProgramFiles%\Git\cmd`, `%LOCALAPPDATA%\Programs\Git\cmd`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install Git for Windows now? [Y/n]`. It runs `winget` directly (not through PowerShell):
+
+- Administrator: `winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements`
+- Normal user: the same command plus `--scope user` (per-user install, no elevation).
+
+If winget is missing or blocked by policy (App Installer disabled), Maude does not offer an install. It prints `Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the Git `cmd` folder to its own PATH (the installer sets the saved PATH).
 
 ## Outside-sandbox projects
 

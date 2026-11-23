@@ -120,4 +120,28 @@ assert_eq "ensure: no" "None Install Claude Code now? [Y/n] " "$(et_run 'Claude 
 assert_eq "ensure: install fails" "None" "$(et_run 'Kiro CLI' y 1 kiro-cli | cut -d' ' -f1)"
 assert_eq "ensure: installed but not found" "None" "$(et_run 'Kiro CLI' y 0 other | cut -d' ' -f1)"
 
+# git offer: pure plan
+G="winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements"
+assert_eq "git plan: have git" "None" "$(py "m.git_plan(True, True, True)")"
+assert_eq "git plan: no winget" "link" "$(py "m.git_plan(False, False, True)")"
+assert_eq "git plan: admin" "$G" "$(py "' '.join(m.git_plan(False, True, True))")"
+assert_eq "git plan: user scope" "$G --scope user" "$(py "' '.join(m.git_plan(False, True, False))")"
+# git offer flow with fakes: log has the messages and "RUN <args>" for each process started
+git_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+ans, admin, wg = sys.argv[2], sys.argv[3] == "1", sys.argv[4] or None
+log = []
+def go():
+    m.offer_git({}, lambda e: None, lambda: wg, lambda: admin, lambda q: ans, lambda c: log.append("RUN " + " ".join(c)) or 0, log.append)
+go(); go()  # second call in the same process must do nothing
+print("\n".join(log))
+PY
+}
+assert_eq "git offer: declined runs nothing" "0" "$(git_run n 0 W | grep -c '^RUN')"
+assert_contains "git offer: shows command" "Install command: W install --id Git.Git" "$(git_run n 0 W)"
+assert_eq "git offer: accepted not admin runs once with scope" "1" "$(git_run y 0 W | grep -c '^RUN .*--scope user$')"
+assert_eq "git offer: accepted admin has no scope" "0" "$(git_run y 1 W | grep -c -- '--scope')"
+assert_eq "git offer: no winget, link only" "0" "$(git_run y 0 '' | grep -c '^RUN')"
+assert_contains "git offer: link text" "Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional)." "$(git_run y 0 '')"
+
 suite_summary

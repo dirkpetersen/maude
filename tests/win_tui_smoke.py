@@ -98,6 +98,7 @@ try:
     asyncio.run(check())
 
     # Open project: native claude, continue first, no bypass flag, cwd = project.
+    mx.offer_git = lambda: None  # never look for git or winget on the real system
     calls = []
     mx.find_claude = lambda up: "C:/c.exe"
     mx._run = lambda cmd, **kw: calls.append((cmd, kw.get("cwd"))) or 0

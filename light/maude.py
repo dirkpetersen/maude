@@ -460,6 +460,7 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
     """Windows: run the tool natively in the project folder, OUTSIDE the sandbox, with normal
     permission prompts (no bypass flag anywhere). Children go through mx._run so Ctrl+C
     never kills them."""
+    mx.offer_git()
     if tool == DEFAULT_TOOL:
         if not mx.find_claude(os.environ["USERPROFILE"]):  # offer the install; run_windows finds it after
             if not mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path):

@@ -246,6 +246,81 @@ def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, re
     return exe
 
 
+GIT_LINK = "https://git-scm.com/download/win"
+_git_done = False  # offer Git once per Maude process
+
+
+def git_plan(have_git: bool, have_winget: bool, is_admin: bool):
+    """None = nothing to do, "link" = cannot install here (print the download link),
+    else the winget argument list (fixed strings; per-user install when not admin)."""
+    if have_git:
+        return None
+    if not have_winget:
+        return "link"
+    args = ["winget", "install", "--id", "Git.Git", "-e", "--source", "winget",
+            "--accept-package-agreements", "--accept-source-agreements"]
+    return args if is_admin else args + ["--scope", "user"]
+
+
+def git_dirs(env=os.environ) -> list[str]:
+    return [str(W(env[k]) / sub) for k, sub in (("ProgramFiles", "Git/cmd"), ("LOCALAPPDATA", "Programs/Git/cmd"))
+            if env.get(k)]
+
+
+def find_git(env=os.environ, which=shutil.which) -> str | None:
+    return which("git") or next((r for d in git_dirs(env) if (r := which("git", path=d))), None)
+
+
+def winget_works(which=shutil.which, run=subprocess.run) -> str | None:
+    """Full path of a working winget (App Installer can be disabled by policy), else None."""
+    w = which("winget")
+    try:
+        if w and run([w, "--version"], stdin=subprocess.DEVNULL, capture_output=True, timeout=5).returncode == 0:
+            return w
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def is_admin() -> bool:
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin,
+              ask=lambda q: input(q), run=None, say=print) -> None:
+    """Offer Git for Windows via winget, once per process. Never blocks opening a project."""
+    global _git_done
+    if _git_done:
+        return
+    _git_done = True
+    if find(env):
+        return
+    w = winget()
+    plan = git_plan(False, w is not None, admin() if w else False)
+    if plan == "link":
+        say(f"Git for Windows is not installed. Get it from {GIT_LINK} (optional).")
+        return
+    plan[0] = w
+    say("Git for Windows is not installed (optional; the AI tools work better with it).\n"
+        f"Install command: {subprocess.list2cmdline(plan)}")
+    try:
+        yes = ask("Install Git for Windows now? [Y/n] ").strip().lower() in ("", "y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        yes = False
+    if not yes:
+        return
+    if (run or _run)(plan):
+        say("The Git for Windows install failed.")
+        return
+    d = next((d for d in git_dirs(env) if os.path.isdir(d)), None)  # the installer sets the persisted PATH itself
+    if d:
+        env["PATH"] = path_prepend(env.get("PATH", ""), [d])
+
+
 def windows_model(userprofile: str) -> str:
     try:
         with open(W(userprofile) / ".maude-model", encoding="utf-8") as f:
