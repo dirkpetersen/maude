@@ -6,6 +6,8 @@ Explorer entries (HKCU, no admin) and starts the Maude WSL sandbox.
 With no argument it runs the Textual TUI (maude.py, Windows mode) in the
 current console. See docs/windows-exe.md.
 """
+import time
+_T0 = time.perf_counter()  # first line of Maude code that runs (after the onefile unpack)
 import ntpath
 import contextlib
 import hashlib
@@ -128,9 +130,14 @@ def pick_share(cached, isdir, lookup, heuristic, store, say=print) -> str:
     return heuristic()
 
 
+def _say_clearing(msg) -> None:
+    clear_banner()  # a line is about to be printed under the banner: the banner can no longer be erased in place
+    print(msg)
+
+
 def resolve_share(env=os.environ) -> str:
     return pick_share(read_share(), os.path.isdir, fstab_share,
-                      lambda: share_root(env["LOCALAPPDATA"], onedrive_candidates(env)), store_share)
+                      lambda: share_root(env["LOCALAPPDATA"], onedrive_candidates(env)), store_share, _say_clearing)
 
 
 def valid_model(m: str) -> bool:
@@ -1002,8 +1009,9 @@ def ensure_user_path(d: str) -> bool:
         return False
 
 
-def self_install(env=os.environ) -> tuple[str, bool, bool]:
-    """Return (exe path used by the menu, whether the exe or menu changed, whether PATH changed)."""
+def self_install(env=os.environ, warn=lambda m: print(m, file=sys.stderr)) -> tuple[str, bool, bool]:
+    """Return (exe path used by the menu, whether the exe or menu changed, whether PATH changed).
+    warn() receives the one warning it may print (so the caller can clear the banner first)."""
     if not getattr(sys, "frozen", False):  # plain `python maude_exe.py`: never install python.exe
         return os.path.abspath(sys.executable), False, False
     import winreg
@@ -1020,7 +1028,7 @@ def self_install(env=os.environ) -> tuple[str, bool, bool]:
                 os.replace(tmp, target)  # fails with PermissionError while the old copy runs
                 changed = True
         except OSError as err:
-            print(f"maude: could not update {target}: {err}", file=sys.stderr)
+            warn(f"maude: could not update {target}: {err}")
             with contextlib.suppress(OSError):
                 os.remove(tmp)
             if not os.path.exists(target):
@@ -1062,10 +1070,24 @@ def selftest() -> int:
     """Headless TUI start, for CI on the frozen exe: proves Textual and its data files are bundled."""
     import asyncio
     import maude
+    import textual.widgets
+    from rich.cells import cell_len
+    # The slim build has no loose .py files: resolve every lazily imported widget and a wide character.
+    for name in textual.widgets.__all__:
+        getattr(textual.widgets, name)
+    assert cell_len("中") == 2
     async def go():
         async with maude.MaudeApp().run_test() as pilot:
             await pilot.pause()
             assert pilot.app.query_one("#projects-table")
+            # Modals with widgets that need Textual data files (TextArea, Input, buttons).
+            for cls, args in ((maude.CredsEntryScreen, ()), (maude.GitSetupWizard, ()),
+                              (maude.NewProjectScreen, ()), (maude.ConfirmDeleteScreen, ("x",))):
+                pilot.app.push_screen(cls(*args))
+                await pilot.pause()
+                assert isinstance(pilot.app.screen, cls), cls.__name__
+                pilot.app.pop_screen()
+                await pilot.pause()
     asyncio.run(go())
     print("selftest ok")
     return 0
@@ -1083,6 +1105,93 @@ def fix_folder_arg(arg: str) -> str | None:
     return arg + "\\" if stripped and re.fullmatch(r"[A-Za-z]:", arg) else arg
 
 
+_BANNER = "\x1b[1;38;2;224;82;82m  Starting Maude\x1b[0m\x1b[2m, please wait ...\x1b[0m"
+_BANNER_PLAIN = "  Starting Maude, please wait ..."
+_banner_on = False
+
+
+def _enable_vt() -> bool:
+    """Turn on virtual terminal processing for stdout (classic conhost needs it; Windows Terminal has it)."""
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.GetStdHandle.restype = ctypes.c_void_p
+        k.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        k.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        h = k.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not h or not k.GetConsoleMode(h, ctypes.byref(mode)):
+            return False
+        return bool(mode.value & 4) or bool(k.SetConsoleMode(h, mode.value | 4))
+    except Exception:
+        return False
+
+
+def show_banner(isatty=None, enable_vt=None, out=None) -> bool:
+    """Print "Starting Maude, please wait ..." before the slow imports (Textual, Rich). Only on a real
+    console; coloured when virtual terminal sequences work, else plain text. Never raises."""
+    global _banner_on
+    out = out or sys.stdout
+    try:
+        if not (isatty() if isatty else out.isatty()):
+            return False
+        vt = (enable_vt or _enable_vt)()
+        out.write((_BANNER if vt else _BANNER_PLAIN) + "\n")
+        out.flush()
+        _banner_on = vt  # plain text cannot be erased in place; it just stays
+        return True
+    except Exception:
+        return False
+
+
+def forget_banner() -> None:
+    """Never writes: just stop treating the banner as erasable (used when main() ends)."""
+    global _banner_on
+    _banner_on = False
+
+
+def clear_banner(out=None) -> None:
+    """Erase the banner line in place (cursor must be directly below it) so nothing is left on screen
+    after the TUI ends. Call it right BEFORE every print, prompt or launch that follows the banner,
+    never after something else wrote. Idempotent; a no-op if the banner was not shown or cannot be erased."""
+    global _banner_on
+    if not _banner_on:
+        return
+    _banner_on = False
+    out = out or sys.stdout
+    with contextlib.suppress(Exception):
+        out.write("\x1b[1A\r\x1b[2K")
+        out.flush()
+
+
+def timing_report(marks, out=None) -> None:
+    """MAUDE_TIMING=1: print phase times (ms) to stderr. marks = [(label, perf_counter), ...]."""
+    # GetProcessTimes sees only this (child) process. A onefile exe is a bootloader parent that unpacks
+    # to %TEMP%\_MEI... first and then starts this child, so that unpack time is NOT in the first figure.
+    out = out or sys.stderr
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        k.GetCurrentProcess.restype = ctypes.c_void_p
+        k.GetProcessTimes.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        c, e, kt, ut = (wintypes.FILETIME() for _ in range(4))
+        k.GetProcessTimes(k.GetCurrentProcess(), c, e, kt, ut)
+        now = wintypes.FILETIME()
+        k.GetSystemTimeAsFileTime(ctypes.byref(now))
+        ft = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime
+        age_ms = (ft(now) - ft(c)) / 10000.0
+        t_now = time.perf_counter()
+        print(f"[timing] Python child process start -> first Maude code: {age_ms - (t_now - _T0) * 1000:.0f} ms"
+              " (excludes the onefile bootloader unpack, which runs before this process exists)", file=out)
+    except Exception:
+        pass
+    prev = _T0
+    for label, t in marks:
+        print(f"[timing] {label}: +{(t - prev) * 1000:.0f} ms (total {(t - _T0) * 1000:.0f} ms)", file=out)
+        prev = t
+
+
 def run_tui(folder: str = "", model: str = "") -> int:
     """Run the Windows TUI (light/maude.py). With a folder (outside the share): list it, preselect
     its row and show the OUTSIDE warning. The folder is registered only when it is opened from the
@@ -1095,15 +1204,27 @@ def run_tui(folder: str = "", model: str = "") -> int:
             with contextlib.suppress(EOFError, OSError):
                 input(msg)
     if folder and not os.path.isdir(folder):
+        clear_banner()
         print(f"Maude: not started. This is not a folder: {folder}", file=sys.stderr)
         wait("Press Enter to close.")
         return 2
     try:
+        mark("before import maude")
         import maude  # the Textual TUI, Windows mode
-        app = maude.MaudeApp(select=folder, model=model)
+        mark("import maude (textual, rich) done")
+        cls = maude.MaudeApp
+        if timing_on():  # opt-in: report the first paint and quit right away
+            class cls(maude.MaudeApp):
+                def on_ready(self):
+                    mark("first paint (Ready)")
+                    self.exit()
+        app = cls(select=folder, model=model)
+        mark("app created")
+        clear_banner()  # Textual switches to the alternate screen next; do not leave the line behind
         app.run()
         rc = getattr(app, "return_code", 0)
     except Exception:
+        clear_banner()
         import traceback
         traceback.print_exc()
         rc = 1
@@ -1113,7 +1234,29 @@ def run_tui(folder: str = "", model: str = "") -> int:
     return 0
 
 
+_marks: list = []
+
+
+def timing_on() -> bool:
+    return os.environ.get("MAUDE_TIMING", "").strip() not in ("", "0")
+
+
+def mark(label: str) -> None:
+    if timing_on():
+        _marks.append((label, time.perf_counter()))
+
+
 def main(argv: list[str]) -> int:
+    try:
+        return _main(argv)
+    finally:
+        forget_banner()  # never write here: the last screen line may belong to a tool that just ran
+        if timing_on():
+            mark("exit")
+            timing_report(_marks)
+
+
+def _main(argv: list[str]) -> int:
     # Never resolve programs from the current folder: a cloned repo could plant claude.cmd etc.
     # Read by shutil.which and CreateProcess, and inherited by the AI tools.
     os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
@@ -1139,8 +1282,18 @@ def main(argv: list[str]) -> int:
     if model and not valid_model(model):
         print(f"maude: bad model name: {model}", file=sys.stderr)
         return 2
+    # Say something at once, before the slow part (Textual and Rich imports): for the TUI modes only.
+    if not flag and not (args and fix_folder_arg(args[0]) is None):
+        shown = show_banner()
+        mark(f"banner shown={shown} (erasable={_banner_on})")
+    mark("args parsed")
     if "--no-install" not in argv and not os.environ.get("MAUDE_NO_INSTALL"):
-        exe, changed, path_changed = self_install()
+        def _warn(msg):
+            clear_banner()
+            print(msg, file=sys.stderr)
+        exe, changed, path_changed = self_install(warn=_warn)
+        if changed or path_changed:
+            clear_banner()
         if changed:
             print(f'Maude is installed as {exe}. Shift+right-click any folder in Explorer and select "Open in Maude".')
         if path_changed:
@@ -1149,6 +1302,7 @@ def main(argv: list[str]) -> int:
         return run_tui("", model)  # --model preselects the model in the picker, as with a folder
     arg = fix_folder_arg(args[0])
     if arg is None:
+        clear_banner()
         print("Maude: not started. The folder argument is empty.", file=sys.stderr)
         if sys.stdin.isatty() and not sys.stdout.closed:
             with contextlib.suppress(EOFError, OSError):
@@ -1161,12 +1315,14 @@ def main(argv: list[str]) -> int:
     if what == "tui":  # Explorer menu on a folder outside the share: no question, TUI with a warning
         return run_tui(folder, model)
     if what == "windows":
+        clear_banner()
         if folder_mode(folder, share) == "windows":  # outside the share: list it in the TUI
             with contextlib.suppress(OSError):
                 add_project(folder)
         return run_windows(folder, model)
     sandbox = has_sandbox()
     if what == "refuse" or not sandbox:
+        clear_banner()
         if not sandbox:
             print("Maude: not started. No Maude sandbox (WSL distro 'Maude') is installed, so there is "
                   "nothing to run this folder in. Install it with setup-wsl-maude.ps1, or use --windows "
@@ -1176,6 +1332,7 @@ def main(argv: list[str]) -> int:
         if sys.stdin.isatty() and not sys.stdout.closed:
             input("Press Enter to close.")
         return 2
+    clear_banner()  # the sandbox session owns the screen from here: erase before it starts, never after
     return _run(sandbox_cmd(wsl_dir(folder, share), model))
 
 

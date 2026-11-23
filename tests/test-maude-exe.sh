@@ -832,5 +832,114 @@ print("|".join(out))
 PY
 )"
 assert_eq "OPEN_SH reads model,effort" "claude opus --continue;claude opus;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude opus --effort max --continue;claude opus --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False" "$OSH_OUT"
+# "Starting Maude, please wait ..." banner: shown (before any heavy import) only for the TUI modes, only on a TTY.
+bn_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import io, os, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+args, tty = sys.argv[2].split(), sys.argv[3] == "tty"
+log = []
+real_os_name, os.name = os.name, "nt"            # main() refuses non-Windows; nothing below needs real nt
+m.self_install = lambda *a, **k: ("x", False, False)
+m.resolve_share = lambda *a, **k: "S"
+m.decide = lambda f, s, flag: {"windows": "windows", "sandbox": "refuse"}.get(flag, "tui")
+m.has_sandbox = lambda: True
+m.selftest = lambda: log.append("selftest") or 0
+m.uninstall = lambda: log.append("uninstall")
+m.run_tui = lambda *a, **k: (m.clear_banner(), log.append("tui"))[1] or 0  # real run_tui erases before app.run()
+m.run_windows = lambda *a, **k: log.append("win") or 0
+m.add_project = lambda f: None
+m.folder_mode = lambda f, s: "windows"
+out = io.StringIO(); out.isatty = lambda: tty
+real_out, sys.stdout = sys.stdout, out
+m._enable_vt = lambda: True
+real_show = m.show_banner
+m.show_banner = lambda *a, **k: real_show(None, lambda: True, out)
+try:
+    os.environ["MAUDE_NO_INSTALL"] = "1"
+    m.main(args)
+finally:
+    sys.stdout = real_out
+txt = out.getvalue()
+import re
+plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", txt)
+print(",".join(["banner" if "Starting Maude, please wait" in plain else "quiet"] + log + (["erased"] if "\x1b[1A" in txt else [])))
+PY
+}
+assert_eq "banner: no args (TUI)" "banner,tui,erased" "$(bn_run "" tty)"
+assert_eq "banner: --tui" "banner,tui,erased" "$(bn_run "--tui" tty)"
+assert_eq "banner: --model with TUI" "banner,tui,erased" "$(bn_run "--model opus" tty)"
+assert_eq "banner: folder (Explorer menu, TUI)" "banner,tui,erased" "$(bn_run "/tmp" tty)"
+assert_eq "banner: not a TTY" "quiet,tui" "$(bn_run "" pipe)"
+assert_eq "banner: --version" "quiet" "$(bn_run "--version" tty)"
+assert_eq "banner: --help" "quiet" "$(bn_run "--help" tty)"
+assert_eq "banner: --selftest" "quiet,selftest" "$(bn_run "--selftest" tty)"
+assert_eq "banner: --uninstall" "quiet,uninstall" "$(bn_run "--uninstall" tty)"
+assert_eq "banner: --windows folder" "quiet,win" "$(bn_run "--windows /tmp" tty)"
+assert_eq "banner: --sandbox folder" "quiet" "$(bn_run "--sandbox /tmp" tty)"
+assert_eq "banner: empty folder argument" "quiet" "$(bn_run '""' tty)"
+# Order of writes: real decide() with a real share folder (temp dir), one event log for stdout, stderr and the
+# launches. The banner must be erased by the very next event, and nothing may erase after a launch/print.
+assert_eq "timing: unset is off" False "$(env -u MAUDE_TIMING python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
+assert_eq "timing: 0 is off" False "$(MAUDE_TIMING=0 python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
+assert_eq "timing: empty is off" False "$(MAUDE_TIMING= python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
+assert_eq "timing: 1 is on" True "$(MAUDE_TIMING=1 python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
+bo_dir=$(mktemp -d)
+mkdir -p "$bo_dir/S/Projects/a" "$bo_dir/Other"
+bo_run() { python3 -I - "${SCRIPT_DIR}/../light" "$bo_dir" "$@" <<'PY'
+import io, os, re, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+base, mode, folder = sys.argv[2], sys.argv[3], sys.argv[4]
+share = os.path.realpath(base + "/S")
+ev = []
+class Out(io.StringIO):
+    def __init__(self, tag): super().__init__(); self.tag = tag
+    def write(self, s): ev.append((self.tag, s)); return len(s)
+    def flush(self): pass
+    def isatty(self): return True
+real_os_name, os.name = os.name, "nt"
+sys.stdout, sys.stderr = Out("out"), Out("err")
+m._enable_vt = lambda: True
+m.resolve_share = lambda *a, **k: share
+m.has_sandbox = lambda: mode != "nosandbox"
+m.run_tui = lambda *a, **k: (m.clear_banner(), ev.append(("call", "tui")))[1] or 0  # real run_tui erases before app.run()
+m._run = lambda c: ev.append(("call", "_run")) or 0
+if mode == "warn":
+    m.self_install = lambda env=None, warn=None: (warn("maude: could not update X: denied"), ("x", False, False))[1]
+    os.environ.pop("MAUDE_NO_INSTALL", None)
+else:
+    os.environ["MAUDE_NO_INSTALL"] = "1"
+m.main([base + "/" + folder] if folder != "-" else [])
+sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+names = []
+for i, (tag, s) in enumerate(ev):
+    if tag == "call": names.append("call:" + s)
+    elif "Starting Maude" in s: names.append("banner")
+    elif s == "\x1b[1A\r\x1b[2K": names.append("erase")
+    elif s.strip(): names.append(tag + ":" + re.sub(r"\s+", " ", s.strip())[:19])
+print(",".join(names))
+PY
+}
+assert_eq "order: share folder -> sandbox: erase before the launch, nothing after" "banner,erase,call:_run" "$(bo_run ok S/Projects/a)"
+assert_eq "order: outside folder -> TUI: erase before the TUI" "banner,erase,call:tui" "$(bo_run ok Other)"
+assert_eq "order: no args -> TUI" "banner,erase,call:tui" "$(bo_run ok -)"
+assert_eq "order: no sandbox installed: erase before the error" "banner,erase,err:Maude: not started." "$(bo_run nosandbox S/Projects/a)"
+assert_eq "order: self_install warning: erase before it" "banner,erase,err:maude: could not up,call:tui" "$(bo_run warn Other)"
+rm -rf "$bo_dir"
+# show_banner itself: coloured with VT, plain without, silent on a non-TTY, never raises
+sb_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import io, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+mode = sys.argv[2]
+out = io.StringIO(); out.isatty = lambda: mode != "pipe"
+r = m.show_banner(None, (lambda: mode != "novt"), out)
+v = out.getvalue()
+print(r, "\x1b[" in v, v.rstrip().endswith("please wait ..." + ("\x1b[0m" if "\x1b[" in v else "")), m._banner_on)
+m.clear_banner(out)
+print(out.getvalue().endswith("\x1b[1A\r\x1b[2K") and mode == "vt")
+PY
+}
+assert_eq "show_banner: VT" "True True True True
+True" "$(sb_run vt)"
+assert_eq "show_banner: no VT -> plain text, not erased" "True False True False
+False" "$(sb_run novt)"
+assert_eq "show_banner: not a TTY -> nothing" "False False False False
+False" "$(sb_run pipe)"
 
 suite_summary

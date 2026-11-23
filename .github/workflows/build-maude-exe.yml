@@ -30,12 +30,15 @@ jobs:
       - run: >-
           pyinstaller --onefile --console --name maude --paths light
           --hidden-import maude --hidden-import maude_exe
-          --collect-all textual --collect-all rich light/maude_exe.py
+          --collect-submodules textual --collect-data textual
+          --collect-submodules rich --collect-data rich
+          --exclude-module textual.demo --exclude-module tkinter
+          --exclude-module unittest --exclude-module pydoc light/maude_exe.py
       - name: Smoke test
         run: ./dist/maude.exe --version
         env:
           MAUDE_NO_INSTALL: '1'
-      - name: Smoke test, bundled TUI starts headless
+      - name: Smoke test, bundled TUI starts headless (all widgets, rich cells, modals)
         run: ./dist/maude.exe --selftest
         env:
           MAUDE_NO_INSTALL: '1'

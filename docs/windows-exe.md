@@ -155,15 +155,30 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 
 ## Build
 
-`.github/workflows/build-maude-exe.yml` builds on `windows-latest` with `pyinstaller==6.11.1` and `textual==8.2.8`: `pyinstaller --onefile --console --name maude --paths light --hidden-import maude --hidden-import maude_exe --collect-all textual --collect-all rich light/maude_exe.py`. It injects the tag as version (`dev` outside tags). Checks in CI:
+`.github/workflows/build-maude-exe.yml` builds on `windows-latest` with `pyinstaller==6.11.1` and `textual==8.2.8`: `pyinstaller --onefile --console --name maude --paths light --hidden-import maude --hidden-import maude_exe --collect-submodules textual --collect-data textual --collect-submodules rich --collect-data rich --exclude-module textual.demo --exclude-module tkinter --exclude-module unittest --exclude-module pydoc light/maude_exe.py` (no `--collect-all`: it also packed the `.py` sources of Textual and Rich as loose data files, about 350 extra files that the onefile bootloader has to unpack and the virus scanner has to check on every start). It injects the tag as version (`dev` outside tags). Checks in CI:
 
 1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE`, share and registry. It checks the project list and its order, the Features cells, that Delete on an outside project removes only the registry entry, the logo caption (shown with a sandbox, absent without, red logo in both), `MaudeApp(select=...)` (row selected and focused, warning shown, a folder missing from the registry still listed, `model=` preselected), the hidden buttons, that Command Line exits the TUI and the Open Project commands (spawns are patched, nothing opens).
 2. `maude.exe --version`.
-3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled.
+3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled. It also resolves every name in `textual.widgets.__all__` (the slim build has no loose `.py` files), calls `rich.cells.cell_len` on a wide character and pushes and pops the credentials, Git setup, new-project and delete-confirm modals (about 6 s).
 
 It uploads the artifact `maude-exe`. `release.yml` calls it on `v*.*.*` tags and attaches `maude.exe` and `maude.exe.sha256` to the release. The real console behaviour (colours, suspend while a tool runs, new PowerShell window) is not tested in CI.
 
 The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software\Maude\Share` value, so a reinstall makes maude.exe look up the share root again.
+
+## Startup time and the "Starting Maude" line
+
+A start shows a black window for a moment. Where the time goes (developer PC, Defender real-time protection on, warm cache; a first start of a new exe is much slower, 6 to 7 s, because the scanner checks the new file):
+
+| Phase | Time |
+|---|---|
+| 1. Onefile bootloader unpacks to `%TEMP%\_MEI...` and starts Python. No Python code runs yet, so nothing can be printed | about 1.5 s with `--collect-all` (410 files), about 0.5 s now (58 files; a hello-world onefile exe needs about 0.6 s on the same PC) |
+| 2. Import of `maude_exe` (stdlib) | about 0.1 s |
+| 3. `import maude` (Textual, Rich) | about 0.35 s |
+| 4. Table fill in `on_mount` until the first paint | about 2.4 s with 31 projects: `maude.py` `list_projects()` starts one `git config` process per project (`git_remote_origin_url`, about 100 ms each on Windows) |
+
+From the first Python line on, `maude.exe` prints `Starting Maude, please wait ...` (red, plain text if the console has no virtual terminal support) before it imports Textual, for the TUI modes only: no argument, `--tui`, `--model`, and a folder without `--windows` or `--sandbox`. That includes a folder inside the share, which is routed to the sandbox (the line is shown while the share is looked up and then erased). It is not printed for `--version`, `--help`, `--selftest`, `--uninstall`, `--windows`, `--sandbox`, an empty folder argument or when stdout is not a console. The line is erased in place (cursor up, clear line) right before the next thing that writes to the screen: before Textual takes over, before the sandbox session starts, and before any message or prompt (install notices, share lookup, errors). When `main()` ends it never writes, so nothing of a tool's output is erased. A plain-text banner (no virtual terminal support) stays on screen. Phase 1 cannot be covered by text: the bootloader runs before Python. PyInstaller's `--splash` is a Tk image splash (bundles Tcl/Tk, not text) and was not used; `--onedir` avoids the unpacking but is not one file, so it was not used.
+
+`$env:MAUDE_TIMING=1; maude.exe` prints the phase times to stderr and quits at the first paint (opt-in debugging aid; `0` or empty is off). The first figure is the Python child process only: the onefile bootloader parent unpacks before that process exists, so phase 1 is not in it (measure it as wall time of `maude.exe --version` minus that figure).
 
 ## Notes from field tests
 
