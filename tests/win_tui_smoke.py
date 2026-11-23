@@ -73,6 +73,10 @@ try:
             assert "folder is not deleted" in str(app.screen.query_one("#confirm-sub", Label).render())
             app.screen.query_one("#btn-yes").press(); await pilot.pause()
             assert str(out2) not in reg and str(out1) in reg and out2.is_dir(), reg  # registry entry only
+            for _ in range(40):  # notify() is delivered as a message: wait for it on slow runners
+                if any(str(out2) in n.message and "manually" in n.message for n in app._notifications):
+                    break
+                await pilot.pause(0.05)
             assert any(str(out2) in n.message and "manually" in n.message for n in app._notifications), list(app._notifications)
             assert table.row_count == 3
             table.move_cursor(row=2)  # share project: still soft-deleted
