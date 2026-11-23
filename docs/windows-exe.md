@@ -40,7 +40,7 @@ Goal: start `maude.exe` on a new PC and let it set up what is missing. In order:
 | Tool | Command |
 |---|---|
 | Claude Code | `irm https://claude.ai/install.ps1 \| iex` |
-| Kiro CLI | `irm 'https://cli.kiro.dev/install.ps1' \| iex` (MSI, installs to `C:\Program Files\Kiro-Cli`, may ask for admin) |
+| Kiro CLI | `irm 'https://cli.kiro.dev/install.ps1' \| iex` (MSI via `msiexec /i <msi> /quiet /norestart`. The script prints `C:\Program Files\Kiro-Cli\`, but a non-admin install goes to `%LOCALAPPDATA%\Kiro-Cli` and the user PATH) |
 | OpenCode | `bun install -g --trust @opencode/cli` |
 | Crush | `bun install -g --trust @charmland/crush` |
 | Bun (first, only if OpenCode or Crush is chosen and bun is missing) | `irm bun.sh/install.ps1 \| iex` |
@@ -150,22 +150,24 @@ The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software
 
 ## Notes from field tests
 
-- A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. Cause found on the developer PC: `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry), and that folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. Fixed in v0.3.3. If it happens again after v0.3.3, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
-- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). Maude only reports "The Kiro CLI install failed." and goes back to the menu.
+- A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. Cause confirmed on the developer PC (2026-11-22): `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry), and that folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. The code before `9babfcf` returned None from `find_tool('kiro-cli')` with a PATH that had no Kiro entry. The current code finds the exe. Fixed in v0.3.3. If it happens again after v0.3.3, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
+- Kiro CLI install without admin works (developer PC, 2026-11-22, Windows 11, non-admin user). Maude's command downloads the MSI to `%TEMP%`, checks its SHA-256 from the manifest and runs `msiexec /i <msi> /quiet /norestart`. Result: exit 0, Kiro CLI 3.5.0. The script prints "installed to C:\Program Files\Kiro-Cli\", but the MSI installed per user to `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` and added that folder to the user PATH. Nothing went under Program Files and nothing to the machine PATH.
+- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). Maude only reports "The Kiro CLI install failed." and goes back to the menu. Not reproduced on the developer PC. Hypothesis: `/quiet` suppresses UAC, so on a PC where policy forces a per-machine install, a non-admin quiet install could fail with 1603.
+- Uninstalling Kiro CLI leaves `%LOCALAPPDATA%\Kiro-Cli` behind (`bun.exe`, `node.exe`, `tui.js`, `data.sqlite3`, about 880 MB). `run\chat-cli-<version>.exe` there is ACL-protected (Everyone: ReadAndExecute, only SYSTEM and Administrators can delete), so a normal user cannot remove the folder completely.
 - The docs site needs Pages source "GitHub Actions" and the v4 `upload-pages-artifact` and `deploy-pages` actions. The v5 pair did not upload the artifact, and Python 3.15 is not used.
 - `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
 
 
-## Status and next steps (v0.3.3)
+## Status and next steps (v0.3.4)
 
-Released: v0.3.3 (exe, WSL tarball). It includes the Kiro lookup fix (`9babfcf`) and the GitHub CLI offer.
+Released: v0.3.4 (exe, WSL tarball). It adds validated `maude.py` self-updates and `checksums.txt` for pinned installs. v0.3.3 had the Kiro lookup fix (`9babfcf`) and the GitHub CLI offer.
 
 Open items:
 
 1. Partly checked on the developer PC: `%USERPROFILE%\.local\bin\maude.exe` exists, the user PATH has the entry and `HKCU\Environment\Path` kept its type REG_EXPAND_SZ. Still open: run `maude.exe` from Downloads on a clean PC, check the printed messages and the new-window `maude` command.
-2. Kiro CLI offered although installed: on the developer PC `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry). That folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. Likely fixed in v0.3.3. Kiro CLI and the Kiro IDE were then uninstalled on the developer PC (2026-11-22). Next check: Open Project with Kiro CLI must offer the install, and after installing it must be found without restarting Maude.
+2. Kiro CLI offered although installed: done, confirmed fixed in v0.3.3 (developer PC, 2026-11-22). `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry). With a PATH that has no Kiro entry, the code before `9babfcf` returns None from `find_tool('kiro-cli')`, and the current code finds the exe. The non-admin install through Maude's command also worked (exit 0, Kiro CLI 3.5.0).
 3. GitHub CLI offer (`gh_plan`, `find_gh`, `offer_gh` in `light/maude_exe.py`): done in v0.3.3. Next: check on a real PC that the UAC prompt appears and `gh` is found right after the install.
-4. The Kiro MSI exit code 1603: find the cause (try `msiexec /i <msi> /l*v kiro.log`).
+4. The Kiro MSI exit code 1603: not reproduced on the developer PC (the non-admin quiet install succeeded). Hypothesis: `/quiet` suppresses UAC, so where policy forces a per-machine install, a non-admin quiet install could fail with 1603. Next step: on an affected PC run `msiexec /i <msi> /l*v kiro.log` and read the log.
 
 How to work on it:
 
