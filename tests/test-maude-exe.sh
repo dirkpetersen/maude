@@ -279,6 +279,14 @@ if mode == "oldinstall":  # a complete old install
     os.makedirs(os.path.join(dest, "bin")); open(os.path.join(dest, "bin", "gh.exe"), "w").write("OLD")
 if mode == "junk":  # somebody's files: must never be touched
     os.makedirs(dest); open(os.path.join(dest, "junk"), "w").close()
+if mode == "restorefail":  # the swap fails and so does putting the old folder back
+    os.makedirs(os.path.join(dest, "bin")); open(os.path.join(dest, "bin", "gh.exe"), "w").write("OLD")
+    real = os.replace
+    def bad(a, b):
+        if a.startswith(os.path.join(prog, ".gh-new-")) or ".old-" in a:
+            raise PermissionError("locked")
+        return real(a, b)
+    os.replace = bad
 if mode == "swapfail":  # the final rename fails: the old folder must come back
     os.makedirs(os.path.join(dest, "bin")); open(os.path.join(dest, "bin", "gh.exe"), "w").write("OLD")
     real = os.replace
@@ -330,6 +338,20 @@ rm -rf "$td"; td=$(mktemp -d)
 out=$(gh_flow swapfail "$td")
 assert_contains "gh failed swap puts the old folder back" "1 gh.exe=True junk=False evil=False left=[] gh=OLD" "$out"
 assert_contains "gh failed swap is reported" "install failed: locked" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+out=$(gh_flow restorefail "$td")
+assert_contains "gh failed swap and failed restore names the old folder" "Your previous GitHub CLI folder is kept at $td/Programs/GitHub CLI.old-" "$out"
+rm -rf "$td"; td=$(mktemp -d)
+# gh_dir_replaceable: LICENSE and bin/gh.exe must be regular files
+rp() { py "m.gh_dir_replaceable(r'$1')"; }
+mkdir -p "$td/ok/bin" "$td/lic/bin" "$td/lnk/bin" "$td/exedir/bin/gh.exe" "$td/exelnk/bin"
+: > "$td/ok/LICENSE"; : > "$td/ok/bin/gh.exe"; mkdir "$td/lic/LICENSE"; ln -s "$td/ok/LICENSE" "$td/lnk/LICENSE"; ln -s "$td/ok/bin/gh.exe" "$td/exelnk/bin/gh.exe"
+assert_eq "replaceable: LICENSE + bin/gh.exe files" True "$(rp "$td/ok")"
+assert_eq "replaceable: missing" True "$(rp "$td/none")"
+assert_eq "replaceable: LICENSE is a directory" False "$(rp "$td/lic")"
+assert_eq "replaceable: LICENSE is a symlink" False "$(rp "$td/lnk")"
+assert_eq "replaceable: bin/gh.exe is a directory" False "$(rp "$td/exedir")"
+assert_eq "replaceable: bin/gh.exe is a symlink" False "$(rp "$td/exelnk")"
 rm -rf "$td"
 gh_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
@@ -367,8 +389,8 @@ else:
     print(env["PATH"] == "", "|".join(say[1:]))
 PY
 }
-assert_eq "ensure: native installer Ctrl+C" "None Kiro CLI install cancelled.|The Kiro CLI install failed." "$(bs_run ensure ctrlc)"
-assert_eq "ensure: native installer unexpected error" "None The Kiro CLI install failed." "$(bs_run ensure boom)"
+assert_eq "ensure: native installer Ctrl+C" "None Kiro CLI install cancelled." "$(bs_run ensure ctrlc)"
+assert_eq "ensure: native installer unexpected error" "None The Kiro CLI install failed: x" "$(bs_run ensure boom)"
 assert_eq "gh offer: install Ctrl+C" "True GitHub CLI install cancelled." "$(bs_run gh ctrlc)"
 assert_eq "gh offer: install unexpected error" "True The GitHub CLI install failed: x" "$(bs_run gh boom)"
 # winget older than 1.4 rejects --disable-interactivity: one retry without it
@@ -377,7 +399,9 @@ import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
 mode = sys.argv[2]; log = []
 def run(c):
     log.append("flag" if "--disable-interactivity" in c else "noflag")
-    return 1 if (mode == "old" and "--disable-interactivity" in c) or mode == "fail" else 0
+    if "--disable-interactivity" in c:
+        return {"old": 0x8A150002, "oldsigned": 0x8A150002 - 2**32, "fail": 1, "other": 0x8A150056}.get(mode, 0)
+    return 1 if mode == "fail" else 0
 m._git_done = False
 m.offer_git({}, lambda e: None, lambda: "W", lambda q: "y", run, lambda s: None)
 print(",".join(log))
@@ -385,7 +409,9 @@ PY
 }
 assert_eq "git: ok first time, no retry" "flag" "$(wr_run ok)"
 assert_eq "git: old winget retries once without the flag" "flag,noflag" "$(wr_run old)"
-assert_eq "git: a real failure is tried twice, then reported" "flag,noflag" "$(wr_run fail)"
+assert_eq "git: old winget (signed code) retries too" "flag,noflag" "$(wr_run oldsigned)"
+assert_eq "git: a real failure is not retried" "flag" "$(wr_run fail)"
+assert_eq "git: another winget error is not retried" "flag" "$(wr_run other)"
 
 # find_tool looks in the Kiro per-user folder too
 assert_eq "find_tool kiro localappdata" 'K' "$(py "m.find_tool('kiro-cli', {'USERPROFILE': r'C:\\u', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: 'K' if path == r'C:\\L\\Programs\\Kiro-Cli' else None)")"

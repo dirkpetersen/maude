@@ -306,7 +306,8 @@ def find_claude(userprofile: str) -> str | None:
 
 
 def install_plan(tool: str, have_tool: bool, have_bun: bool) -> list[tuple[str, str]]:
-    """(label, PowerShell command) steps needed before tool can start. Bun comes first if needed."""
+    """(label, install command) steps needed before tool can start. Bun comes first if needed.
+    The command is a PowerShell command, or for tools in NATIVE_INSTALL a description of the Python install."""
     if have_tool:
         return []
     cmd = TOOL_INSTALL[tool][1]
@@ -350,9 +351,10 @@ def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, re
             rc = native[label](say=say) if label in native else run(ps_cmd(cmd))
         except KeyboardInterrupt:
             say(f"{label} install cancelled.")
-            rc = 1
-        except Exception:  # backstop: a failed install never takes the TUI down
-            rc = 1
+            return None
+        except Exception as err:  # backstop: a failed install never takes the TUI down
+            say(f"The {label} install failed: {err}")
+            return None
         if rc:
             say(f"The {label} install failed.")
             return None
@@ -399,9 +401,15 @@ def winget_works(which=shutil.which, run=subprocess.run) -> str | None:
     return None
 
 
+# APPINSTALLER_CLI_ERROR_INVALID_CL_ARGUMENTS = 0x8A150002 (winget-cli doc/windows/package-manager/winget/returnCodes.md);
+# Popen reports it unsigned (2316632066), other callers see it signed (-1978335230).
+WINGET_INVALID_ARGS = (0x8A150002, 0x8A150002 - 2**32)
+
+
 def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, run, say) -> None:
-    """Shared body of offer_git/offer_gh: nothing if found, link text without winget, else show
-    the command, ask Y/n, run winget directly, then put the install dir on this process's PATH."""
+    """Body of offer_git: nothing if found, link text without winget, else show the command, ask Y/n,
+    run winget directly (one retry without --disable-interactivity if winget rejects that flag),
+    then put the install dir on this process's PATH."""
     if find(env):
         return
     w = winget()
@@ -419,7 +427,7 @@ def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, ru
         return
     try:
         rc = (run or _run)(plan)
-        if rc and "--disable-interactivity" in plan:  # winget older than 1.4 rejects that flag: once more without
+        if rc in WINGET_INVALID_ARGS and "--disable-interactivity" in plan:  # winget older than 1.4 rejects that flag
             say("Retrying without --disable-interactivity (older winget)...")
             rc = (run or _run)([a for a in plan if a != "--disable-interactivity"])
     except OSError:
@@ -520,8 +528,16 @@ def gh_dir_replaceable(dest: str) -> bool:
         top = set(os.listdir(dest))
         if not top <= {"LICENSE", "bin"}:
             return False
+        plain = lambda f: os.path.isfile(f) and not os.path.islink(f)  # a regular file, not a dir or link
+        if "LICENSE" in top and not plain(os.path.join(dest, "LICENSE")):
+            return False
         b = os.path.join(dest, "bin")
-        return "bin" not in top or (os.path.isdir(b) and not os.path.islink(b) and set(os.listdir(b)) <= {"gh.exe"})
+        if "bin" not in top:
+            return True
+        if not os.path.isdir(b) or os.path.islink(b):
+            return False
+        inner = set(os.listdir(b))
+        return inner <= {"gh.exe"} and ("gh.exe" not in inner or plain(os.path.join(b, "gh.exe")))
     except OSError:
         return False
 
@@ -534,6 +550,8 @@ def install_gh(env=os.environ, say=print, urlopen=urllib.request.urlopen, tmp_ro
         say("No GitHub CLI release zip for this Windows.")
         return 1
     tmp = stage = aside = None
+    # if the old folder could not be put back (or Ctrl+C landed between the renames), tell the user where it is
+    kept = lambda a: f"\nYour previous GitHub CLI folder is kept at {a}" if a and os.path.isdir(a) else ""
     try:
         if not gh_dir_replaceable(dest):
             say(f"{dest} already exists and holds other files; not touching it. Move it away and try again.")
@@ -577,12 +595,13 @@ def install_gh(env=os.environ, say=print, urlopen=urllib.request.urlopen, tmp_ro
             raise
         if aside:
             shutil.rmtree(aside, ignore_errors=True)
+            aside = None
         return 0
     except KeyboardInterrupt:
-        say("GitHub CLI install cancelled.")
+        say("GitHub CLI install cancelled." + kept(aside))
         return 1
     except Exception as err:  # URLError, HTTPException, BadZipFile, bad JSON, ...: never crash the TUI
-        say(f"The GitHub CLI download or install failed: {err}")
+        say(f"The GitHub CLI download or install failed: {err}" + kept(aside))
         return 1
     finally:
         for d in (tmp, stage):
