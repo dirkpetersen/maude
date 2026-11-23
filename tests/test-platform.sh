@@ -222,7 +222,7 @@ assert_eq "linux flags"    "False,False,True,False" "$(get lin.flags)"
 assert_eq "not frozen when run as a script" "False" "$(get lin.frozen)"
 
 # ── feature map ────────────────────────────────────────────────────────
-all_hidden="#autostart,#btn-github,#btn-togithub,#btn-update,#btn-web"
+all_hidden="#autostart,#btn-github,#btn-togithub,#btn-web"  # Set Creds and Update Maude are on
 assert_eq "feature names" "autostart,creds,github,togithub,update,web" "$(get features.names)"
 assert_eq "every feature has all three platforms" "True" "$(get features.shape)"
 assert_eq "every feature has a widget"            "True" "$(get features.widgets)"

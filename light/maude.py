@@ -68,7 +68,7 @@ FEATURES = {
     "togithub":  {"linux-sandbox": True, "windows": False, "macos": False},
     "github":    {"linux-sandbox": True, "windows": False, "macos": False},  # Setup Git(hub)
     "creds":     {"linux-sandbox": True, "windows": True,  "macos": True},   # Set Creds -> ~/.maude/clauderc
-    "update":    {"linux-sandbox": True, "windows": False, "macos": False},
+    "update":    {"linux-sandbox": True, "windows": True,  "macos": True},
     "autostart": {"linux-sandbox": True, "windows": False, "macos": False},
 }
 FEATURE_WIDGETS = {"web": "#btn-web", "togithub": "#btn-togithub", "github": "#btn-github",
@@ -3551,10 +3551,110 @@ class DetachFromGithubScreen(ModalScreen[bool]):
 
 # ── Update modal ───────────────────────────────────────────────────────────
 
+# Update Maude on Windows and macOS (the sandbox runs `maude update`, see UpdateMaudeScreen) ──
+
+def native_update_steps(platform: str, has_sandbox: bool, claude: str | None) -> list:
+    """Steps of Update Maude outside the sandbox, as (kind, label, argv). kind: "exe" (replace
+    maude.exe from the latest release), "macpy" (validated fetch of maude.py), "cmd" (run argv)."""
+    steps = [("exe", "Updating maude.exe...", None)] if platform == "windows" \
+        else [("macpy", "Updating maude.py...", None)]
+    if claude:
+        steps.append(("cmd", "Updating Claude Code...", [claude, "update"]))
+    if platform == "windows" and has_sandbox:
+        steps.append(("cmd", "Updating the Maude sandbox...", ["wsl.exe", "-d", "Maude", "--", "bash", "-lc", "maude update"]))
+    return steps
+
+
+def stream_cmd(cmd: list, say, env=None) -> int:
+    """Run cmd and say() each output line (ANSI removed, stderr merged). Exit code, -1 if it cannot start."""
+    ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+    try:
+        # CREATE_NO_WINDOW (Windows only): output is piped, so no console window must pop up
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, env=env,
+                             creationflags=0x08000000 if sys.platform == "win32" else 0)
+    except OSError as err:
+        say(f"✗ could not start {cmd[0]}: {err}")
+        return -1
+    for raw in p.stdout:
+        say(ansi.sub("", raw.decode("utf-8", "replace")).rstrip())
+    return p.wait()
+
+
+def fetch_maude_py(target: Path, say, urlopen=urllib.request.urlopen, validate=None) -> str:
+    """macOS Update Maude: download maude.py and replace target, with the checks of maybe_self_update
+    (static validation, then a subprocess import). Returns "updated", "current", "skipped" (inside a
+    git checkout: git pull is the way there) or "failed"."""
+    validate = validate or import_check_update
+    try:
+        for parent in target.resolve().parents:
+            if (parent / ".git").exists():
+                say(f"maude.py is inside a git checkout ({parent}): not replacing it. Use git pull there.")
+                return "skipped"
+        with urlopen(f"{UPDATE_URL}?cache={int(time.time())}", timeout=20) as resp:
+            data = resp.read()
+        if not valid_update(data, str(target)):
+            say("✗ downloaded maude.py failed validation; keeping the current version")
+            return "failed"
+        if target.is_file() and target.read_bytes() == data:
+            say("maude.py is up to date.")
+            return "current"
+        tmp = target.with_name(target.name + ".new")
+        try:
+            tmp.write_bytes(data)
+            why = validate(str(tmp))
+            if why:
+                say(f"✗ downloaded maude.py failed validation; keeping the current version ({why})")
+                return "failed"
+            tmp.replace(target)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        say("✓ maude.py updated.")
+        return "updated"
+    except Exception as err:
+        say(f"✗ maude.py update failed: {err}")
+        return "failed"
+
+
+def native_update(say, stream=stream_cmd) -> tuple:
+    """Run Update Maude outside the sandbox, saying every line. Returns (failed steps, reload) where
+    reload is "must" (a new maude.exe is staged: Close and Escape reload too),
+    "ok" (maude.py was replaced: Reload offered) or "" (nothing to reload)."""
+    errors, reload = 0, ""
+    steps = native_update_steps(PLATFORM, HAS_SANDBOX, plat_tool("claude"))
+    for kind, label, cmd in steps:
+        say(label)
+        if kind == "exe":
+            st = mx.update_exe(say)
+            errors += st == "failed"
+            if st == "staged" or mx.staged_tag():
+                reload = "must"
+        elif kind == "macpy":
+            st = fetch_maude_py(Path(__file__).resolve(), say)
+            errors += st == "failed"
+            if st == "updated":
+                reload = "ok"
+        else:
+            env = _child_env()
+            if cmd[0] == "wsl.exe":  # UTF-8 messages from wsl.exe itself (default is UTF-16)
+                env = {**(env if env is not None else os.environ), "WSL_UTF8": "1"}
+            rc = stream(cmd, say, env)
+            if rc != 0:
+                say(f"⚠ {cmd[0]} exited {rc}")
+                errors += 1
+    return errors, reload
+
+
 class UpdateMaudeScreen(ModalScreen[None]):
     """Modal that runs 'maude update' and streams all output with backscroll."""
 
     BINDINGS = [Binding("escape", "close", "Close", show=False)]
+    _busy = False         # native update running: ignore Escape
+    _must_reload = False  # a new maude.exe is staged: closing means reloading
+    _reload_ok = False    # native: something to reload (the sandbox always offers Reload)
 
     DEFAULT_CSS = """
     UpdateMaudeScreen {
@@ -3639,6 +3739,22 @@ class UpdateMaudeScreen(ModalScreen[None]):
         ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
         try:
+            if NATIVE:  # Windows / macOS: steps run in Python, see native_update()
+                def say(line: str) -> None:
+                    self.app.call_from_thread(log.write, self._colorize(line))
+                self._busy = True
+                try:
+                    errors, reload = await asyncio.to_thread(native_update, say)
+                finally:
+                    self._busy = False
+                self._reload_ok, self._must_reload = bool(reload), reload == "must"
+                tail = " Press Reload UI to switch to the new version." if self._must_reload \
+                    else " Reload to run the new version." if reload else ""
+                if errors:
+                    status.update(f"[#e07070]⚠ Update finished with {errors} error(s).{tail}[/#e07070]")
+                else:
+                    status.update(f"[#72c09a]✓ Update complete.{tail}[/#72c09a]")
+                return
             proc = await asyncio.create_subprocess_exec(
                 maude_bin, "update",
                 stdout=asyncio.subprocess.PIPE,
@@ -3659,12 +3775,13 @@ class UpdateMaudeScreen(ModalScreen[None]):
             status.update("[#e07070]✗ Update failed.[/#e07070]")
         finally:
             reload_btn = self.query_one("#btn-update-reload", Button)
-            close_btn.disabled = False
-            reload_btn.disabled = False
-            reload_btn.focus()
+            close_btn.disabled = self._must_reload
+            reload_btn.disabled = NATIVE and not self._reload_ok
+            (close_btn if reload_btn.disabled else reload_btn).focus()
 
     def action_close(self) -> None:
-        self.dismiss(False)
+        if not self._busy:
+            self.dismiss(self._must_reload)  # a staged maude.exe: Escape reloads, there is no way back
 
     @on(Button.Pressed, "#btn-update-close")
     def close_pressed(self) -> None:

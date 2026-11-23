@@ -18,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PureWindowsPath as W
@@ -1055,8 +1057,11 @@ def self_install(env=os.environ, warn=lambda m: print(m, file=sys.stderr)) -> tu
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp = target + ".new"
         try:
-            if not (os.path.isfile(target) and os.path.getsize(target) == os.path.getsize(cur)
-                    and open(target, "rb").read() == open(cur, "rb").read()):
+            same = (os.path.isfile(target) and os.path.getsize(target) == os.path.getsize(cur)
+                    and open(target, "rb").read() == open(cur, "rb").read())
+            if not same and os.path.isfile(target) and not should_overwrite_installed(VERSION, installed_version(target)):
+                warn(f"maude: the installed {target} is newer than this maude.exe ({VERSION}); keeping it.")
+            elif not same:
                 shutil.copy2(cur, tmp)
                 os.replace(tmp, target)  # fails with PermissionError while the old copy runs
                 changed = True
@@ -1225,6 +1230,269 @@ def timing_report(marks, out=None) -> None:
         prev = t
 
 
+# ── Self-update of maude.exe (Update Maude button) ─────────────────────────
+# The release workflow publishes maude.exe and maude.exe.sha256 ("sha256sum" format) as release assets.
+# Flow: the button only DOWNLOADS and VERIFIES into a staged file (stage_exe). The running onefile exe
+# must not be renamed while the TUI still runs (PyInstaller reopens sys.executable for lazy imports and
+# would crash), so the swap (apply_staged) happens in run_tui after the TUI exited with 42, then the
+# new exe is started. While something is staged, closing the update screen reloads (Close is disabled).
+# A staged file that is not switched to (the TUI ended another way) is deleted by run_tui.
+# Only plain vX.Y.Z tags count as releases: a build whose VERSION is anything else (dev, v1.2.3-rc1)
+# is a development build and is never replaced; pre-release tags on GitHub are ignored.
+RELEASE_API = "https://api.github.com/repos/dirkpetersen/maude/releases/latest"
+RELEASE_DL = "https://github.com/dirkpetersen/maude/releases/download/"
+EXE_ASSET, EXE_SHA_ASSET = "maude.exe", "maude.exe.sha256"
+UPDATE_RELOAD = 42  # exit value of the TUI after an update: start again (the new exe)
+_VER_RE = re.compile(r"v?([0-9]+)\.([0-9]+)\.([0-9]+)", re.ASCII)
+_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+", re.ASCII)
+
+
+def parse_version(v) -> tuple[int, int, int] | None:
+    """(major, minor, patch) of "v1.2.3" / "1.2.3", else None (dev builds, junk, "v1.2.3-rc1")."""
+    m = _VER_RE.fullmatch(v.strip()) if isinstance(v, str) else None
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def exe_release(rel) -> tuple[str, str, str] | None:
+    """(tag, exe url, sha256 file url) from a releases/latest JSON, else None. The tag must look like
+    vX.Y.Z and both assets must be listed; URLs are rebuilt from RELEASE_DL, never taken from the JSON."""
+    tag = rel.get("tag_name") if isinstance(rel, dict) else None
+    if not isinstance(tag, str) or not _TAG_RE.fullmatch(tag):
+        return None
+    assets = rel.get("assets")
+    names = {a["name"] for a in (assets if isinstance(assets, list) else [])
+             if isinstance(a, dict) and isinstance(a.get("name"), str)}
+    if EXE_ASSET not in names or EXE_SHA_ASSET not in names:
+        return None
+    return tag, f"{RELEASE_DL}{tag}/{EXE_ASSET}", f"{RELEASE_DL}{tag}/{EXE_SHA_ASSET}"
+
+
+def update_decision(current: str, tag: str) -> str:
+    """"dev" (a development build is never replaced), "update" (tag is newer), "current" (same or older)."""
+    cur, new = parse_version(current), parse_version(tag)
+    if cur is None:
+        return "dev"
+    return "update" if new is not None and new > cur else "current"
+
+
+def should_overwrite_installed(running: str, installed: str | None) -> bool:
+    """self_install: may this (running) exe replace the installed one? Never an older one over a newer
+    one, never a dev build over a release. An unknown or unparseable installed version (broken exe,
+    dev) is replaced, as before."""
+    inst = parse_version(installed) if installed else None
+    if inst is None:
+        return True
+    cur = parse_version(running)
+    return cur is not None and cur >= inst
+
+
+def _kill_tree(p) -> None:
+    """Kill a process and its children (the onefile bootloader's child holds the pipes)."""
+    if os.name == "nt":
+        with contextlib.suppress(Exception):
+            subprocess.run([os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe"), "/T", "/F", "/PID", str(p.pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    with contextlib.suppress(Exception):
+        p.kill()
+
+
+def installed_version(path: str, popen=subprocess.Popen, timeout: float = 30, kill=_kill_tree) -> str | None:
+    """Version of an installed exe, from `<exe> --version` ("maude.exe v1.2.3"), None when it cannot be
+    told. Chosen over a version stamp file: a stamp goes stale when the exe is copied or replaced by
+    hand, and this runs only when the running exe is not the installed one and differs from it
+    (rare: first run from Downloads), where one short extra start is cheap.
+    Output goes to a temp file, not a pipe: after a timeout, subprocess.run would block in communicate()
+    until the onefile child that holds the pipe exits. On a timeout the whole tree is killed."""
+    try:
+        with tempfile.TemporaryFile() as out:
+            p = popen([path, "--version"], stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.DEVNULL,
+                      env={**os.environ, "MAUDE_NO_INSTALL": "1"})
+            try:
+                p.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill(p)
+                with contextlib.suppress(Exception):
+                    p.wait(timeout=2)
+                return None
+            out.seek(0)
+            m = re.match(r"maude\.exe (\S+)", out.read(4096).decode("utf-8", "replace"))
+            return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def swap_exe(target: str, new: str, pid: int, replace=os.replace) -> str | None:
+    """Put new at target: rename target aside to <target>.old-<pid> (or .old-<pid>-<n> when that name
+    is taken and cannot be removed), then move new into place. If that fails the old exe is restored.
+    Returns the aside path (None when target did not exist). Raises OSError (target intact)."""
+    aside, moved = None, False
+    if os.path.exists(target):
+        for n in range(20):
+            cand = f"{target}.old-{pid}" + (f"-{n}" if n else "")
+            with contextlib.suppress(OSError):
+                os.remove(cand)  # stale file of a recycled pid
+            if not os.path.exists(cand):
+                aside = cand
+                break
+        if aside is None:
+            raise OSError(f"no free name for {target}.old-{pid}")
+        replace(target, aside)
+        moved = True
+    try:
+        replace(new, target)
+    except OSError:
+        if moved:
+            with contextlib.suppress(OSError):
+                replace(aside, target)
+        raise
+    return aside
+
+
+def cleanup_old(target: str) -> int:
+    """Best-effort removal of <target>.old-* (exact prefix) left by earlier updates, in the folder of
+    target only; one that is still running cannot be deleted and stays for the next start. Also drops
+    staged downloads <target>.update-* older than a day. Returns how many were removed. Never raises."""
+    n, d, base = 0, os.path.dirname(target) or ".", os.path.basename(target)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    for name in names:
+        full = os.path.join(d, name)
+        try:
+            low = name.lower()  # Windows names are case-insensitive (callers may pass a lower-cased path)
+            if low.startswith(base.lower() + ".old-") or (low.startswith(base.lower() + ".update-")
+                                                         and time.time() - os.path.getmtime(full) > 86400):
+                os.remove(full)
+                n += 1
+        except OSError:
+            pass
+    return n
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+_staged: dict = {}          # {"tag", "path", "target", "sha"} once an update is downloaded and verified
+_stage_lock = threading.Lock()
+
+
+def staged_tag() -> str | None:
+    return _staged.get("tag")
+
+
+def stage_exe(say=print, version: str = None, target: str = None, urlopen=urllib.request.urlopen,
+              pid: int = None, running: str = None) -> str:
+    """Download and verify the latest release into <target>.update-<pid>. Nothing is renamed here.
+    Returns "staged", "current", "dev", "skipped" (not a frozen exe), "busy" (another update runs) or
+    "failed". Never raises; reports through say(). target is the installed exe (default: install_target),
+    running the exe of this process (frozen only)."""
+    version = VERSION if version is None else version
+    if running is None:
+        running = os.path.abspath(sys.executable) if getattr(sys, "frozen", False) else None
+    if running is None:
+        say("Not running from maude.exe: nothing to update here.")
+        return "skipped"
+    if parse_version(version) is None:
+        say(f"This is a development build ({version}): not replacing it. Install a release to get updates.")
+        return "dev"
+    if not _stage_lock.acquire(blocking=False):
+        say("An update is already running.")
+        return "busy"
+    tmp = None
+    try:
+        if _staged:
+            say(f"Already updated to {_staged['tag']}: press Reload UI to start it.")
+            return "staged"
+        if target is None:
+            target = install_target(os.environ.get("USERPROFILE", ""))
+        if _no_install or not os.path.isfile(target):
+            target = running  # --no-install (a portable exe) or not installed: update the exe that runs
+        tmp = f"{target}.update-{os.getpid() if pid is None else pid}"
+        rel = json.loads(_http_get(RELEASE_API, urlopen))
+        found = exe_release(rel)
+        if not found:
+            say("The latest release has no maude.exe plus maude.exe.sha256: nothing to install.")
+            return "failed"
+        tag, url, sha_url = found
+        if update_decision(version, tag) != "update":
+            say(f"maude.exe {version} is up to date (latest release {tag}).")
+            return "current"
+        say(f"Downloading maude.exe {tag} (installed: {version}) ...")
+        sha = checksum_for(_http_get(sha_url, urlopen).decode("utf-8", "replace"), EXE_ASSET)
+        if not sha:
+            say(f"{EXE_SHA_ASSET} has no checksum for {EXE_ASSET}: not installing.")
+            return "failed"
+        download_verified(url, tmp, sha, urlopen)
+        with open(tmp, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise ValueError("the download is not a Windows executable")
+        _staged.update(tag=tag, path=tmp, target=target, sha=sha)
+        say(f"maude.exe {tag} downloaded and verified. Press Reload UI to switch to it.")
+        return "staged"
+    except urllib.error.HTTPError as err:
+        say("GitHub rate limit, try later." if err.code in (403, 429) else f"maude.exe update failed: {err}")
+        return "failed"
+    except Exception as err:  # network, JSON, checksum: the installed exe stays as it was
+        say(f"maude.exe update failed: {err}")
+        return "failed"
+    finally:
+        if tmp and not _staged:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+        _stage_lock.release()
+
+
+update_exe = stage_exe  # name used by maude.py
+
+
+def apply_staged(say=print, pid: int = None, replace=os.replace) -> str | None:
+    """Swap the staged exe in (call after the TUI exited). Returns the installed exe path on success,
+    None when nothing was staged or the swap failed (then the old exe stays and say() tells why)."""
+    st = dict(_staged)
+    _staged.clear()
+    if not st:
+        return None
+    try:
+        if _sha256_file(st["path"]) != st["sha"]:
+            raise ValueError("the downloaded file changed on disk")
+        swap_exe(st["target"], st["path"], os.getpid() if pid is None else pid, replace)
+        return st["target"]
+    except Exception as err:
+        say(f"maude: could not switch to {st['tag']}, keeping the current maude.exe: {err}")
+        with contextlib.suppress(OSError):
+            os.remove(st["path"])
+        return None
+
+
+def discard_staged() -> None:
+    """Forget a staged update and delete its file (the TUI ended without Reload)."""
+    st = dict(_staged)
+    _staged.clear()
+    if st:
+        with contextlib.suppress(OSError):
+            os.remove(st["path"])
+
+
+def relaunch_cmd(exe: str, folder: str = "", model: str = "", no_install: bool = False) -> list[str]:
+    """argv that starts the (new) exe again with the same folder/model preselection and --no-install."""
+    return ([exe] + (["--no-install"] if no_install else []) + (["--model", model] if model and valid_model(model) else [])
+            + ([folder] if folder else []))
+
+
+def should_relaunch(rv, rc=0) -> bool:
+    """The TUI asked for a reload (exit value 42) and did not fail."""
+    return rv == UPDATE_RELOAD and rc in (0, None)
+
+
+_no_install = False  # set by _main: relaunch passes --no-install on
+
+
 def run_tui(folder: str = "", model: str = "") -> int:
     """Run the Windows TUI (light/maude.py). With a folder (outside the share): list it, preselect
     its row and show the OUTSIDE warning. The folder is registered only when it is opened from the
@@ -1257,17 +1525,40 @@ def run_tui(folder: str = "", model: str = "") -> int:
         app = cls(select=folder, model=model)
         mark("app created")
         clear_banner()  # Textual switches to the alternate screen next; do not leave the line behind
-        app.run()
+        rv = app.run()
         rc = getattr(app, "return_code", 0)
+        if should_relaunch(rv, rc):  # Update Maude replaced the exe: run the new one (no execv on Windows)
+            wanted = staged_tag()
+            new = apply_staged(lambda msg: print(msg, file=sys.stderr))  # swap only now: the TUI is gone
+            if wanted and not new:  # swap failed: the old exe stays, say so and do not restart
+                wait("Press Enter to close.")
+                return 1
+            return _relaunch(folder, model, new)
     except Exception:
         clear_banner()
         import traceback
         traceback.print_exc()
         rc = 1
+    finally:
+        discard_staged()  # still staged = the TUI ended without Reload (q, Ctrl+Q): drop the file; a killed console leaves it for cleanup_old (1 day)
     if rc not in (0, None):
         wait("Maude failed to start or crashed. Press Enter to close.")
         return 1
     return 0
+
+
+def _relaunch(folder: str, model: str, exe: str = None, popen=subprocess.Popen) -> int:
+    """Start exe (default: this exe) again and wait for it, so the console stays owned by one running
+    process (a parent shell would otherwise print its prompt over the new TUI). Keeps --no-install.
+    Not frozen: python cannot be restarted meaningfully, return."""
+    if not getattr(sys, "frozen", False):
+        return 0
+    exe = exe or os.path.abspath(sys.executable)
+    try:
+        return popen(relaunch_cmd(exe, folder, model, _no_install)).wait()
+    except OSError as err:
+        print(f"maude: could not restart {exe}: {err}", file=sys.stderr)
+        return 1
 
 
 _marks: list = []
@@ -1322,6 +1613,12 @@ def _main(argv: list[str]) -> int:
     if not flag and not (args and fix_folder_arg(args[0]) is None):
         shown = show_banner()
         mark(f"banner shown={shown} (erasable={_banner_on})")
+    global _no_install
+    _no_install = "--no-install" in argv or bool(os.environ.get("MAUDE_NO_INSTALL"))
+    if getattr(sys, "frozen", False):  # <exe>.old-<pid> of earlier updates, whatever the install mode
+        for e in {os.path.normcase(os.path.abspath(sys.executable)),
+                  os.path.normcase(install_target(os.environ.get("USERPROFILE", "")))}:
+            cleanup_old(e)
     mark("args parsed")
     if "--no-install" not in argv and not os.environ.get("MAUDE_NO_INSTALL"):
         def _warn(msg):

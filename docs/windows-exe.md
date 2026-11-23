@@ -15,8 +15,9 @@ This is Windows mode of the TUI. It lists the projects of the Maude share (the s
 | Open Project | Runs the selected AI tool natively on Windows in the project folder, OUTSIDE the sandbox, with normal permission prompts (see below) |
 | Command Line | Exits the TUI and returns to the PowerShell that started `maude.exe` (same as on Linux). Run `maude.exe` again to come back. |
 | Set Creds | Works. Opens the same screen as in the sandbox (Paste exports, AWS Bedrock, Azure Foundry, Claude Login). Credentials go to `%USERPROFILE%\.maude\clauderc` in the sandbox format (`export K='V'` lines, same parser and merge code; the file mode 0600 has no effect on Windows, the user profile ACL protects it). The "Default to AWS Bedrock" toggle parks the file as `clauderc.inactive`, as in the sandbox. Bedrock keys also go to `~\.aws\credentials` + `config` (`[bedrock]`), Gemini keys to `~\.gemini\.env`. See "Credentials" below |
-| Web UI (kanna), To Github, Setup Git(hub), Update Maude, Autostart | Hidden. They need the sandbox (bash helpers, ssh, gpg, `mom`, `.bashrc`, `fuser`, process groups). Use the sandbox for them |
-| Daily self-update of `maude.py` | Off. The exe is updated by downloading a new release |
+| Web UI (kanna), To Github, Setup Git(hub), Autostart | Hidden. They need the sandbox (bash helpers, ssh, gpg, `mom`, `.bashrc`, `fuser`, process groups). Use the sandbox for them |
+| Update Maude | Shown. See "Update Maude" below |
+| Daily self-update of `maude.py` | Off. The exe is updated by the Update Maude button |
 | Credential gate | On, but it never locks anyone out (see "Credentials" below) |
 
 Open Project runs these commands (working directory is the project folder):
@@ -208,7 +209,7 @@ Claude Login runs the real claude with `/login`; the browser opens natively and 
 
 ## Platform layer and macOS (prepared, untested)
 
-`light/maude.py` is the single source for the TUI on every platform. It derives `PLATFORM` (`windows`, `macos` or `linux-sandbox`) from `sys.platform`; the buttons that depend on the platform come from the `FEATURES` map (one line per feature). Today Windows and macOS hide the same five widgets: Web UI, To Github, Setup Git(hub), Update Maude and Autostart (Set Creds is on). Web UI and Autostart stay hidden on both platforms for good; the later packages flip the other lines.
+`light/maude.py` is the single source for the TUI on every platform. It derives `PLATFORM` (`windows`, `macos` or `linux-sandbox`) from `sys.platform`; the buttons that depend on the platform come from the `FEATURES` map (one line per feature). Today Windows and macOS hide four widgets: Web UI, To Github, Setup Git(hub) and Autostart (Set Creds and Update Maude are on). Web UI and Autostart stay hidden on both platforms for good; the later packages flip the other lines.
 
 macOS is prepared and has never been run on a Mac. What exists: a red logo without the caption (no sandbox), projects in `~/Maude/Projects`, outside projects in `~/.maude/projects.json` (a JSON list of folder paths, shown first), and Open Project with the real `claude` (`--model <model>`, found in `~/.local/bin`, PATH, `/opt/homebrew/bin` or `/usr/local/bin`) instead of the sandbox wrapper. There are no tool installers on macOS yet: if Claude Code or another tool is missing, Maude prints a hint. `from __future__ import annotations` keeps the file importable by the 3.9 system Python on macOS.
 
@@ -230,3 +231,19 @@ How to work on it:
 - Release: `make tag VERSION=vX.Y.Z` runs `release.yml`, which builds `maude.exe` and the WSL tarball. A run takes a few minutes. Check with `gh run list`.
 - Docs site (https://dirkpetersen.github.io/maude/): the Documentation workflow runs only when `docs/**`, `zensical.toml` or the workflow file change. Pages was enabled with `gh api -X POST repos/dirkpetersen/maude/pages -f build_type=workflow`.
 - `setup-wsl-maude.ps1` must keep CRLF line endings (check with `file`).
+
+## Update Maude (Windows and macOS)
+
+The **Update Maude** button opens the same log screen as in the sandbox, but the steps run in Python (`native_update()` in `maude.py`, helpers in `maude_exe.py`). No network access in the tests: every download goes through an injectable `urlopen` (`tests/test-update-native.sh`).
+
+Windows, in this order, all streamed into the log:
+
+1. **maude.exe.** `stage_exe()` (alias `update_exe`) reads `https://api.github.com/repos/dirkpetersen/maude/releases/latest`. The release must list the assets `maude.exe` and `maude.exe.sha256` (`release.yml` publishes both; the checksum file is `sha256sum` format). The download URLs are rebuilt from the tag, never taken from the JSON. If the tag (`vX.Y.Z`) is newer than `VERSION`, the exe is downloaded to `maude.exe.update-<pid>` next to the installed exe (`%USERPROFILE%\.local\bin\maude.exe`), SHA-256 checked (`download_verified`) and must start with `MZ`. **Nothing is renamed at this point**: a PyInstaller onefile exe reopens itself by path for lazy imports, so the running TUI must not be swapped under it. The staged tag is remembered in the process (a second Update says "already updated, press Reload UI"; a lock refuses two runs at once). Pre-release tags are ignored, and a build whose `VERSION` is not a plain `vX.Y.Z` (`dev`, `v1.2.3-rc1`) counts as a development build: it is never replaced, the log says so and nothing is downloaded. A same or older release changes nothing, so a newer build is never downgraded. HTTP 403/429 from GitHub prints "GitHub rate limit, try later." Python (not a frozen exe) is skipped. With `--no-install` (a portable exe) the exe that runs is the update target, not the installed one, so the version compared is the one that is replaced.
+2. **Claude Code**: `claude update`, if `claude` is found.
+3. **Sandbox**: if the `Maude` WSL distro exists, `wsl.exe -d Maude -- bash -lc "maude update"` (with `WSL_UTF8=1`; child processes run with `CREATE_NO_WINDOW`).
+
+A failed step is shown with a warning and counted; the next step still runs. Once an exe is staged, Close is disabled and Escape reloads too (so the TUI is not left running on a swapped-out exe path). If the TUI ends any other way (`q`, Ctrl+Q), the staged file is deleted and nothing changes; if the console window is closed, the leftover file is removed at a later start (after one day). Reload exits the TUI with code 42; `run_tui()` then calls `apply_staged()`: it re-hashes the staged file, renames the exe to `maude.exe.old-<pid>` (`.old-<pid>-<n>` if that name is taken and cannot be removed) and moves the new one in (the old one is put back if that fails; then it says so, keeps the current exe and does not restart). Then it starts the exe again with the same folder, model and `--no-install` arguments and waits for it, so the console stays owned by one running process; there is no `execv` on Windows. Reload is only offered when something was staged (or, on macOS, `maude.py` was replaced).
+
+At every frozen start `maude.exe.old-*` next to the running exe and next to the installed exe is removed best effort (exact prefix; one that still runs stays for later), plus staged downloads older than a day. `self_install` never copies an older running exe over a newer installed one, and a `dev` build never over a release: it runs `<installed> --version` (short timeout) to read the installed version. That was chosen over a stamp file, which goes stale when the exe is copied by hand; the extra start only happens when the running exe is not the installed one and differs from it.
+
+macOS: `fetch_maude_py()` downloads `maude.py` from `main` with the same checks as the daily sandbox self-update (`valid_update()`, then `import_check_update()` on a temp file) and replaces the running copy, then `claude update` runs. **Reload UI** exits with 42. Run as a script (`python3 maude.py`), the `__main__` block of `maude.py` handles 42 itself with `os.execv`. A macOS launcher that imports `maude` and calls `MaudeApp().run()` itself must loop on 42 (start the app again, in a fresh process so the new `maude.py` is loaded). There is no such launcher yet, and macOS is untested.

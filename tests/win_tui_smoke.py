@@ -85,10 +85,10 @@ try:
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
             assert maude.current_platform() == "windows"
             hidden = maude.hidden_widgets()  # from the FEATURES map: everything off on Windows for now
-            assert set(hidden) == {"#btn-web", "#btn-togithub", "#btn-github", "#btn-update", "#autostart"}, hidden  # Set Creds is on
+            assert set(hidden) == {"#btn-web", "#btn-togithub", "#btn-github", "#autostart"}, hidden  # Set Creds and Update Maude are on
             for i in hidden:
                 assert not app.query_one(i).display, i
-            for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#fresh-context", "#perplexity"):
+            for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#btn-update", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i
             # Radio coupling: fable then Crush must leave exactly one button on per set (opus, Crush).
             from textual.widgets import RadioButton
@@ -103,6 +103,40 @@ try:
             app.query_one("#btn-cli").press()
             await pilot.pause()
             assert exited  # Command Line returns to the PowerShell that started maude.exe
+            # Update Maude: visible on Windows, runs native_update (stubbed: no network) into the log,
+            # and "Reload UI" exits the app with 42 (maude_exe.run_tui relaunches the exe on that).
+            seen = []
+            maude.native_update = lambda say, *a, **k: (say("Updating maude.exe..."), say("maude.exe v9.9.9 downloaded."), (0, "must"))[2]
+            exits = []
+            app.exit = lambda *a, **k: exits.append(a)
+            app.query_one("#btn-update").press()
+            await pilot.pause()
+            scr = app.screen
+            assert type(scr).__name__ == "UpdateMaudeScreen", scr
+            from textual.widgets import Button, RichLog
+            for _ in range(60):
+                if not scr.query_one("#btn-update-reload", Button).disabled:
+                    break
+                await pilot.pause(0.05)
+            log = " | ".join(str(getattr(l, "text", l)) for l in scr.query_one("#update-log", RichLog).lines)
+            assert "maude.exe v9.9.9 downloaded." in log, log
+            assert not scr.query_one("#btn-update-reload", Button).disabled
+            assert scr.query_one("#btn-update-close", Button).disabled  # staged exe: Reload is the only way out
+            scr.query_one("#btn-update-reload", Button).press()
+            await pilot.pause()
+            assert exits == [(42,)], exits
+            # With something staged, Escape must reload too (same exit value 42).
+            app.query_one("#btn-update").press()
+            await pilot.pause()
+            scr = app.screen
+            assert type(scr).__name__ == "UpdateMaudeScreen", scr
+            for _ in range(60):
+                if not scr.query_one("#btn-update-reload", Button).disabled:
+                    break
+                await pilot.pause(0.05)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert exits == [(42,), (42,)], exits
 
     asyncio.run(check())
 
