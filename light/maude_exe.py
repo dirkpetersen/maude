@@ -313,7 +313,11 @@ def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin
         yes = False
     if not yes:
         return
-    if (run or _run)(plan):
+    try:
+        rc = (run or _run)(plan)
+    except OSError:
+        rc = 1
+    if rc:
         say("The Git for Windows install failed.")
         return
     d = next((d for d in git_dirs(env) if os.path.isdir(d)), None)  # the installer sets the persisted PATH itself

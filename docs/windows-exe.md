@@ -53,8 +53,8 @@ After a successful install Maude adds `%USERPROFILE%\.local\bin` and `%USERPROFI
 
 On the first Open Project in a Maude run, before the tool check, Maude looks for `git` (PATH, `%ProgramFiles%\Git\cmd`, `%LOCALAPPDATA%\Programs\Git\cmd`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install Git for Windows now? [Y/n]`. It runs `winget` directly (not through PowerShell):
 
-- Administrator: `winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements`
-- Normal user: the same command plus `--scope user` (per-user install, no elevation).
+- Elevated window (Run as administrator): `winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements`
+- Normal window (also for members of Administrators): the same command plus `--scope user` (per-user install, no elevation).
 
 If winget is missing or blocked by policy (App Installer disabled), Maude does not offer an install. It prints `Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the Git `cmd` folder to its own PATH (the installer sets the saved PATH).
 
