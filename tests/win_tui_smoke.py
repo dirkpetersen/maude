@@ -109,7 +109,7 @@ try:
     mx._run = lambda cmd, **kw: calls.append((cmd, kw.get("cwd"))) or 0
     cwd0 = os.getcwd()
     maude.open_project(proj, "sonnet", fresh=False)
-    assert os.getcwd() == cwd0  # TUI must not hold the project folde
+    assert os.getcwd() == cwd0  # TUI must not hold the project folder
     maude.open_project(proj, "sonnet", fresh=True)
     assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls

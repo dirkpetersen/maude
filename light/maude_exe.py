@@ -379,7 +379,7 @@ def windows_model(userprofile: str) -> str:
     return m if valid_model(m) else "opus"
 
 
-REG_PROJECTS = r"Software\Maude\Projects"  # HKCU; value name = project_key(folder), data = folde
+REG_PROJECTS = r"Software\Maude\Projects"  # HKCU; value name = project_key(folder), data = folder
 
 
 def project_key(folder: str) -> str:
@@ -410,7 +410,7 @@ def remove_project(folder: str) -> None:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PROJECTS, 0, winreg.KEY_SET_VALUE) as h:
             winreg.DeleteValue(h, project_key(folder))
     except FileNotFoundError:
-        pass  # other OSError (e.g. access denied) goes to the calle
+        pass  # other OSError (e.g. access denied) goes to the caller
 
 
 def content_mtime(folder: str) -> float:
@@ -527,7 +527,7 @@ def self_install(env=os.environ) -> tuple[str, bool, bool]:
             with contextlib.suppress(OSError):
                 os.remove(tmp)
             if not os.path.exists(target):
-                exe = cu
+                exe = cur
     for k in KEYS:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, k + r"\command") as h:
