@@ -186,12 +186,16 @@ def user_dirs(env) -> list[str]:
 
 def tool_dirs(env) -> list[str]:
     """user_dirs plus the Kiro MSI folder (a system install that sets its own PATH)."""
-    return user_dirs(env) + ([str(W(env["ProgramFiles"]) / "Kiro-Cli")] if env.get("ProgramFiles") else [])
+    extra = [str(W(env[v]) / sub) for v, sub in (("ProgramFiles", "Kiro-Cli"), ("LOCALAPPDATA", r"Programs\Kiro-Cli"),
+                                                  ("LOCALAPPDATA", "Kiro-Cli")) if env.get(v)]
+    return user_dirs(env) + extra
 
 
 def find_tool(binary: str, env=os.environ, which=shutil.which) -> str | None:
     """PATH first, then the installer folders (a fresh install is not on this process's PATH yet)."""
-    return which(binary) or next((r for d in tool_dirs(env) if (r := which(binary, path=d))), None)
+    # PATH entries written as %VAR% are not expanded by shutil.which, so try them expanded too
+    pdirs = [ntpath.expandvars(e) for e in env.get("PATH", "").split(";") if "%" in e]
+    return which(binary) or next((r for d in pdirs + tool_dirs(env) if (r := which(binary, path=d))), None)
 
 
 def find_claude(userprofile: str) -> str | None:

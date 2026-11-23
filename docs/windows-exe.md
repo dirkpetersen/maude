@@ -137,3 +137,11 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 It uploads the artifact `maude-exe`. `release.yml` calls it on `v*.*.*` tags and attaches `maude.exe` and `maude.exe.sha256` to the release. The real console behaviour (colours, suspend while a tool runs, new PowerShell window) is not tested in CI.
 
 The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software\Maude\Share` value, so a reinstall makes maude.exe look up the share root again.
+
+## Notes from field tests
+
+- A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. The cause is not confirmed. If it happens again, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
+- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). Maude only reports "The Kiro CLI install failed." and goes back to the menu.
+- The docs site needs Pages source "GitHub Actions" and the v4 `upload-pages-artifact` and `deploy-pages` actions. The v5 pair did not upload the artifact, and Python 3.15 is not used.
+- `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
+

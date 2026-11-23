@@ -144,4 +144,7 @@ assert_eq "git offer: accepted admin has no scope" "0" "$(git_run y 1 W | grep -
 assert_eq "git offer: no winget, link only" "0" "$(git_run y 0 '' | grep -c '^RUN')"
 assert_contains "git offer: link text" "Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional)." "$(git_run y 0 '')"
 
+# find_tool looks in the Kiro per-user folder too
+assert_eq "find_tool kiro localappdata" 'K' "$(py "m.find_tool('kiro-cli', {'USERPROFILE': r'C:\\u', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: 'K' if path == r'C:\\L\\Programs\\Kiro-Cli' else None)")"
+
 suite_summary
