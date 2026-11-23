@@ -15,10 +15,10 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
+import urllib.erro
 import urllib.request
 from rich.text import Text
-from rich.color import Color
+from rich.color import Colo
 from datetime import datetime
 from pathlib import Path
 
@@ -461,8 +461,9 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
     permission prompts (no bypass flag anywhere). Children go through mx._run so Ctrl+C
     never kills them."""
     mx.offer_git()
+    mx.offer_gh()
     if tool == DEFAULT_TOOL:
-        if not mx.find_claude(os.environ["USERPROFILE"]):  # offer the install; run_windows finds it after
+        if not mx.find_claude(os.environ["USERPROFILE"]):  # offer the install; run_windows finds it afte
             if not mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path):
                 input("Press Enter to go back. ")
                 return
@@ -1037,7 +1038,7 @@ def _strip_legacy_keychain_block(text: str) -> str:
 
 def _strip_orphan_fi_before_keychain(text: str) -> str:
     """Remove a stray `fi` line that sits right before a Maude keychain
-    block. This is the artefact left behind by the older buggy stripper
+    block. This is the artefact left behind by the older buggy strippe
     that didn't count nesting; we clean it up on the way through."""
     lines = text.splitlines(keepends=True)
     out: list[str] = []
@@ -1154,8 +1155,8 @@ def parse_creds_text(text: str) -> dict[str, str]:
     """Parse pasted shell-style exports into a {KEY: VALUE} dict.
 
     Accepts:
-        export FOO=bar
-        FOO=bar
+        export FOO=ba
+        FOO=ba
         FOO="bar baz"
         FOO='bar baz'
     Comments and blank lines are ignored. Only KEYs starting with one
@@ -1244,7 +1245,7 @@ def merge_gemini_env(values: dict[str, str], remove=None) -> None:
     for k in (remove or ()):
         existing.pop(k, None)
     GEMINI_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # dotenv format — plain KEY="VALUE", no `export` (the CLI's loader
+    # dotenv format — plain KEY="VALUE", no `export` (the CLI's loade
     # does not strip it).
     lines = [f'{k}="{v}"' for k, v in existing.items()]
     GEMINI_ENV_PATH.write_text("\n".join(lines) + "\n")
@@ -1281,7 +1282,7 @@ def finalize_gemini_vals(gemini_vals: dict[str, str]):
 
     A bare API key must therefore go to AI Studio, never Vertex. We switch to
     Vertex only on real intent: the flag is in *this* paste, or a service
-    account / ADC file is configured. Otherwise an API key (pasted as either
+    account / ADC file is configured. Otherwise an API key (pasted as eithe
     GEMINI_API_KEY or GOOGLE_API_KEY) is routed to AI Studio — and any stale
     GOOGLE_GENAI_USE_VERTEXAI from a previous paste is turned back off so the
     user isn't trapped on the Vertex path.
@@ -1468,7 +1469,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             try:
                 subprocess.run([str(claude_bin), "/login"])
             except KeyboardInterrupt:
-                pass  # user Ctrl+C'd out of claude — not an error
+                pass  # user Ctrl+C'd out of claude — not an erro
             except OSError as err:
                 print(f"Could not run claude: {err}")
         if have_claude_login():
@@ -2508,7 +2509,7 @@ class PushToGithubScreen(ModalScreen[bool]):
         cwd = str(self.project_path)
         # Guard against the SSH-key passphrase trap. If the user has an
         # encrypted SSH key but no agent has it loaded, both
-        # `gh repo create --push` and `git push` will block forever
+        # `gh repo create --push` and `git push` will block foreve
         # waiting for a passphrase prompt that no one can type. We
         # short-circuit with a clear error so the caller can pop the
         # unlock modal instead.
@@ -3684,7 +3685,7 @@ class MaudeApp(App):
         # Send kanna's output to a temp log so we can surface errors if it
         # dies on startup. start_new_session detaches kanna from the TUI's
         # controlling terminal: kanna 0.88 touches the tty, and as a background
-        # process group of that tty the kernel stopped it (state T, never
+        # process group of that tty the kernel stopped it (state T, neve
         # listening). Its pgid equals its pid, so stop_kanna still kills the tree.
         fd, log_path = tempfile.mkstemp(prefix="maude-kanna-", suffix=".log")
         self._kanna_log = Path(log_path)
@@ -3937,7 +3938,7 @@ class MaudeApp(App):
         if not confirmed:
             return
         path = self._selected_project()
-        if path and self._is_outside(path):  # registry entry only: never touch the folder
+        if path and self._is_outside(path):  # registry entry only: never touch the folde
             try:
                 mx.remove_project(REG_ORIG.get(str(path), str(path)))
             except OSError as e:
@@ -3971,7 +3972,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--github":
         sys.exit(run_wizard_only())
     if len(sys.argv) > 1 and sys.argv[1] == "--fix-bashrc":
-        # Used by `maude update` to repair the orphan-fi syntax error
+        # Used by `maude update` to repair the orphan-fi syntax erro
         # left in ~/.bashrc by an older buggy keychain stripper.
         changed, msg = fix_bashrc_orphan_fi()
         print(msg)

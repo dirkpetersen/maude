@@ -144,6 +144,26 @@ assert_eq "git offer: accepted admin has no scope" "0" "$(git_run y 1 W | grep -
 assert_eq "git offer: no winget, link only" "0" "$(git_run y 0 '' | grep -c '^RUN')"
 assert_contains "git offer: link text" "Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional)." "$(git_run y 0 '')"
 
+# GitHub CLI offer
+GH="winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements"
+assert_eq "gh plan: have gh" "None" "$(py "m.gh_plan(True, True)")"
+assert_eq "gh plan: no winget" "link" "$(py "m.gh_plan(False, False)")"
+assert_eq "gh plan: winget argv, no scope" "$GH" "$(py "' '.join(m.gh_plan(False, True))")"
+gh_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+ans, wg = sys.argv[2], sys.argv[3] or None
+log = []
+def go():
+    m.offer_gh({}, lambda e: None, lambda: wg, lambda q: ans, lambda c: log.append("RUN " + " ".join(c)) or 0, log.append)
+go(); go()
+print("\n".join(log))
+PY
+}
+assert_eq "gh offer: declined runs nothing" "0" "$(gh_run n W | grep -c '^RUN')"
+assert_eq "gh offer: accepted runs once" "1" "$(gh_run y W | grep -c '^RUN W install --id GitHub.cli .*source-agreements$')"
+assert_contains "gh offer: admin hint" "Windows may ask for admin approval" "$(gh_run n W)"
+assert_contains "gh offer: link text" "GitHub CLI is not installed. Get it from https://cli.github.com (optional)." "$(gh_run y '')"
+
 # find_tool looks in the Kiro per-user folder too
 assert_eq "find_tool kiro localappdata" 'K' "$(py "m.find_tool('kiro-cli', {'USERPROFILE': r'C:\\u', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: 'K' if path == r'C:\\L\\Programs\\Kiro-Cli' else None)")"
 

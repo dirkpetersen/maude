@@ -85,6 +85,7 @@ make test           # Runs tests/run-all-tests.sh (discovers all tests/test-*.sh
 make test-fast      # Run tests, stop on first failure
 make lint           # Runs tests/test-scripts-syntax.sh (bash -n, no execution)
 bash tests/test-path-setup.sh   # Run a single test file
+python tests/win_tui_smoke.py       # Headless check of maude.py Windows mode (needs textual; NOT run by make test)
 ```
 
 ### Writing Tests
@@ -170,6 +171,7 @@ The `light/` directory contains the WSL2 sandbox implementation:
 | `lib/*.sh` | maude user (inside WSL) | Sourced helpers fetched at runtime: `cli-tools.sh` (Kiro CLI + Crush install-if-missing, `link_kiro_skills`), `llm-mode.sh` (credential-mode detection, must be sourced first), `codex.sh`/`gemini.sh`/`grok.sh`/`opencode.sh` (reviewer CLI install + config), `kanna.sh`, `ensure-tools.sh`, `refresh-md.sh`, `update-skills.sh`. Canonical reviewer skills live at repo-root `.claude/skills/{codex,gemini,grok,opencode}/SKILL.md` |
 | `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code (`maude <name>`, `maude list`, `maude delete`, `maude web`, `maude tui`, `maude github`, `maude update`) |
 | `maude.py` | maude user (inside WSL) | Textual TUI — always launched via `maude tui`, downloaded fresh from GitHub daily (stamp: `~/.maude-tui-last-update`). Also runs natively on Windows inside `maude.exe` (guarded by `IS_WIN`; Windows mode, red logo, project list = outside-sandbox projects from `HKCU\Software\Maude\Projects` first, then share projects; third column "Features" = `GitHub`/`No Sandbox`; see `docs/windows-exe.md`) |
+| `maude_exe.py` | Windows (native) | Stdlib-only launcher packed with `maude.py` into `maude.exe` by PyInstaller (`--onefile`, CI: `build-maude-exe.yml`). Copies itself to `%USERPROFILE%\.local\bin`, adds HKCU "Open in Maude" Explorer entries, routes folders inside the share into the sandbox and others to native tools outside it; no arg = TUI in Windows mode. Pure helpers tested by `tests/test-maude-exe.sh`; see `docs/windows-exe.md` |
 
 Key implementation details:
 - **Runtime fetch model**: `maude`, `maude-bootstrap.sh`, and `root-bootstrap.sh` pull `lib/*.sh` (cached into `~/.local/lib/maude/`), `maude.py` (daily), `MAUDE.md` (daily, via `lib/refresh-md.sh`), and `welcome-stub.sh` from `GH_RAW=https://raw.githubusercontent.com/dirkpetersen/maude/main/light` at runtime. `main` is therefore the effective release channel for Maude Light — no tag needed for these files to reach installed sandboxes. `MAUDE_RAW` overrides the base URL (e.g. to test a fork/branch)
@@ -269,3 +271,6 @@ Always prefix appmotel CLI calls with `sudo -u appmotel appmo ...`
 - **build-wsl.yml** -- Builds WSL rootfs tarball on push to main
 - **build-docker.yml** -- Builds and pushes Docker image to GHCR on push to main
 - **release.yml** -- Triggered on version tags (`v*.*.*`); builds WSL + Docker, creates GitHub Release with checksums
+- **build-maude-exe.yml** -- Windows runner; on push to main (paths: `light/maude_exe.py`, `light/maude.py`, `tests/win_tui_smoke.py`, the workflow), manual dispatch, or `workflow_call` from release.yml: runs `tests/win_tui_smoke.py`, builds `maude.exe` with PyInstaller (version = tag, else `dev`), smoke-tests `--version`/`--selftest`, uploads it as a workflow artifact (no release asset published by this workflow itself)
+- **docs.yml** -- Builds the docs site from `docs/` with Zensical (`zensical.toml`, nav defined there) and deploys to GitHub Pages on push to main (paths: `docs/**`, `zensical.toml`, the workflow) or manual dispatch
+- New pages under `docs/` must be added to the `nav` in `zensical.toml`.

@@ -58,6 +58,16 @@ On the first Open Project in a Maude run, before the tool check, Maude looks for
 
 If winget is missing or blocked by policy (App Installer disabled), Maude does not offer an install. It prints `Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the Git `cmd` folder to its own PATH (the installer sets the saved PATH).
 
+### GitHub CLI (optional, once per Maude run)
+
+On the first Open Project in a Maude run, right after the Git offer, Maude looks for `gh` (PATH, then `%ProgramFiles%\GitHub CLI`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install GitHub CLI now? [Y/n]`. It runs `winget` directly:
+
+`winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements`
+
+There is no `--scope` option: the package is a machine MSI, so Windows may ask for admin approval (UAC prompt). The prompt text says so.
+
+If winget is missing or blocked by policy, Maude does not offer an install. It prints `GitHub CLI is not installed. Get it from https://cli.github.com (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the `GitHub CLI` folder to its own PATH (the installer sets the saved PATH).
+
 ## Outside-sandbox projects
 
 The Windows TUI shows two groups of projects. The red logo with the caption "running outside the sandbox" tells you that you are in this mode.
@@ -140,21 +150,21 @@ The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software
 
 ## Notes from field tests
 
-- A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. The cause is not confirmed. If it happens again, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
+- A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. Cause found on the developer PC: `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry), and that folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. Fixed in v0.3.3. If it happens again after v0.3.3, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
 - The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). Maude only reports "The Kiro CLI install failed." and goes back to the menu.
 - The docs site needs Pages source "GitHub Actions" and the v4 `upload-pages-artifact` and `deploy-pages` actions. The v5 pair did not upload the artifact, and Python 3.15 is not used.
 - `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
 
 
-## Status and next steps (v0.3.2)
+## Status and next steps (v0.3.3)
 
-Released: v0.3.2 (exe, WSL tarball). The Kiro lookup fix (`9babfcf`) is on `main` only, so it needs a new tag (`make tag VERSION=v0.3.3`).
+Released: v0.3.3 (exe, WSL tarball). It includes the Kiro lookup fix (`9babfcf`) and the GitHub CLI offer.
 
 Open items:
 
-1. Test on Windows: run `maude.exe` from Downloads. Check the copy to `%USERPROFILE%\.local\bin`, the user PATH entry (`HKCU\Environment`, key `Path`, type kept), the new-window `maude` command, and the two printed messages.
-2. Find out why Kiro CLI was offered although `kiro-cli` was on PATH (see the notes above).
-3. Offer the GitHub CLI (`winget install --id GitHub.cli -e --source winget`) next to the Git for Windows offer (`git_plan` in `light/maude_exe.py`).
+1. Partly checked on the developer PC: `%USERPROFILE%\.local\bin\maude.exe` exists, the user PATH has the entry and `HKCU\Environment\Path` kept its type REG_EXPAND_SZ. Still open: run `maude.exe` from Downloads on a clean PC, check the printed messages and the new-window `maude` command.
+2. Kiro CLI offered although installed: on the developer PC `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry). That folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. Likely fixed in v0.3.3. Kiro CLI and the Kiro IDE were then uninstalled on the developer PC (2026-11-22). Next check: Open Project with Kiro CLI must offer the install, and after installing it must be found without restarting Maude.
+3. GitHub CLI offer (`gh_plan`, `find_gh`, `offer_gh` in `light/maude_exe.py`): done in v0.3.3. Next: check on a real PC that the UAC prompt appears and `gh` is found right after the install.
 4. The Kiro MSI exit code 1603: find the cause (try `msiexec /i <msi> /l*v kiro.log`).
 
 How to work on it:

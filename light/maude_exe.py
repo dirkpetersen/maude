@@ -294,25 +294,20 @@ def is_admin() -> bool:
         return False
 
 
-def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin,
-              ask=lambda q: input(q), run=None, say=print) -> None:
-    """Offer Git for Windows via winget, once per process. Never blocks opening a project."""
-    global _git_done
-    if _git_done:
-        return
-    _git_done = True
+def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, run, say) -> None:
+    """Shared body of offer_git/offer_gh: nothing if found, link text without winget, else show
+    the command, ask Y/n, run winget directly, then put the install dir on this process's PATH."""
     if find(env):
         return
     w = winget()
-    plan = git_plan(False, w is not None, admin() if w else False)
+    plan = plan_for(w is not None)
     if plan == "link":
-        say(f"Git for Windows is not installed. Get it from {GIT_LINK} (optional).")
+        say(f"{label} is not installed. Get it from {link} (optional).")
         return
     plan[0] = w
-    say("Git for Windows is not installed (optional; the AI tools work better with it).\n"
-        f"Install command: {subprocess.list2cmdline(plan)}")
+    say(f"{label} is not installed ({intro}).\nInstall command: {subprocess.list2cmdline(plan)}")
     try:
-        yes = ask("Install Git for Windows now? [Y/n] ").strip().lower() in ("", "y", "yes")
+        yes = ask(f"Install {label} now? [Y/n] ").strip().lower() in ("", "y", "yes")
     except (EOFError, KeyboardInterrupt):
         yes = False
     if not yes:
@@ -322,11 +317,57 @@ def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin
     except OSError:
         rc = 1
     if rc:
-        say("The Git for Windows install failed.")
+        say(f"The {label} install failed.")
         return
-    d = next((d for d in git_dirs(env) if os.path.isdir(d)), None)  # the installer sets the persisted PATH itself
+    d = next((d for d in dirs(env) if os.path.isdir(d)), None)  # the installer sets the persisted PATH itself
     if d:
         env["PATH"] = path_prepend(env.get("PATH", ""), [d])
+
+
+def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin,
+              ask=lambda q: input(q), run=None, say=print) -> None:
+    """Offer Git for Windows via winget, once per process. Never blocks opening a project."""
+    global _git_done
+    if _git_done:
+        return
+    _git_done = True
+    _offer_winget("Git for Windows", GIT_LINK, "optional; the AI tools work better with it", find, winget,
+                  lambda have_w: git_plan(False, have_w, admin() if have_w else False),
+                  git_dirs, env, ask, run, say)
+
+
+GH_LINK = "https://cli.github.com"
+_gh_done = False  # offer the GitHub CLI once per Maude process
+
+
+def gh_plan(have_gh: bool, have_winget: bool):
+    """None = nothing to do, "link" = cannot install here, else the winget argument list.
+    No --scope: the GitHub.cli package is a machine MSI, winget raises the UAC prompt itself."""
+    if have_gh:
+        return None
+    if not have_winget:
+        return "link"
+    return ["winget", "install", "--id", "GitHub.cli", "-e", "--source", "winget",
+            "--accept-package-agreements", "--accept-source-agreements"]
+
+
+def gh_dirs(env=os.environ) -> list[str]:
+    return [str(W(env["ProgramFiles"]) / "GitHub CLI")] if env.get("ProgramFiles") else []
+
+
+def find_gh(env=os.environ, which=shutil.which) -> str | None:
+    return which("gh") or next((r for d in gh_dirs(env) if (r := which("gh", path=d))), None)
+
+
+def offer_gh(env=os.environ, find=find_gh, winget=winget_works,
+             ask=lambda q: input(q), run=None, say=print) -> None:
+    """Offer the GitHub CLI via winget, once per process. Never blocks opening a project."""
+    global _gh_done
+    if _gh_done:
+        return
+    _gh_done = True
+    _offer_winget("GitHub CLI", GH_LINK, "optional; for GitHub from the AI tools. Windows may ask for admin approval",
+                  find, winget, lambda have_w: gh_plan(False, have_w), gh_dirs, env, ask, run, say)
 
 
 def windows_model(userprofile: str) -> str:
@@ -338,7 +379,7 @@ def windows_model(userprofile: str) -> str:
     return m if valid_model(m) else "opus"
 
 
-REG_PROJECTS = r"Software\Maude\Projects"  # HKCU; value name = project_key(folder), data = folder
+REG_PROJECTS = r"Software\Maude\Projects"  # HKCU; value name = project_key(folder), data = folde
 
 
 def project_key(folder: str) -> str:
@@ -369,7 +410,7 @@ def remove_project(folder: str) -> None:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PROJECTS, 0, winreg.KEY_SET_VALUE) as h:
             winreg.DeleteValue(h, project_key(folder))
     except FileNotFoundError:
-        pass  # other OSError (e.g. access denied) goes to the caller
+        pass  # other OSError (e.g. access denied) goes to the calle
 
 
 def content_mtime(folder: str) -> float:
@@ -486,7 +527,7 @@ def self_install(env=os.environ) -> tuple[str, bool, bool]:
             with contextlib.suppress(OSError):
                 os.remove(tmp)
             if not os.path.exists(target):
-                exe = cur
+                exe = cu
     for k in KEYS:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, k + r"\command") as h:

@@ -103,12 +103,13 @@ try:
 
     # Open project: native claude, continue first, no bypass flag, cwd = project.
     mx.offer_git = lambda: None  # never look for git or winget on the real system
+    mx.offer_gh = lambda: None
     calls = []
     mx.find_claude = lambda up: "C:/c.exe"
     mx._run = lambda cmd, **kw: calls.append((cmd, kw.get("cwd"))) or 0
     cwd0 = os.getcwd()
     maude.open_project(proj, "sonnet", fresh=False)
-    assert os.getcwd() == cwd0  # TUI must not hold the project folder
+    assert os.getcwd() == cwd0  # TUI must not hold the project folde
     maude.open_project(proj, "sonnet", fresh=True)
     assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
