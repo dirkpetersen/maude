@@ -27,7 +27,7 @@ In this mode, `maude.exe` runs on Windows. The AI tool runs on your Windows acco
     maude
     ```
 
-The Maude TUI opens. Select a project and press **Open Project**. If the AI tool is not installed (Claude Code, Kiro CLI, OpenCode or Crush), Maude offers to install it on first open. It also offers Git for Windows through winget (optional, per-user when you are not an administrator).
+The Maude TUI opens. Select a project and press **Open Project**. If the AI tool is not installed (Claude Code, Kiro CLI, OpenCode or Crush), Maude offers to install it on first open. It also offers Git for Windows (winget) and the GitHub CLI (official zip), both optional, per user, with no admin prompt.
 
 For all details, see [maude.exe on Windows](windows-exe.md).
 

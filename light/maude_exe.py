@@ -8,11 +8,16 @@ current console. See docs/windows-exe.md.
 """
 import ntpath
 import contextlib
+import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
+import zipfile
 from pathlib import PureWindowsPath as W
 
 VERSION = "dev"  # CI replaces this line with the release tag
@@ -169,13 +174,111 @@ def windows_cmd(claude: str, model: str, cont: bool) -> list[str]:
 
 
 BUN_CMD = "irm bun.sh/install.ps1 | iex"
-# Tool label -> (binary, PowerShell install command). OpenCode and Crush come from bun.
+KIRO_BASE = "https://prod.download.cli.kiro.dev/stable"
+KIRO_MANIFEST = KIRO_BASE + "/latest/manifest.json"
+# Tool label -> (binary, install command shown to the user). All are per-user installs without
+# admin rights or installer windows. OpenCode and Crush come from bun (--trust lets their
+# postinstall scripts run). Kiro CLI is not a PowerShell command: install_kiro() does it in Python
+# (see NATIVE_INSTALL), because the vendor's install.ps1 runs a plain msiexec that can go per-machine.
 TOOL_INSTALL = {
     "Claude Code": ("claude", "irm https://claude.ai/install.ps1 | iex"),
-    "Kiro CLI": ("kiro-cli", "irm 'https://cli.kiro.dev/install.ps1' | iex"),
-    "OpenCode": ("opencode", "bun install -g --trust @opencode/cli"),  # --trust with -g: unverified
+    "Kiro CLI": ("kiro-cli", "download the Kiro CLI MSI from prod.download.cli.kiro.dev, check its "
+                             "SHA-256 and install it for this user (msiexec /qn, no admin)"),
+    "OpenCode": ("opencode", "bun install -g --trust opencode-ai"),
     "Crush": ("crush", "bun install -g --trust @charmland/crush"),
 }
+
+
+def ps_cmd(cmd: str) -> list[str]:
+    """argv that runs a fixed PowerShell command; -NonInteractive makes a stray prompt fail, not hang."""
+    return ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd]
+
+
+def _http_get(url: str, urlopen=urllib.request.urlopen, limit: int = 8 << 20, timeout: int = 60) -> bytes:
+    """Small HTTPS GET (manifests, JSON, checksum files). ValueError when larger than limit."""
+    req = urllib.request.Request(url, headers={"User-Agent": "maude.exe"})
+    with urlopen(req, timeout=timeout) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{url} is larger than {limit} bytes")
+    return data
+
+
+def download_verified(url: str, dest: str, sha256: str, urlopen=urllib.request.urlopen, timeout: int = 60) -> None:
+    """Stream url to dest and check its SHA-256. On a mismatch dest is removed and ValueError raised."""
+    h = hashlib.sha256()
+    req = urllib.request.Request(url, headers={"User-Agent": "maude.exe"})
+    with urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
+        while chunk := r.read(1 << 20):
+            h.update(chunk)
+            f.write(chunk)
+    if h.hexdigest() != sha256.lower():
+        with contextlib.suppress(OSError):
+            os.remove(dest)
+        raise ValueError(f"checksum mismatch for {url} (expected {sha256.lower()}, got {h.hexdigest()})")
+
+
+_SHA_RE = re.compile(r"[0-9a-fA-F]{64}")
+_KIRO_PATH_RE = re.compile(r"(?!\.)[0-9A-Za-z._-]+/(?!\.)[0-9A-Za-z._-]+\.msi")
+
+
+def kiro_package(manifest) -> tuple[str, str] | None:
+    """(MSI url, sha256) of the Windows x86_64 installer from the Kiro manifest, else None.
+    The url is KIRO_BASE plus the manifest's relative path, which must be a plain <ver>/<file>.msi."""
+    pkgs = manifest.get("packages") if isinstance(manifest, dict) else None
+    for p in pkgs if isinstance(pkgs, list) else []:
+        if (isinstance(p, dict) and p.get("os") == "windows" and p.get("architecture") == "x86_64"
+                and p.get("kind") == "msi"):
+            dl, sha = p.get("download"), p.get("sha256")
+            if (isinstance(dl, str) and _KIRO_PATH_RE.fullmatch(dl)
+                    and isinstance(sha, str) and _SHA_RE.fullmatch(sha)):
+                return f"{KIRO_BASE}/{dl}", sha.lower()
+    return None
+
+
+def msiexec_cmd(msi: str, log: str) -> list[str]:
+    """Silent per-user MSI install (ALLUSERS=2 + MSIINSTALLPERUSER=1: per-user even for an admin) with a verbose log."""
+    return ["msiexec", "/i", msi, "/qn", "/norestart", "/l*v", log, "ALLUSERS=2", "MSIINSTALLPERUSER=1"]
+
+
+def install_kiro(say=print, run=None, urlopen=urllib.request.urlopen, tmp_root=None, log_dir=None) -> int:
+    """Install Kiro CLI per user: fixed-URL manifest, SHA-256 checked MSI, silent msiexec (no UI, no UAC).
+    Returns 0 on success; on failure prints why (msiexec code + verbose log path) and returns non-zero."""
+    run = run or _run
+    tmp = None
+    try:
+        try:
+            pkg = kiro_package(json.loads(_http_get(KIRO_MANIFEST, urlopen)))
+        except Exception as err:  # URLError, HTTPException, bad JSON, ...: never crash the TUI
+            say(f"Could not read the Kiro CLI manifest: {err}")
+            return 1
+        if not pkg:
+            say("The Kiro CLI manifest has no Windows x86_64 installer.")
+            return 1
+        url, sha = pkg
+        log = os.path.join(log_dir or tempfile.gettempdir(), "maude-kiro-install.log")
+        tmp = tempfile.mkdtemp(prefix="maude-kiro-", dir=tmp_root)
+        msi = os.path.join(tmp, "kiro-cli.msi")
+        say("Downloading Kiro CLI (about 350 MB)...")
+        download_verified(url, msi, sha, urlopen)
+        say("Installing Kiro CLI for this user...")
+        rc = run(msiexec_cmd(msi, log))
+    except KeyboardInterrupt:
+        say("Kiro CLI install cancelled.")
+        return 1
+    except Exception as err:
+        say(f"The Kiro CLI download or install failed: {err}")
+        return 1
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    if rc in (0, 3010):  # 3010 = success, restart pending (not needed for a per-user install)
+        return 0
+    say(f"msiexec exited with code {rc}. Verbose log: {log}")
+    return rc or 1
+
+
+NATIVE_INSTALL = {"Kiro CLI": install_kiro}  # tool label -> Python installer taking say=, returning an exit code
 
 
 def user_dirs(env) -> list[str]:
@@ -225,13 +328,16 @@ def refresh_path(env=os.environ) -> None:
     env["PATH"] = path_prepend(env.get("PATH", ""), [d for d in tool_dirs(env) if os.path.isdir(d)])
 
 
-def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, refresh=lambda: None) -> str | None:
+def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, refresh=lambda: None,
+                native=None) -> str | None:
     """Return the tool's path, offering to install it (and bun) when missing. None = not available
-    (declined, install failed or still not found); the reason has been printed."""
+    (declined, install failed or still not found); the reason has been printed.
+    native maps a label to a Python installer (default NATIVE_INSTALL); the rest run via PowerShell."""
     exe = find(TOOL_INSTALL[tool][0])
     if exe:
         return exe
     run = run or _run
+    native = NATIVE_INSTALL if native is None else native
     for label, cmd in install_plan(tool, False, find("bun") is not None):
         say(f"{label} is not installed on Windows.\nInstall command: {cmd}")
         try:
@@ -240,7 +346,14 @@ def ensure_tool(tool: str, find, ask=lambda q: input(q), run=None, say=print, re
             yes = False
         if not yes:
             return None
-        if run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]):
+        try:
+            rc = native[label](say=say) if label in native else run(ps_cmd(cmd))
+        except KeyboardInterrupt:
+            say(f"{label} install cancelled.")
+            rc = 1
+        except Exception:  # backstop: a failed install never takes the TUI down
+            rc = 1
+        if rc:
             say(f"The {label} install failed.")
             return None
         refresh()  # bun must be on PATH for the next step
@@ -254,16 +367,16 @@ GIT_LINK = "https://git-scm.com/download/win"
 _git_done = False  # offer Git once per Maude process
 
 
-def git_plan(have_git: bool, have_winget: bool, is_admin: bool):
-    """None = nothing to do, "link" = cannot install here (print the download link),
-    else the winget argument list (fixed strings; per-user install when not admin)."""
+def git_plan(have_git: bool, have_winget: bool):
+    """None = nothing to do, "link" = cannot install here (print the download link), else the winget
+    argument list (fixed strings). Always --scope user (no UAC, even for an admin) and no installer UI."""
     if have_git:
         return None
     if not have_winget:
         return "link"
-    args = ["winget", "install", "--id", "Git.Git", "-e", "--source", "winget",
-            "--accept-package-agreements", "--accept-source-agreements"]
-    return args if is_admin else args + ["--scope", "user"]
+    return ["winget", "install", "--id", "Git.Git", "-e", "--source", "winget",
+            "--accept-package-agreements", "--accept-source-agreements",
+            "--scope", "user", "--silent", "--disable-interactivity"]
 
 
 def git_dirs(env=os.environ) -> list[str]:
@@ -286,14 +399,6 @@ def winget_works(which=shutil.which, run=subprocess.run) -> str | None:
     return None
 
 
-def is_admin() -> bool:
-    try:
-        import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
-
-
 def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, run, say) -> None:
     """Shared body of offer_git/offer_gh: nothing if found, link text without winget, else show
     the command, ask Y/n, run winget directly, then put the install dir on this process's PATH."""
@@ -314,6 +419,9 @@ def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, ru
         return
     try:
         rc = (run or _run)(plan)
+        if rc and "--disable-interactivity" in plan:  # winget older than 1.4 rejects that flag: once more without
+            say("Retrying without --disable-interactivity (older winget)...")
+            rc = (run or _run)([a for a in plan if a != "--disable-interactivity"])
     except OSError:
         rc = 1
     if rc:
@@ -324,7 +432,7 @@ def _offer_winget(label, link, intro, find, winget, plan_for, dirs, env, ask, ru
         env["PATH"] = path_prepend(env.get("PATH", ""), [d])
 
 
-def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin,
+def offer_git(env=os.environ, find=find_git, winget=winget_works,
               ask=lambda q: input(q), run=None, say=print) -> None:
     """Offer Git for Windows via winget, once per process. Never blocks opening a project."""
     global _git_done
@@ -332,42 +440,191 @@ def offer_git(env=os.environ, find=find_git, winget=winget_works, admin=is_admin
         return
     _git_done = True
     _offer_winget("Git for Windows", GIT_LINK, "optional; the AI tools work better with it", find, winget,
-                  lambda have_w: git_plan(False, have_w, admin() if have_w else False),
-                  git_dirs, env, ask, run, say)
+                  lambda have_w: git_plan(False, have_w), git_dirs, env, ask, run, say)
 
 
 GH_LINK = "https://cli.github.com"
+GH_API = "https://api.github.com/repos/cli/cli/releases/latest"
+GH_DL = "https://github.com/cli/cli/releases/download/"
 _gh_done = False  # offer the GitHub CLI once per Maude process
 
 
-def gh_plan(have_gh: bool, have_winget: bool):
-    """None = nothing to do, "link" = cannot install here, else the winget argument list.
-    No --scope: the GitHub.cli package is a machine MSI, winget raises the UAC prompt itself."""
+def gh_dest(env=os.environ) -> str | None:
+    """Per-user install folder of the GitHub CLI release zip (bin\\gh.exe inside)."""
+    return str(W(env["LOCALAPPDATA"]) / "Programs" / "GitHub CLI") if env.get("LOCALAPPDATA") else None
+
+
+def gh_arch(env=os.environ) -> str | None:
+    """Release asset arch for this Windows ("amd64"/"arm64"), None if there is no such zip."""
+    a = (env.get("PROCESSOR_ARCHITEW6432") or env.get("PROCESSOR_ARCHITECTURE") or "").upper()
+    return {"AMD64": "amd64", "ARM64": "arm64"}.get(a)
+
+
+def gh_plan(have_gh: bool, arch: str | None, dest: str | None):
+    """None = nothing to do, "link" = cannot install here, else the one-line description of the install."""
     if have_gh:
         return None
-    if not have_winget:
+    if not arch or not dest:
         return "link"
-    return ["winget", "install", "--id", "GitHub.cli", "-e", "--source", "winget",
-            "--accept-package-agreements", "--accept-source-agreements"]
+    return (f"download the latest gh_<version>_windows_{arch}.zip from github.com/cli/cli, check its "
+            f"SHA-256 and unpack it to {dest} (this user only, no admin)")
 
 
 def gh_dirs(env=os.environ) -> list[str]:
-    return [str(W(env["ProgramFiles"]) / "GitHub CLI")] if env.get("ProgramFiles") else []
+    """Where gh.exe may be: our per-user install (bin; the folder itself too, for other per-user
+    layouts) and an existing machine install."""
+    d = gh_dest(env)
+    return ([str(W(d) / "bin"), d] if d else []) + (
+        [str(W(env["ProgramFiles"]) / "GitHub CLI")] if env.get("ProgramFiles") else [])
 
 
 def find_gh(env=os.environ, which=shutil.which) -> str | None:
     return which("gh") or next((r for d in gh_dirs(env) if (r := which("gh", path=d))), None)
 
 
-def offer_gh(env=os.environ, find=find_gh, winget=winget_works,
-             ask=lambda q: input(q), run=None, say=print) -> None:
-    """Offer the GitHub CLI via winget, once per process. Never blocks opening a project."""
+def gh_release(rel, arch: str):
+    """(tag, zip name, checksums name) for the Windows zip of a releases/latest JSON, else None.
+    The tag must look like vX.Y.Z and both assets must be listed (names only: URLs are rebuilt from GH_DL)."""
+    tag = rel.get("tag_name") if isinstance(rel, dict) else None
+    if not isinstance(tag, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        return None
+    zname, sname = f"gh_{tag[1:]}_windows_{arch}.zip", f"gh_{tag[1:]}_checksums.txt"
+    assets = rel.get("assets")
+    names = {a["name"] for a in (assets if isinstance(assets, list) else [])
+             if isinstance(a, dict) and isinstance(a.get("name"), str)}
+    return (tag, zname, sname) if zname in names and sname in names else None
+
+
+def checksum_for(text: str, name: str) -> str | None:
+    """sha256 of name from a sha256sum-style file ("<hex>  <name>" lines), else None."""
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) == 2 and f[1].lstrip("*") == name and _SHA_RE.fullmatch(f[0]):
+            return f[0].lower()
+    return None
+
+
+def unsafe_zip_names(names) -> list[str]:
+    """Zip member names that could escape the target folder: absolute, drive/stream (":"), or with a ".." part."""
+    return [n for n in names if n.startswith(("/", "\\")) or ":" in n or ".." in W(n).parts]
+
+
+def gh_dir_replaceable(dest: str) -> bool:
+    """True if dest may be swapped out: missing, or holding nothing but what a gh zip unpacks to
+    (LICENSE, bin, bin/gh.exe), i.e. an old install or a partial one. Anything else is user data."""
+    if not os.path.lexists(dest):
+        return True
+    try:
+        if not os.path.isdir(dest) or os.path.islink(dest):
+            return False
+        top = set(os.listdir(dest))
+        if not top <= {"LICENSE", "bin"}:
+            return False
+        b = os.path.join(dest, "bin")
+        return "bin" not in top or (os.path.isdir(b) and not os.path.islink(b) and set(os.listdir(b)) <= {"gh.exe"})
+    except OSError:
+        return False
+
+
+def install_gh(env=os.environ, say=print, urlopen=urllib.request.urlopen, tmp_root=None, dest=None) -> int:
+    """Install the GitHub CLI for this user from the official release zip (SHA-256 checked, no admin).
+    0 = installed to gh_dest(env); otherwise the reason has been printed."""
+    arch, dest = gh_arch(env), dest or gh_dest(env)
+    if not arch or not dest:
+        say("No GitHub CLI release zip for this Windows.")
+        return 1
+    tmp = stage = aside = None
+    try:
+        if not gh_dir_replaceable(dest):
+            say(f"{dest} already exists and holds other files; not touching it. Move it away and try again.")
+            return 1
+        tmp = tempfile.mkdtemp(prefix="maude-gh-", dir=tmp_root)
+        rel = gh_release(json.loads(_http_get(GH_API, urlopen)), arch)
+        if not rel:
+            say("The latest GitHub CLI release has no Windows zip for this PC.")
+            return 1
+        tag, zname, sname = rel
+        sha = checksum_for(_http_get(f"{GH_DL}{tag}/{sname}", urlopen).decode("utf-8", "replace"), zname)
+        if not sha:
+            say(f"No SHA-256 for {zname} in {sname}.")
+            return 1
+        say(f"Downloading GitHub CLI {tag}...")
+        zpath = os.path.join(tmp, zname)
+        download_verified(f"{GH_DL}{tag}/{zname}", zpath, sha, urlopen)
+        parent = os.path.dirname(dest)
+        os.makedirs(parent, exist_ok=True)
+        stage = tempfile.mkdtemp(prefix=".gh-new-", dir=parent)  # same drive as dest: the move is a rename
+        with zipfile.ZipFile(zpath) as zf:
+            members = zf.infolist()
+            bad = unsafe_zip_names(m.filename for m in members) + [
+                m.filename for m in members if (m.external_attr >> 16) & 0o170000 == 0o120000]
+            if bad or "bin/gh.exe" not in {m.filename for m in members}:
+                say(f"The GitHub CLI zip looks wrong ({bad[0] if bad else 'no bin/gh.exe'}); not installing it.")
+                return 1
+            zf.extractall(stage)
+        if os.path.lexists(dest):  # an old or partial gh folder (re-checked): move it aside, swap, delete it
+            if not gh_dir_replaceable(dest):
+                say(f"{dest} changed while downloading; not touching it.")
+                return 1
+            aside = f"{dest}.old-{os.getpid()}-{os.urandom(3).hex()}"
+            os.replace(dest, aside)
+        try:
+            os.replace(stage, dest)
+        except BaseException:
+            if aside:
+                os.replace(aside, dest)  # put the old folder back
+                aside = None
+            raise
+        if aside:
+            shutil.rmtree(aside, ignore_errors=True)
+        return 0
+    except KeyboardInterrupt:
+        say("GitHub CLI install cancelled.")
+        return 1
+    except Exception as err:  # URLError, HTTPException, BadZipFile, bad JSON, ...: never crash the TUI
+        say(f"The GitHub CLI download or install failed: {err}")
+        return 1
+    finally:
+        for d in (tmp, stage):
+            if d:
+                shutil.rmtree(d, ignore_errors=True)  # stage is gone already after a successful move
+
+
+def offer_gh(env=os.environ, find=find_gh, install=install_gh, add_path=lambda d: ensure_user_path(d),
+             ask=lambda q: input(q), say=print) -> None:
+    """Offer the GitHub CLI (per-user zip install, no winget, no admin), once per process.
+    Never blocks opening a project."""
     global _gh_done
     if _gh_done:
         return
     _gh_done = True
-    _offer_winget("GitHub CLI", GH_LINK, "optional; for GitHub from the AI tools. Windows may ask for admin approval",
-                  find, winget, lambda have_w: gh_plan(False, have_w), gh_dirs, env, ask, run, say)
+    if find(env):
+        return
+    plan = gh_plan(False, gh_arch(env), gh_dest(env))
+    if plan == "link":
+        say(f"GitHub CLI is not installed. Get it from {GH_LINK} (optional).")
+        return
+    say(f"GitHub CLI is not installed (optional; for GitHub from the AI tools).\nInstall plan: {plan}")
+    try:
+        yes = ask("Install GitHub CLI now? [Y/n] ").strip().lower() in ("", "y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        yes = False
+    if not yes:
+        return
+    try:
+        rc = install(env, say)
+    except KeyboardInterrupt:
+        say("GitHub CLI install cancelled.")
+        return
+    except Exception as err:  # backstop: an offer never takes the TUI down
+        say(f"The GitHub CLI install failed: {err}")
+        return
+    if rc:
+        say("The GitHub CLI install failed.")
+        return
+    d = str(W(gh_dest(env)) / "bin")
+    add_path(d)  # persisted for new shells (HKCU PATH)
+    env["PATH"] = path_prepend(env.get("PATH", ""), [d])
 
 
 def windows_model(userprofile: str) -> str:

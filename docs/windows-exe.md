@@ -35,38 +35,40 @@ Goal: start `maude.exe` on a new PC and let it set up what is missing. In order:
 
 1. Start: it copies itself to `%USERPROFILE%\.local\bin`, adds the Explorer menu entry and adds that folder to the user PATH (see "First run").
 2. The TUI starts without WSL. With no WSL, no `Maude` distro or no cached share, it tries `wsl.exe` once (no console input, 15 s limit), then uses the setup folder rule. `Projects` is created if missing.
-3. Open Project with a tool that is not installed: the TUI is suspended and Maude prints what is missing and the exact command, then asks `Install <Tool> now? [Y/n]`. Enter or `y` runs it with `powershell -NoProfile -ExecutionPolicy Bypass -Command "<command>"` in the same console. `n` prints a message and waits for Enter.
+3. Open Project with a tool that is not installed: the TUI is suspended and Maude prints what is missing and the exact command, then asks `Install <Tool> now? [Y/n]`. Enter or `y` runs it unattended in the same console: no installer window, no further prompt and no UAC, always per user. Python installers (Kiro CLI, GitHub CLI) check a SHA-256 for integrity only (corruption, truncation); the hash comes from the same vendor origin, so HTTPS is the trust root, not the hash. Ctrl+C during a Python install prints "cancelled", removes the temp files and returns to the menu; any other error is printed and never crashes the TUI. PowerShell commands run as `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "<command>"` (`-NonInteractive` makes a stray prompt fail instead of hang). The Claude Code and Bun `irm | iex` scripts contain no prompts, but they have not been run under `-NonInteractive` on a real PC yet. `n` prints a message and waits for Enter.
 
 | Tool | Command |
 |---|---|
 | Claude Code | `irm https://claude.ai/install.ps1 \| iex` |
-| Kiro CLI | `irm 'https://cli.kiro.dev/install.ps1' \| iex` (MSI via `msiexec /i <msi> /quiet /norestart`. The script prints `C:\Program Files\Kiro-Cli\`, but a non-admin install goes to `%LOCALAPPDATA%\Kiro-Cli` and the user PATH) |
-| OpenCode | `bun install -g --trust @opencode/cli` |
+| Kiro CLI | Python in `maude.exe` (`install_kiro`), not the vendor script: reads `https://prod.download.cli.kiro.dev/stable/latest/manifest.json`, downloads the Windows x86_64 MSI named there, checks its SHA-256, then runs `msiexec /i <msi> /qn /norestart /l*v %TEMP%\maude-kiro-install.log ALLUSERS=2 MSIINSTALLPERUSER=1`. The install is per user even for an administrator and lands in `%LOCALAPPDATA%\Kiro-Cli` (user PATH). On a non-zero msiexec exit code Maude prints the code and the log path |
+| OpenCode | `bun install -g --trust opencode-ai` (same npm package as the WSL side, `light/lib/opencode.sh`) |
 | Crush | `bun install -g --trust @charmland/crush` |
 | Bun (first, only if OpenCode or Crush is chosen and bun is missing) | `irm bun.sh/install.ps1 \| iex` |
 
 After a successful install Maude adds `%USERPROFILE%\.local\bin` and `%USERPROFILE%\.bun\bin` (when they exist) to the user PATH and to its own PATH, looks the tool up again and starts it. If the install fails or the tool is still not found, Maude prints why and waits for Enter. Other PowerShell windows need a restart to see the new PATH.
 
-`--trust` is a documented `bun add` flag; its effect together with `-g` is not verified.
+`--trust` is a documented `bun add`/`bun install` flag (it lets the packages' postinstall scripts run). Checked with bun 1.4.5: `bun install -g --trust opencode-ai` and `bun install -g --trust @charmland/crush` both install a working `opencode.exe` and `crush.exe` into the global bin folder.
 
 ### Git for Windows (optional, once per Maude run)
 
-On the first Open Project in a Maude run, before the tool check, Maude looks for `git` (PATH, `%ProgramFiles%\Git\cmd`, `%LOCALAPPDATA%\Programs\Git\cmd`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install Git for Windows now? [Y/n]`. It runs `winget` directly (not through PowerShell):
+On the first Open Project in a Maude run, before the tool check, Maude looks for `git` (PATH, `%ProgramFiles%\Git\cmd`, `%LOCALAPPDATA%\Programs\Git\cmd`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install Git for Windows now? [Y/n]`. It runs `winget` directly (not through PowerShell), always per user and without the installer UI, also for members of Administrators (so there is no UAC prompt):
 
-- Elevated window (Run as administrator): `winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements`
-- Normal window (also for members of Administrators): the same command plus `--scope user` (per-user install, no elevation).
+`winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --scope user --silent --disable-interactivity`
+
+`--disable-interactivity` needs winget 1.4 or newer. If the first run fails and the command had that flag, Maude prints a note and runs it once more without it (still `--scope user --silent`).
 
 If winget is missing or blocked by policy (App Installer disabled), Maude does not offer an install. It prints `Git for Windows is not installed. Get it from https://git-scm.com/download/win (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the Git `cmd` folder to its own PATH (the installer sets the saved PATH).
 
 ### GitHub CLI (optional, once per Maude run)
 
-On the first Open Project in a Maude run, right after the Git offer, Maude looks for `gh` (PATH, then `%ProgramFiles%\GitHub CLI`). If it is missing and `winget --version` works, Maude prints the exact command and asks `Install GitHub CLI now? [Y/n]`. It runs `winget` directly:
+On the first Open Project in a Maude run, right after the Git offer, Maude looks for `gh` (PATH, `%LOCALAPPDATA%\Programs\GitHub CLI\bin`, `%LOCALAPPDATA%\Programs\GitHub CLI`, `%ProgramFiles%\GitHub CLI`) and asks `Install GitHub CLI now? [Y/n]`. winget is not used (its GitHub.cli package is a machine-wide MSI that raises UAC). `install_gh` in `light/maude_exe.py`:
 
-`winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements`
+1. Reads the latest tag from `https://api.github.com/repos/cli/cli/releases/latest`.
+2. Downloads `gh_<ver>_windows_amd64.zip` (`arm64` on ARM) and `gh_<ver>_checksums.txt` from `https://github.com/cli/cli/releases/download/<tag>/` into a temp folder and checks the zip's SHA-256. This catches corruption and truncation. It is not proof of origin: the checksum comes from the same release, so HTTPS (the certificate chain) is the trust root.
+3. Refuses a zip that has an absolute path, a drive or stream (`:`), a `..` part, a symbolic link or no `bin/gh.exe`, then unpacks it into a staging folder next to the target and renames that to `%LOCALAPPDATA%\Programs\GitHub CLI` (`bin\gh.exe` inside). An existing target is only replaced when it is empty or holds nothing but `LICENSE` and `bin\gh.exe` (an old or partial install): it is renamed aside first, deleted after the swap and renamed back if the swap fails. A target with any other content is left alone and Maude says so. The temp folders are always removed.
+4. Adds `...\GitHub CLI\bin` to the user PATH (HKCU) and to Maude's own PATH.
 
-There is no `--scope` option: the package is a machine MSI, so Windows may ask for admin approval (UAC prompt). The prompt text says so.
-
-If winget is missing or blocked by policy, Maude does not offer an install. It prints `GitHub CLI is not installed. Get it from https://cli.github.com (optional).` and continues. A "no", a failed install or Ctrl+C never stops the project from opening. After a successful install Maude adds the `GitHub CLI` folder to its own PATH (the installer sets the saved PATH).
+No admin rights, no UAC, no installer window. If this PC has no zip (not AMD64 or ARM64) Maude does not offer an install and prints `GitHub CLI is not installed. Get it from https://cli.github.com (optional).` A "no", a failed install or Ctrl+C never stops the project from opening. Limits: the GitHub API allows 60 unauthenticated requests per hour per IP, so behind a shared NAT the offer can fail with a message; remove the folder to reinstall.
 
 ## Outside-sandbox projects
 
@@ -152,7 +154,7 @@ The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software
 
 - A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. Cause confirmed on the developer PC (2026-11-22): `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry), and that folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. The code before `9babfcf` returned None from `find_tool('kiro-cli')` with a PATH that had no Kiro entry. The current code finds the exe. Fixed in v0.3.3. If it happens again after v0.3.3, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
 - Kiro CLI install without admin works (developer PC, 2026-11-22, Windows 11, non-admin user). Maude's command downloads the MSI to `%TEMP%`, checks its SHA-256 from the manifest and runs `msiexec /i <msi> /quiet /norestart`. Result: exit 0, Kiro CLI 3.5.0. The script prints "installed to C:\Program Files\Kiro-Cli\", but the MSI installed per user to `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` and added that folder to the user PATH. Nothing went under Program Files and nothing to the machine PATH.
-- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). Maude only reports "The Kiro CLI install failed." and goes back to the menu. Not reproduced on the developer PC. Hypothesis: `/quiet` suppresses UAC, so on a PC where policy forces a per-machine install, a non-admin quiet install could fail with 1603.
+- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). At the time Maude only reported "The Kiro CLI install failed." and went back to the menu (now it prints the msiexec code and the `%TEMP%\maude-kiro-install.log` path). Not reproduced on the developer PC. Hypothesis: `/quiet` suppresses UAC, so on a PC where policy forces a per-machine install, a non-admin quiet install could fail with 1603.
 - Uninstalling Kiro CLI leaves `%LOCALAPPDATA%\Kiro-Cli` behind (`bun.exe`, `node.exe`, `tui.js`, `data.sqlite3`, about 880 MB). `run\chat-cli-<version>.exe` there is ACL-protected (Everyone: ReadAndExecute, only SYSTEM and Administrators can delete), so a normal user cannot remove the folder completely.
 - The docs site needs Pages source "GitHub Actions" and the v4 `upload-pages-artifact` and `deploy-pages` actions. The v5 pair did not upload the artifact, and Python 3.15 is not used.
 - `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
@@ -166,13 +168,13 @@ Open items:
 
 1. Partly checked on the developer PC: `%USERPROFILE%\.local\bin\maude.exe` exists, the user PATH has the entry and `HKCU\Environment\Path` kept its type REG_EXPAND_SZ. Still open: run `maude.exe` from Downloads on a clean PC, check the printed messages and the new-window `maude` command.
 2. Kiro CLI offered although installed: done, confirmed fixed in v0.3.3 (developer PC, 2026-11-22). `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry). With a PATH that has no Kiro entry, the code before `9babfcf` returns None from `find_tool('kiro-cli')`, and the current code finds the exe. The non-admin install through Maude's command also worked (exit 0, Kiro CLI 3.5.0).
-3. GitHub CLI offer (`gh_plan`, `find_gh`, `offer_gh` in `light/maude_exe.py`): done in v0.3.3. Next: check on a real PC that the UAC prompt appears and `gh` is found right after the install.
-4. The Kiro MSI exit code 1603: not reproduced on the developer PC (the non-admin quiet install succeeded). Hypothesis: `/quiet` suppresses UAC, so where policy forces a per-machine install, a non-admin quiet install could fail with 1603. Next step: on an affected PC run `msiexec /i <msi> /l*v kiro.log` and read the log.
+3. GitHub CLI offer (`gh_plan`, `find_gh`, `install_gh`, `offer_gh` in `light/maude_exe.py`): v0.3.3 used winget (machine MSI, UAC). Now a per-user zip install, verified against the real GitHub endpoints (v2.105.0 unpacks to `bin\gh.exe` and runs). Next: check on a non-admin PC that the offer installs without any prompt and `gh` is found right after.
+4. The Kiro MSI exit code 1603: not reproduced on the developer PC (the non-admin quiet install succeeded). The MSI (3.5.0) was inspected: its Property table has no `ALLUSERS`, its summary says no elevation is required and `INSTALLFOLDER` is `LocalAppDataFolder\Kiro-Cli`, so the package itself is per user; a forced per-machine install (policy, or the vendor script run elevated) is the likely cause. `install_kiro` now passes `ALLUSERS=2 MSIINSTALLPERUSER=1`, `/qn` and `/l*v %TEMP%\maude-kiro-install.log` and prints the code and the log path on failure. Not yet run on an affected PC: if 1603 still happens there, read that log.
 
 How to work on it:
 
 - `python3 -m py_compile light/maude_exe.py` and `bash tests/test-maude-exe.sh` are quick. `make test-fast` takes about 3 minutes.
-- The pure helpers (`path_with`, `find_tool`, `git_plan`, `install_plan`) are tested on Linux. Registry, `ctypes` and `winget` code only runs on Windows. `tests/win_tui_smoke.py` runs in CI on `windows-latest`.
+- The pure helpers (`path_with`, `find_tool`, `git_plan`, `install_plan`, `kiro_package`, `msiexec_cmd`, `gh_release`, `checksum_for`, `unsafe_zip_names`) and the Kiro/GitHub CLI download flows (fake network, fake `msiexec`) are tested on Linux. Registry, `ctypes` and real `winget`/`msiexec` calls only run on Windows. `tests/win_tui_smoke.py` runs in CI on `windows-latest`.
 - Release: `make tag VERSION=vX.Y.Z` runs `release.yml`, which builds `maude.exe` and the WSL tarball. A run takes a few minutes. Check with `gh run list`.
 - Docs site (https://dirkpetersen.github.io/maude/): the Documentation workflow runs only when `docs/**`, `zensical.toml` or the workflow file change. Pages was enabled with `gh api -X POST repos/dirkpetersen/maude/pages -f build_type=workflow`.
 - `setup-wsl-maude.ps1` must keep CRLF line endings (check with `file`).
