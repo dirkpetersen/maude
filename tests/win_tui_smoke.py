@@ -426,7 +426,7 @@ try:
     rc_file.unlink()
     assert maude._child_env() is None
     mx._run, mx.ensure_tool = old_run, old_ensure
-    # Rapid mode switching on the Set Creds screen (no pauses): no crash, one render at a time, the last press wins.
+    # Rapid mode switching on the Set Creds screen (no pauses): no crash, exactly one pane visible.
     async def check_rapid():
         async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
             app = pilot.app
@@ -446,6 +446,46 @@ try:
             assert all(scr.query_one(pid).display == (m == scr.mode) for m, pid in panes.items()), "exactly one mode body visible"
             scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
     asyncio.run(check_rapid())
+    # Deterministic regression: a late RowHighlighted after the app has exited (screens torn down) must not raise.
+    async def check_bar_after_exit():
+        async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            assert app._bar_on and app._select
+        for key in (None, str(fresh), maude.SEP_KEY):  # called AFTER the run_test block has exited
+            app._update_bar(key)
+    asyncio.run(check_bar_after_exit())
+    # Text left in a pane that is no longer shown is never saved: type into Paste, switch to Foundry, Save.
+    async def check_hidden_pane():
+        async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app.query_one("#btn-creds").press(); await pilot.pause()
+            scr = app.screen
+            assert isinstance(scr, maude.CredsEntryScreen)
+            await pilot.pause()
+            for _ in range(60):
+                if scr.query("#btn-creds-mode-foundry"):
+                    break
+                await pilot.pause(0.05)
+            scr.query_one("#creds-text").text = "export ANTHROPIC_API_KEY=sk-ant-hidden-pane\n"
+            scr.query_one("#creds-aws-key").value = "AKIAHIDDENPANE"
+            scr.query_one("#btn-creds-mode-foundry").press(); await pilot.pause(); await pilot.pause()
+            assert not scr.query_one("#creds-pane-paste").display
+            scr.query_one("#creds-foundry-url").value = "https://v.example/anthropic"
+            scr.query_one("#creds-foundry-key").value = "fk"
+            scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            assert len(app.screen_stack) == 1, app.screen_stack
+    saved_env = dict(os.environ)
+    try:
+        asyncio.run(check_hidden_pane())
+    finally:
+        os.environ.clear(); os.environ.update(saved_env)
+    hp = rc_file.read_text()
+    assert "ANTHROPIC_FOUNDRY_BASE_URL='https://v.example/anthropic'" in hp, hp
+    assert "hidden-pane" not in hp and "HIDDENPANE" not in hp, hp  # the Paste and Bedrock panes were not the active mode
+    assert not (home / ".aws" / "credentials").exists() or "HIDDENPANE" not in (home / ".aws" / "credentials").read_text()
+    rc_file.unlink()
     # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
     # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
     old_pt, old_auth = maude.plat_tool, maude.gh_is_authed

@@ -227,7 +227,16 @@ Tested by `tests/test-git-native.sh` (pure helpers, temp HOME and `GIT_CONFIG_GL
 
 `light/maude.py` is the single source for the TUI on every platform. It derives `PLATFORM` (`windows`, `macos` or `linux-sandbox`) from `sys.platform`; the buttons that depend on the platform come from the `FEATURES` map (one line per feature). Today Windows and macOS hide two widgets: Web UI and Autostart (Set Creds, Update Maude, To Github and Setup Git(hub) are on). Web UI and Autostart stay hidden on both platforms for good; the later packages flip the other lines.
 
-macOS is prepared and has never been run on a Mac. What exists: a red logo without the caption (no sandbox), projects in `~/Maude/Projects`, outside projects in `~/.maude/projects.json` (a JSON list of folder paths, shown first), and Open Project with the real `claude` (`--model <model>`, found in `~/.local/bin`, PATH, `/opt/homebrew/bin` or `/usr/local/bin`) instead of the sandbox wrapper. There are no tool installers on macOS yet: if Claude Code or another tool is missing, Maude prints a hint. `from __future__ import annotations` keeps the file importable by the 3.9 system Python on macOS.
+macOS is prepared and has never been run on a Mac. What exists: a red logo without the caption (no sandbox), projects in `~/Maude/Projects`, outside projects in `~/.maude/projects.json` (a JSON list of folder paths, shown first), and Open Project with the real `claude` (`--model <model>`, found in `~/.local/bin`, PATH, `/opt/homebrew/bin` or `/usr/local/bin`) instead of the sandbox wrapper. A missing tool is offered, like on Windows but with the macOS installers. Everything is user level: no sudo anywhere, Maude never installs Homebrew, and each install shows the exact command and asks `[y/N]` (default no) on the console while the TUI is suspended. The plan is the pure `mac_install_plan(tool, have_brew)`; the one runner is `mac_ensure_tool`, which re-resolves the tool with `plat_tool` afterwards.
+
+| Tool | Without Homebrew | With Homebrew |
+|------|------------------|---------------|
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` (binary in `~/.local/bin`) | same |
+| Kiro CLI | `curl -fsSL https://cli.kiro.dev/install \| bash -s -- --no-modify-path` (the script the Linux sandbox uses; not tried on a Mac) | same |
+| Git | `xcode-select --install`: opens an Apple dialog (Command Line Tools, about 1 GB); Maude waits for Enter after you finished it | `brew install git` |
+| GitHub CLI, OpenCode, Crush | only a hint with the command and the vendor URL (cli.github.com, opencode.ai, github.com/charmbracelet/crush) | `brew install gh` / `brew install opencode` / `brew install charmbracelet/tap/crush` |
+
+Where it fires: Open Project (Claude Code or the selected tool; git and gh once per Maude run, silently when there is no installer), and the Setup Git(hub) wizard (git and gh, asked again even after a decline). Apple's `/usr/bin/git` stub, which only opens the install dialog, does not count as an installed git until `xcode-select -p` succeeds. Tested by `tests/test-mac-install.sh` (pure plan and runner with every side effect injected; no installer is ever run). Not verified: any of these installers on a real Mac. `from __future__ import annotations` keeps the file importable by the 3.9 system Python on macOS.
 
 ## Status and next steps (v0.3.4)
 

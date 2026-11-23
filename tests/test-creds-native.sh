@@ -259,6 +259,19 @@ out("quote.merge.keeps", sorted(ns["read_clauderc"]().items()))
 out("quote.paste", sorted(ns["parse_creds_text"]("export AWS_X='a'\\''b'\nANTHROPIC_Y=\"c d\"\n").items()))
 rcp.unlink()
 
+# ── line breaks: _sh_quote drops everything str.splitlines() would split on, plus NUL; the parser splits on \n only ──
+out("lb.quote", ns["_sh_quote"]("a\x0bb\x0cc\x1cd\x1de\x1ef\x85g\u2028h\u2029i\x00j\rk\nl"))
+out("lb.quote.plain", ns["_sh_quote"]("it's caf\u00e9\ttab") == "'it'\\''s caf\u00e9\ttab'")
+# a value with a Unicode line separator cannot smuggle a second entry through write -> read
+ns["write_clauderc"]({"AWS_A": "x\u2028AWS_B=evil\x0bAWS_D=bad\x85", "AWS_C": "z"})
+out("lb.roundtrip", sorted(ns["read_clauderc"]().items()))
+out("lb.file.lines", len(ns["clauderc_path"]().read_bytes().split(b"\n")) - 1)
+ns["clauderc_path"]().unlink()
+# the parser: \n separates lines (CRLF too); VT/FF/FS/NEL/U+2028 do not
+txt = "export A='x'\r\nexport B='y'\x0b\x0cexport C='z'\u2028export D='w'\x85\nexport E='v'"
+out("lb.parse", sorted(ns["parse_clauderc"](txt)))
+out("lb.parse.crlf", sorted(ns["parse_clauderc"]("export A=\"1\"\r\nB='2'\r\n").items()))
+
 # ── decoding: undecodable files are never overwritten ──
 for plat, tag in (("linux", "lin"), ("win32", "win")):
     ns = load(plat)
@@ -304,6 +317,7 @@ for plat, tag in (("linux", "lin"), ("win32", "win")):
     aws.mkdir(exist_ok=True)
     cp, cf = aws / "credentials", aws / "config"
     cp.write_bytes(creds_in.encode()); cf.write_bytes(config_in.encode())
+    cp.chmod(0o644); cf.chmod(0o644)  # a world-readable original: the backup must not stay that way
     ns["AWS_CREDS_PATH"], ns["AWS_CONFIG_PATH"] = cp, cf
     ns["write_aws_credentials"]("AKNEW", "SECNEW", "us-west-2")
     exp_c = creds_in.replace("[bedrock]\naws_access_key_id = OLDKEY\naws_secret_access_key = OLDSECRET\n",
@@ -312,6 +326,7 @@ for plat, tag in (("linux", "lin"), ("win32", "win")):
     out(f"{tag}.aws.creds", cp.read_text() == exp_c)
     out(f"{tag}.aws.config", cf.read_text() == exp_f)
     out(f"{tag}.aws.bak", f"{(aws / 'credentials.maude-bak').read_bytes() == creds_in.encode()},{(aws / 'config.maude-bak').read_bytes() == config_in.encode()}")
+    out(f"{tag}.aws.bak.mode", f"{oct((aws / 'credentials.maude-bak').stat().st_mode & 0o777)},{oct((aws / 'config.maude-bak').stat().st_mode & 0o777)}")
     ns["write_aws_credentials"]("AKNEW2", "SECNEW2", "us-east-2")  # second save: backup keeps the ORIGINAL
     out(f"{tag}.aws.bak2", (aws / "credentials.maude-bak").read_bytes() == creds_in.encode())
     out(f"{tag}.aws.second", "AKNEW2" in cp.read_text() and "AKNEW\n" not in cp.read_text() and cp.read_text().count("[bedrock]") == 1)
@@ -484,6 +499,12 @@ assert_eq "llm-mode.sh clauderc_env reads the TUI-written file" "True" "$(val li
 assert_eq "old double-quoted / single / bare forms still parse" "[('OLD_A', 'plain value'), ('OLD_B', 'single'), ('OLD_C', 'bare'), ('OLD_D', \"with 'q'\")]" "$(val quote.oldforms)"
 assert_contains "merge keeps old entries and adds the new quoted one" "('NEW', \"x'y\")" "$(val quote.merge.keeps)"
 assert_contains "merge keeps old entries" "('OLD_A', 'plain value')" "$(val quote.merge.keeps)"
+assert_eq "_sh_quote drops CR LF VT FF FS GS RS NEL U+2028 U+2029 and NUL" "'abcdefghijkl'" "$(val lb.quote)"
+assert_eq "_sh_quote keeps quotes, accents and tabs" "True" "$(val lb.quote.plain)"
+assert_eq "no Unicode line break smuggles a second entry" "[('AWS_A', 'xAWS_B=evilAWS_D=bad'), ('AWS_C', 'z')]" "$(val lb.roundtrip)"
+assert_eq "one line per entry in the file" "2" "$(val lb.file.lines)"
+assert_eq "parse_clauderc splits on newline only (VT, FF, NEL, U+2028 stay inside the line)" "['A', 'B', 'E']" "$(val lb.parse)"
+assert_eq "parse_clauderc strips a trailing CR" "[('A', '1'), ('B', '2')]" "$(val lb.parse.crlf)"
 assert_eq "pasted single-quote escapes parse" "[('ANTHROPIC_Y', 'c d'), ('AWS_X', \"a'b\")]" "$(val quote.paste)"
 
 # decoding
@@ -499,6 +520,7 @@ for t in lin win; do
     assert_eq "$t: credentials: only [bedrock] replaced, rest byte for byte" "True" "$(val $t.aws.creds)"
     assert_eq "$t: config: only [profile bedrock] replaced, rest byte for byte" "True" "$(val $t.aws.config)"
     assert_eq "$t: one-time .maude-bak holds the original bytes" "True,True" "$(val $t.aws.bak)"
+    assert_eq "$t: the .maude-bak copy is chmod 0600" "0o600,0o600" "$(val $t.aws.bak.mode)"
     assert_eq "$t: second save keeps the original backup" "True" "$(val $t.aws.bak2)"
     assert_eq "$t: second save replaces, never duplicates" "True" "$(val $t.aws.second)"
     assert_eq "$t: missing section is appended after a blank line" "'[default]\nk = v\n\n[bedrock]\naws_access_key_id = A\naws_secret_access_key = S\n'" "$(val $t.aws.append)"

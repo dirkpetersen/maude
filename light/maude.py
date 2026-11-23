@@ -230,8 +230,129 @@ def plat_real_claude() -> str:
     return (plat_tool("claude") or "claude") if IS_MAC else "claude"
 
 
+# ── macOS: offer to install a missing tool (never sudo, always asks, user level) ──
+# Windows has maude_exe.ensure_tool/offer_git/offer_gh; this is the macOS counterpart. The plan is
+# pure (mac_install_plan); mac_ensure_tool is the one runner and must be called while the TUI is
+# suspended (it asks on the console). Nothing here installs Homebrew.
+
+# Binary name -> the name shown to the user.
+MAC_TOOL_LABELS = {"claude": "Claude Code", "git": "Git", "gh": "GitHub CLI",
+                   "kiro-cli": "Kiro CLI", "opencode": "OpenCode", "crush": "Crush"}
+MAC_BREW_URL = "https://brew.sh"
+# gh / opencode / crush: (brew formula, manual-install URL)
+_MAC_BREW_TOOLS = {
+    "gh": ("gh", "https://cli.github.com"),
+    "opencode": ("opencode", "https://opencode.ai"),
+    "crush": ("charmbracelet/tap/crush", "https://github.com/charmbracelet/crush"),
+}
+_MAC_CURL_INSTALL = {  # official per-user installers (they put the binary in ~/.local/bin)
+    "claude": "curl -fsSL https://claude.ai/install.sh | bash",
+    "kiro-cli": "curl -fsSL https://cli.kiro.dev/install | bash -s -- --no-modify-path",
+}
+
+
+def mac_install_plan(tool: str, have_brew: bool) -> tuple[list[str] | None, str, str]:
+    """Pure. How to install `tool` (a binary name) on macOS without sudo.
+    Returns (argv, shown, note): argv = the command to run (None = Maude cannot install it here),
+    shown = the command line, or the hint text when argv is None, note = an extra line for the user
+    ("" if none). A "brew" argv[0] is a bare name, the runner substitutes the resolved path."""
+    if tool in _MAC_CURL_INSTALL:
+        cmd = _MAC_CURL_INSTALL[tool]
+        return ["/bin/bash", "-c", cmd], cmd, ""
+    if tool == "git":
+        if have_brew:
+            return ["brew", "install", "git"], "brew install git", ""
+        return (["xcode-select", "--install"], "xcode-select --install",
+                "This opens a macOS dialog (Apple Command Line Tools, about 1 GB): click Install there, "
+                "wait until it finishes, then come back here.")
+    if tool in _MAC_BREW_TOOLS:
+        formula, url = _MAC_BREW_TOOLS[tool]
+        if have_brew:
+            return ["brew", "install", formula], f"brew install {formula}", ""
+        return (None, f"Install Homebrew first ({MAC_BREW_URL}), then run: brew install {formula}\n"
+                      f"Or see {url} for other ways to install it. Maude does not install Homebrew.", "")
+    return None, f"No automatic install is known for {tool}.", ""
+
+
+def _mac_find(name: str, which=None, run=None) -> str | None:
+    """plat_tool, except that Apple's /usr/bin/git stub (present without the Command Line Tools,
+    it only pops the install dialog) does not count as an installed git."""
+    found = (which or plat_tool)(name)
+    if name == "git" and found == "/usr/bin/git":
+        try:
+            ok = (run or subprocess.run)(["xcode-select", "-p"], capture_output=True).returncode == 0
+        except OSError:
+            ok = False
+        if not ok:
+            return None
+    return found
+
+
+def mac_ensure_tool(tool: str, find=None, ask=None, run=None, say=print, quiet_hint: bool = False) -> str | None:
+    """Return the path of `tool` (a binary name) on macOS, offering to install it when missing.
+    None = not available (declined, no installer, failed or not found yet; the reason was printed,
+    except the no-installer hint with quiet_hint=True). Asks y/N and shows the command first.
+    Never runs an installer without a yes, never uses sudo."""
+    find = find or _mac_find
+    ask = ask or input
+    run = run or subprocess.run
+    exe = find(tool)
+    if exe:
+        return exe
+    label = MAC_TOOL_LABELS.get(tool, tool)
+    brew = find("brew")
+    argv, shown, note = mac_install_plan(tool, brew is not None)
+    if argv is None:
+        if not quiet_hint:
+            say(f"{label} is not installed.\n{shown}")
+        return None
+    if argv[0] == "brew":
+        argv = [brew, *argv[1:]]
+    say(f"{label} is not installed.\nCommand that will run: {shown}")
+    if note:
+        say(note)
+    try:
+        yes = ask(f"Install {label} now? [y/N] ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        yes = False
+    if not yes:
+        return None
+    try:
+        rc = run(argv, check=False).returncode
+    except KeyboardInterrupt:
+        say(f"{label} install cancelled.")
+        return None
+    except OSError as err:
+        say(f"Could not run the {label} installer: {err}")
+        return None
+    if tool == "git" and argv[0] == "xcode-select":  # the dialog installs in the background
+        try:
+            ask("Press Enter when the Command Line Tools installation has finished. ")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    elif rc:
+        say(f"The {label} install failed (exit code {rc}).")
+        return None
+    exe = find(tool)  # re-resolve: ~/.local/bin, /opt/homebrew/bin are searched by plat_tool
+    if not exe:
+        say(f"{label} was installed but is not found yet. Open a new terminal window and try again.")
+    return exe
+
+
+_mac_offered = set()  # binary names already offered in this process
+
+
+def mac_offer(tool: str) -> None:
+    """Once per Maude process: offer to install git or gh when missing (the macOS counterpart of
+    mx.offer_git / mx.offer_gh). Silent when Maude has no installer for it. Declined stays declined."""
+    if tool in _mac_offered:
+        return
+    _mac_offered.add(tool)
+    mac_ensure_tool(tool, quiet_hint=True)
+
+
 def clauderc_path(create: bool = False) -> Path:
-    """The one place Claude credentials (`export K="V"` lines) live.
+    """The one place Claude credentials (`export K='V'` lines, single-quoted, see _sh_quote) live.
     Sandbox: ~/.azure/clauderc (read by the ~/bin/claude wrapper). Windows/macOS: ~/.maude/clauderc
     (there is no wrapper; Maude itself loads it, see plat_claude_env). create=True makes ~/.maude
     (mode 0700) through maude_dir(); reads must not create anything."""
@@ -1093,11 +1214,10 @@ def reconcile(model: str, tool: str, changed: str) -> tuple[str, str]:
 def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
     cmd = tool_command(tool, model, fresh)
     env = _child_env(tools=True)  # raw clauderc exports only
-    if IS_MAC:  # no installers on macOS yet: say how to get the tool
-        exe = plat_tool(cmd[0])
-        if not exe:
-            input(f"{tool} is not installed. Install it first (Homebrew or the vendor's installer), "
-                  "then try again. Press Enter to go back. ")
+    if IS_MAC:  # offer the install (y/N, never sudo); the TUI is suspended here
+        exe = mac_ensure_tool(cmd[0])
+        if not exe:  # mac_ensure_tool said why (declined, no installer, failed)
+            input("Press Enter to go back. ")
             return
         cmd = [exe, *cmd[1:]]
     elif not shutil.which(cmd[0]):
@@ -1160,11 +1280,14 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
         return
     head, env = ["claude", model], _child_env()  # sandbox: the ~/bin/claude wrapper takes the model as a word
     if IS_MAC:  # no wrapper outside the sandbox: the real claude (--model) with Maude's env
+        mac_offer("git")
+        mac_offer("gh")
         real = plat_real_claude()
-        if real == "claude":  # not found anywhere
-            input("Claude Code is not installed. Install it with: curl -fsSL https://claude.ai/install.sh | bash"
-                  "  then try again. Press Enter to go back. ")
-            return
+        if real == "claude":  # not found anywhere: offer the official per-user installer
+            if not mac_ensure_tool("claude"):
+                input("Press Enter to go back. ")
+                return
+            real = plat_real_claude()
         head = [real, "--model", model]
     sync_perplexity()
     eff = effort_args(effort)
@@ -2357,10 +2480,11 @@ def parse_creds_text(text: str) -> dict[str, str]:
 
 def parse_clauderc(text: str) -> dict[str, str]:
     """Parse the lines of a clauderc (`export K="V"`, any prefix) into a dict. Same quote rules
-    as parse_creds_text but keeps every key and empty values."""
+    as parse_creds_text but keeps every key and empty values. Lines end at "\n" only (a trailing
+    "\r" is stripped), the same characters _sh_quote refuses to store."""
     out: dict[str, str] = {}
-    for raw in text.splitlines():
-        line = raw.strip()
+    for raw in text.split("\n"):
+        line = raw.rstrip("\r").strip()
         if line.startswith("export "):
             line = line[len("export "):].lstrip()
         m = CRED_KEY_RE.match(line)
@@ -2372,9 +2496,10 @@ def parse_clauderc(text: str) -> dict[str, str]:
 
 def _sh_quote(v: str) -> str:
     """Single-quote v for a bash `source` (the wrapper and the reviewer skills source clauderc):
-    nothing inside is expanded. A quote becomes quote-backslash-quote-quote. CR/LF cannot be stored
-    on one line and are dropped."""
-    return "'" + re.sub(r"[\r\n]", "", v).replace("'", "'\\''") + "'"
+    nothing inside is expanded. A quote becomes quote-backslash-quote-quote. Line breaks cannot be
+    stored on one line and are dropped: CR, LF, VT, FF, FS/GS/RS, NEL, U+2028/2029 (what
+    str.splitlines() splits on) and NUL."""
+    return "'" + re.sub(r"[\x00\r\n\x0b\x0c\x1c-\x1e\x85\u2028\u2029]", "", v).replace("'", "'\\''") + "'"
 
 
 def _write_private(path: Path, data: bytes) -> None:
@@ -2583,6 +2708,10 @@ def _merge_ini_file(path: Path, header: str, body: str) -> None:
     bak = path.with_name(path.name + ".maude-bak")
     if raw and not bak.exists():
         shutil.copy2(path, bak)
+        try:
+            bak.chmod(0o600)  # the copy holds the same secrets as the original
+        except OSError:
+            pass  # no POSIX modes on Windows
     _write_private(path, new.encode("utf-8"))
 
 
@@ -2687,7 +2816,7 @@ class CredsEntryScreen(ModalScreen[bool]):
 
     def _init_ui(self) -> None:
         try:
-            self._switch_mode(self.MODE_PASTE)
+            self._switch_mode(self.mode)
             self._update_default_checkbox()
         except NoMatches:  # screen already closed
             return
@@ -2791,7 +2920,7 @@ class CredsEntryScreen(ModalScreen[bool]):
     def _focus_later(self, selector: str) -> None:
         def go() -> None:
             try:
-                if self.query_one(selector).display and self.is_attached:
+                if self._FOCUS[self.mode] == selector and self.is_attached:  # only the active pane's field
                     self.query_one(selector).focus()
             except Exception:  # the widget is gone (screen closed): nothing to focus
                 pass
@@ -3211,21 +3340,31 @@ class GitSetupWizard(ModalScreen[bool]):
 
     async def on_mount(self) -> None:
         await self._render_step()
-        if IS_WIN:
+        if IS_WIN or IS_MAC:
             self.call_after_refresh(self._offer_missing_tools)
 
     def _offer_missing_tools(self) -> None:
-        """Windows: offer MinGit / GitHub CLI (per-user, no admin) when missing. The offers ask on the
+        """Windows: offer MinGit / GitHub CLI (per-user, no admin) when missing. macOS: git via the
+        Command Line Tools or Homebrew, gh via Homebrew (or the hint). The offers ask on the
         console, so the TUI is suspended; the user asked for Git setup, so ask again even if declined."""
-        if plat_tool("git") and plat_tool("gh"):
+        if IS_MAC:
+            if _mac_find("git") and _mac_find("gh"):
+                return
+        elif plat_tool("git") and plat_tool("gh"):
             return
         try:
             with self.app.suspend():
-                mx.reset_offers()
-                mx.offer_git()
-                mx.offer_gh()
-                if not (plat_tool("git") and plat_tool("gh")):  # let the user read why
-                    input("Press Enter to go back to Maude. ")
+                if IS_MAC:
+                    mac_ensure_tool("git")
+                    mac_ensure_tool("gh")
+                    if not (_mac_find("git") and _mac_find("gh")):  # let the user read why
+                        input("Press Enter to go back to Maude. ")
+                else:
+                    mx.reset_offers()
+                    mx.offer_git()
+                    mx.offer_gh()
+                    if not (plat_tool("git") and plat_tool("gh")):  # let the user read why
+                        input("Press Enter to go back to Maude. ")
         except Exception as err:  # never take the wizard down
             self._log(f"Could not run the installer offer: {err}")
         self.app.call_after_refresh(self._rerender_current_step)

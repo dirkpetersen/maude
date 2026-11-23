@@ -1114,6 +1114,7 @@ def uninstall() -> None:
 def selftest() -> int:
     """Headless TUI start, for CI on the frozen exe: proves Textual and its data files are bundled."""
     import asyncio
+    sys.modules.setdefault("maude_exe", sys.modules[__name__])  # maude.py does `import maude_exe`: one module
     import maude
     import textual.widgets
     from rich.cells import cell_len

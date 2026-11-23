@@ -833,7 +833,7 @@ PY
 )"
 assert_eq "OPEN_SH reads model,effort" "claude opus --continue;claude opus;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude opus --effort max --continue;claude opus --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False" "$OSH_OUT"
 # "Starting Maude, please wait ..." banner: shown (before any heavy import) only for the TUI modes, only on a TTY.
-bn_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+bn_run() { env -u MAUDE_TIMING python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import io, os, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
 args, tty = sys.argv[2].split(), sys.argv[3] == "tty"
 log = []
@@ -887,7 +887,7 @@ mkdir -p "$bo_dir/S/Projects/a" "$bo_dir/Other"
 # Modes: ok (stubbed run_tui/_run), nosandbox, warn (self_install warning), installed (install notices),
 # realtui (REAL run_tui with a fake `maude` module), notfolder (real run_tui error path),
 # realshare (REAL resolve_share, uncached share: the "locating" line).
-bo_run() { python3 -I - "${SCRIPT_DIR}/../light" "$bo_dir" "$@" <<'PY'
+bo_run() { env -u MAUDE_TIMING python3 -I - "${SCRIPT_DIR}/../light" "$bo_dir" "$@" <<'PY'
 import io, os, re, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
 base, mode, folder = sys.argv[2], sys.argv[3], sys.argv[4]
 share = os.path.realpath(base + "/S")
@@ -903,7 +903,7 @@ m._enable_vt = lambda: True
 m.has_sandbox = lambda: mode != "nosandbox"
 m._run = lambda c: ev.append(("call", "_run")) or 0
 if mode == "realshare":      # uncached share: no registry, no wsl.exe; the heuristic picks a folder under LOCALAPPDATA
-    import subprocess, types
+    import subprocess
     def no_wsl(*a, **k): raise FileNotFoundError("wsl.exe")
     subprocess.run = no_wsl
     os.environ["LOCALAPPDATA"] = base

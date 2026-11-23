@@ -171,6 +171,9 @@ out("pushenv.win.core", W["push_ssh_env"]({}, "D:/mine/ssh.exe", "windows"))
 own = "C:/Windows/System32/OpenSSH/ssh.exe"
 for k, v in (("plain", own), ("backslash", "C:\\Windows\\System32\\OpenSSH\\ssh.exe"), ("upper", own.upper()), ("quoted", '"' + own + '"')):
     out("pushenv.win.own." + k, W["push_ssh_env"]({}, v, "windows") == {"GIT_SSH_COMMAND": own + " -o BatchMode=yes -o StrictHostKeyChecking=accept-new"})
+# the own ssh path PLUS arguments is the user's own command: respected (nothing forced)
+out("pushenv.win.own.args", W["push_ssh_env"]({}, own + " -i work_key", "windows"))
+out("pushenv.win.own.quotedargs", W["push_ssh_env"]({}, '"' + own + '" -i work_key', "windows"))
 out("pushenv.mac.core", M["push_ssh_env"]({}, "/opt/x/ssh", "macos"))
 
 # run_capture kills a hanging child after the timeout
@@ -358,6 +361,8 @@ assert_eq "macOS respects the user's own core.sshCommand"   "{}" "$(get pushenv.
 for k in plain backslash upper quoted; do
   assert_eq "Maude's own core.sshCommand ($k) still gets BatchMode forced" "True" "$(get pushenv.win.own.$k)"
 done
+assert_eq "own ssh path plus arguments is respected (windows)" "{}" "$(get pushenv.win.own.args)"
+assert_eq "quoted own ssh path plus arguments is respected (windows)" "{}" "$(get pushenv.win.own.quotedargs)"
 assert_eq "effective core.sshCommand: project-local wins, then global" "('/proj/ssh', '/glob/ssh', '')" "$(get effcfg)"
 assert_eq "run_capture kills a hanging child"     "(None, True)" "$(get capture.timeout)"
 assert_eq "run_capture returns output"            "(0, 'hi')" "$(get capture.ok)"
