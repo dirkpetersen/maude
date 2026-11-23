@@ -429,10 +429,11 @@ try:
                     scr.query_one(b).press()  # no pause between presses
             for _ in range(20):
                 await pilot.pause(0.05)
-            assert not scr._busy and scr._want == scr.mode, (scr.mode, scr._want, scr._busy)  # idle, nothing queued
             # (the buttons' own message pumps run concurrently, so which press lands last is not fixed)
             body = {"paste": "#creds-text", "bedrock": "#creds-aws-key", "foundry": "#creds-foundry-url"}
-            assert all(len(scr.query(sel)) == (1 if m == scr.mode else 0) for m, sel in body.items()), "exactly one mode body"
+            panes = {"paste": "#creds-pane-paste", "bedrock": "#creds-pane-bedrock", "foundry": "#creds-pane-foundry"}
+            assert all(len(scr.query(sel)) == 1 for sel in body.values()), "all mode bodies stay mounted"
+            assert all(scr.query_one(pid).display == (m == scr.mode) for m, pid in panes.items()), "exactly one mode body visible"
             scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
     asyncio.run(check_rapid())
     # Native credential gate: `claude auth status` runs off the UI thread; only an explicit "not logged in" shows

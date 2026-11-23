@@ -30,6 +30,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.coordinate import Coordinate
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -2213,8 +2214,6 @@ class CredsEntryScreen(ModalScreen[bool]):
     def __init__(self) -> None:
         super().__init__()
         self.mode = self.MODE_PASTE
-        self._want = self.MODE_PASTE
-        self._busy = False
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -2231,7 +2230,8 @@ class CredsEntryScreen(ModalScreen[bool]):
                              variant="default")
                 yield Button("Claude Login", id="btn-creds-login",
                              variant="default")
-            yield Container(id="creds-body")
+            with Container(id="creds-body"):
+                yield from self._compose_body()
             yield Label("", id="creds-status")
             yield Checkbox("Default to AWS Bedrock (uncheck → Foundry)",
                            id="creds-default-bedrock", value=False)
@@ -2239,9 +2239,17 @@ class CredsEntryScreen(ModalScreen[bool]):
                 yield Button("Save",   variant="success", id="btn-creds-save")
                 yield Button("Cancel", variant="primary", id="btn-creds-cancel")
 
-    async def on_mount(self) -> None:
-        await self._switch_mode(self.MODE_PASTE)
-        self._update_default_checkbox()
+    def on_mount(self) -> None:
+        # compose() already shows the paste pane; defer the rest until the children exist (on a slow
+        # runner the mount event can run before they are mounted).
+        self.call_after_refresh(self._init_ui)
+
+    def _init_ui(self) -> None:
+        try:
+            self._switch_mode(self.MODE_PASTE)
+            self._update_default_checkbox()
+        except NoMatches:  # screen already closed
+            return
         if is_native() and have_claude_login():
             self._set_status("[yellow]A Claude login is active and takes precedence over saved cloud "
                              "credentials. Run `claude /logout` to use them.[/]")
@@ -2249,16 +2257,16 @@ class CredsEntryScreen(ModalScreen[bool]):
     # ── Mode switcher ──────────────────────────────────────────────────
 
     @on(Button.Pressed, "#btn-creds-mode-paste")
-    async def mode_paste(self) -> None:
-        await self._switch_mode(self.MODE_PASTE)
+    def mode_paste(self) -> None:
+        self._switch_mode(self.MODE_PASTE)
 
     @on(Button.Pressed, "#btn-creds-mode-bedrock")
-    async def mode_bedrock(self) -> None:
-        await self._switch_mode(self.MODE_BEDROCK)
+    def mode_bedrock(self) -> None:
+        self._switch_mode(self.MODE_BEDROCK)
 
     @on(Button.Pressed, "#btn-creds-mode-foundry")
-    async def mode_foundry(self) -> None:
-        await self._switch_mode(self.MODE_FOUNDRY)
+    def mode_foundry(self) -> None:
+        self._switch_mode(self.MODE_FOUNDRY)
 
     @on(Button.Pressed, "#btn-creds-login")
     def claude_login(self) -> None:
@@ -2314,79 +2322,67 @@ class CredsEntryScreen(ModalScreen[bool]):
                 "[bold yellow]Login not completed — no valid token found. "
                 "Try again, or use one of the other methods.[/]")
 
-    async def _switch_mode(self, mode: str) -> None:
-        # Re-entry guard: a press while a render is in flight only records the wanted mode; the
-        # running loop renders it afterwards. Overlapping remove_children()/mount() calls made
-        # textual crash (KeyError text-area--gutter, NoMatches) on rapid clicks.
-        self._want = mode
-        if self._busy:
-            return
-        self._busy = True
+    def _switch_mode(self, mode: str) -> None:
+        # All three mode bodies stay mounted from compose(); switching only toggles `display` and the
+        # button variants. Nothing is removed or re-mounted, so a rapid click or a click right after the
+        # screen opens cannot race a TextArea that is still rendering (textual KeyError text-area--gutter,
+        # NoMatches). save() reads only the pane of self.mode, so hidden fields never count.
+        self.mode = mode
         try:
-            while True:
-                m = self._want
-                self.mode = m
-                for btn_id, btn_mode in (
-                    ("#btn-creds-mode-paste",   self.MODE_PASTE),
-                    ("#btn-creds-mode-bedrock", self.MODE_BEDROCK),
-                    ("#btn-creds-mode-foundry", self.MODE_FOUNDRY),
-                ):
-                    btn = self.query_one(btn_id, Button)
-                    btn.variant = "primary" if m == btn_mode else "default"
-                await self._render_body()
-                if self._want == m:
-                    break
-        finally:
-            self._busy = False
+            self._apply_mode(mode)
+        except NoMatches:  # children not mounted yet, or the screen is closing
+            pass
+
+    def _apply_mode(self, mode: str) -> None:
+        for btn_id, btn_mode in (
+            ("#btn-creds-mode-paste",   self.MODE_PASTE),
+            ("#btn-creds-mode-bedrock", self.MODE_BEDROCK),
+            ("#btn-creds-mode-foundry", self.MODE_FOUNDRY),
+        ):
+            self.query_one(btn_id, Button).variant = "primary" if mode == btn_mode else "default"
+        for pane_mode, pane_id in self._PANES.items():
+            self.query_one(pane_id).display = (pane_mode == mode)
+        self._focus_later(self._FOCUS[mode])
+
+    _PANES = {"paste": "#creds-pane-paste", "bedrock": "#creds-pane-bedrock", "foundry": "#creds-pane-foundry"}
+    _FOCUS = {"paste": "#creds-text", "bedrock": "#creds-aws-key", "foundry": "#creds-foundry-url"}
 
     def _focus_later(self, selector: str) -> None:
         def go() -> None:
             try:
-                self.query_one(selector).focus()
-            except Exception:  # the widget is gone (mode switched again): nothing to focus
+                if self.query_one(selector).display and self.is_attached:
+                    self.query_one(selector).focus()
+            except Exception:  # the widget is gone (screen closed): nothing to focus
                 pass
         self.call_after_refresh(go)
 
-    async def _render_body(self) -> None:
-        body = self.query_one("#creds-body", Container)
-        await body.remove_children()
-        if self.mode == self.MODE_PASTE:
-            widgets = [
-                Label(
-                    "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
-                    "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
-                    "For Gemini, paste an API key (GEMINI_API_KEY or GOOGLE_API_KEY "
-                    "from aistudio.google.com/apikey) — it's routed to AI Studio, no "
-                    "OAuth. Vertex (needs a service account) is used only if you paste "
-                    "GOOGLE_GENAI_USE_VERTEXAI=true / GOOGLE_APPLICATION_CREDENTIALS. "
-                    "Saved to ~/.gemini/.env."
-                ),
-                TextArea("", id="creds-text", language=None, show_line_numbers=False),
-            ]
-            focus = "#creds-text"
-        elif self.mode == self.MODE_BEDROCK:
-            widgets = [
-                Label("AWS Bedrock — region defaults to us-west-2."),
-                Label("AWS_ACCESS_KEY_ID:"),
-                Input(placeholder="AKIA…", id="creds-aws-key"),
-                Label("AWS_SECRET_ACCESS_KEY:"),
-                Input(placeholder="secret", id="creds-aws-secret", password=True),
-                Label("AWS_REGION:"),
-                Input(value="us-west-2", id="creds-aws-region"),
-            ]
-            focus = "#creds-aws-key"
-        else:  # MODE_FOUNDRY
-            widgets = [
-                Label("Azure AI Foundry — Anthropic-compatible endpoint."),
-                Label("ANTHROPIC_FOUNDRY_BASE_URL:"),
-                Input(placeholder="https://<resource>.services.ai.azure.com/anthropic",
-                      id="creds-foundry-url"),
-                Label("ANTHROPIC_FOUNDRY_API_KEY:"),
-                Input(placeholder="api key", id="creds-foundry-key", password=True),
-            ]
-            focus = "#creds-foundry-url"
-        await body.mount(*widgets)  # wait until they are mounted: the next switch must not race them
-        self._focus_later(focus)
+    def _compose_body(self) -> ComposeResult:
+        with Vertical(id="creds-pane-paste", classes="creds-pane"):
+            yield Label(
+                "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
+                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
+                "For Gemini, paste an API key (GEMINI_API_KEY or GOOGLE_API_KEY "
+                "from aistudio.google.com/apikey) — it's routed to AI Studio, no "
+                "OAuth. Vertex (needs a service account) is used only if you paste "
+                "GOOGLE_GENAI_USE_VERTEXAI=true / GOOGLE_APPLICATION_CREDENTIALS. "
+                "Saved to ~/.gemini/.env."
+            )
+            yield TextArea("", id="creds-text", language=None, show_line_numbers=False)
+        with Vertical(id="creds-pane-bedrock", classes="creds-pane"):
+            yield Label("AWS Bedrock — region defaults to us-west-2.")
+            yield Label("AWS_ACCESS_KEY_ID:")
+            yield Input(placeholder="AKIA…", id="creds-aws-key")
+            yield Label("AWS_SECRET_ACCESS_KEY:")
+            yield Input(placeholder="secret", id="creds-aws-secret", password=True)
+            yield Label("AWS_REGION:")
+            yield Input(value="us-west-2", id="creds-aws-region")
+        with Vertical(id="creds-pane-foundry", classes="creds-pane"):
+            yield Label("Azure AI Foundry — Anthropic-compatible endpoint.")
+            yield Label("ANTHROPIC_FOUNDRY_BASE_URL:")
+            yield Input(placeholder="https://<resource>.services.ai.azure.com/anthropic",
+                        id="creds-foundry-url")
+            yield Label("ANTHROPIC_FOUNDRY_API_KEY:")
+            yield Input(placeholder="api key", id="creds-foundry-key", password=True)
     def _update_default_checkbox(self) -> None:
         """Show the Bedrock-vs-Foundry default toggle only when both
         credential families are present on disk (active or parked)."""
@@ -4142,6 +4138,14 @@ class MaudeApp(App):
         overflow-y: auto;
     }
 
+    #creds-body .creds-pane {
+        height: auto;
+    }
+
+    #creds-pane-bedrock, #creds-pane-foundry {
+        display: none;  /* paste is the initial mode; _switch_mode toggles these */
+    }
+
     #creds-body Label {
         color: #c09898;
         margin-top: 0;
@@ -4955,7 +4959,13 @@ class MaudeApp(App):
         if not self._select or not self._bar_on:
             return
         on_row = key is not None and key != SEP_KEY and _pkey(key) == _pkey(self._select)
-        self.query_one("#win-warning", Static).update(Text(
+        # A RowHighlighted can arrive before the bar is mounted or after the screen is torn down
+        # (slow machine, app exit): then there is nothing to update.
+        try:
+            bar = self.query_one("#win-warning", Static)
+        except NoMatches:
+            return
+        bar.update(Text(
             plat_banner_text(self._select)
             + ("\nPress Enter to open it, or pick another project, model or tool first." if on_row else "")))
 
