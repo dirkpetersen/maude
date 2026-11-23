@@ -18,16 +18,21 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
-from pathlib import PureWindowsPath as W
+from pathlib import Path, PureWindowsPath as W
 
 VERSION = "dev"  # CI replaces this line with the release tag
 DISTRO = "Maude"
 KEYS = (r"Software\Classes\Directory\shell\OpenInMaude",
         r"Software\Classes\Directory\Background\shell\OpenInMaude")
 # Claude Code in the sandbox: continue the last session, else start a new one.
-# $1 = model override (may be empty); else the sandbox model file; else opus.
-OPEN_SH = ('m="${1:-$(cat ~/.maude-model 2>/dev/null)}"; '
-           'claude "${m:-opus}" --continue || claude "${m:-opus}"')
+# $1 = model override (may be empty); else the model in ~/.maude/maude-model ("<model>[,<effort>]",
+# old ~/.maude-model as fallback); else opus. The effort (low|medium|high|xhigh|max) becomes --effort.
+OPEN_SH = ('v="$(cat ~/.maude/maude-model 2>/dev/null || cat ~/.maude-model 2>/dev/null)"; '
+           'v="${v//[[:space:]]/}"; '
+           'm="${1:-${v%%,*}}"; e=""; [[ "$v" == *,* ]] && e="${v#*,}"; '
+           '[[ "$m" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || m=opus; '
+           'case "$e" in low|medium|high|xhigh|max) x=(--effort "$e");; *) x=();; esac; '
+           'claude "$m" "${x[@]}" --continue || claude "$m" "${x[@]}"')
 INSTALL_HINT = "Install Claude Code for Windows: irm https://claude.ai/install.ps1 | iex   (run in PowerShell)"
 
 
@@ -167,9 +172,13 @@ def sandbox_cmd(d: str, model: str) -> list[str]:
             "bash", "-lc", OPEN_SH, "maude", model]
 
 
-def windows_cmd(claude: str, model: str, cont: bool) -> list[str]:
+EFFORTS = ("low", "medium", "high", "xhigh", "max")  # Claude Code --effort; "" = its own default
+
+
+def windows_cmd(claude: str, model: str, cont: bool, effort: str = "") -> list[str]:
     # No bypass or yolo flag here: default permission mode only.
-    return [claude, "--model", model] + (["--continue"] if cont else [])
+    return ([claude, "--model", model] + (["--effort", effort] if effort in EFFORTS else [])
+            + (["--continue"] if cont else []))
 
 
 BUN_CMD = "irm bun.sh/install.ps1 | iex"
@@ -645,13 +654,53 @@ def offer_gh(env=os.environ, find=find_gh, install=install_gh, add_path=lambda d
     env["PATH"] = path_prepend(env.get("PATH", ""), [d])
 
 
-def windows_model(userprofile: str) -> str:
+def maude_dir(home: str | None = None) -> Path:
+    """~/.maude (home defaults to Path.home()), created with mode 0700 if missing. Same helper as
+    maude.py's maude_dir(); the exe cannot import maude.py (textual) on the --windows path."""
+    d = Path(home) / ".maude" if home else Path.home() / ".maude"
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)  # the mode has no effect on Windows
+    return d
+
+
+def _decode_state(raw: bytes) -> str:
+    """Tolerant text decode for state files: a UTF-16 BOM (PowerShell 5.1 `>`) is honoured, a UTF-8
+    BOM is dropped, and undecodable bytes are replaced (the value then simply fails validation)."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
+
+
+def read_state(userprofile: str, name: str, legacy: str) -> str:
+    """Contents of <home>/.maude/<name>, or "". A legacy <home>/<legacy> is moved there first
+    (value copied into the new file, old file deleted) when the new file is missing. Never raises."""
+    new, old = Path(userprofile) / ".maude" / name, Path(userprofile) / legacy
     try:
-        with open(W(userprofile) / ".maude-model", encoding="utf-8") as f:
-            m = f.read().strip()
-    except OSError:
-        m = ""
-    return m if valid_model(m) else "opus"
+        if not new.exists() and old.exists():
+            val = _decode_state(old.read_bytes())
+            maude_dir(userprofile)
+            new.write_text(val, encoding="utf-8")
+            old.unlink()
+    except (OSError, ValueError):
+        pass
+    try:
+        return _decode_state(new.read_bytes())
+    except (OSError, ValueError):
+        return ""
+
+
+def parse_model_pref(raw: str) -> tuple[str, str]:
+    """"<model>[,<effort>]" -> (model, effort); a bad model gives opus, a bad effort gives ""."""
+    m, _, e = raw.strip().partition(",")
+    m, e = m.strip(), e.strip().lower()
+    return (m if valid_model(m) else "opus", e if e in EFFORTS else "")
+
+
+def windows_model_effort(userprofile: str) -> tuple[str, str]:
+    return parse_model_pref(read_state(userprofile, "maude-model", ".maude-model"))
+
+
+def windows_model(userprofile: str) -> str:
+    return windows_model_effort(userprofile)[0]
 
 
 REG_PROJECTS = r"Software\Maude\Projects"  # HKCU; value name = project_key(folder), data = folder
@@ -762,7 +811,8 @@ def projects_dir(env=os.environ) -> str:
     return str(W(os.path.realpath(resolve_share(env))) / "Projects")
 
 
-def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = False) -> int:
+def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = False,
+                effort: str | None = None) -> int:
     env = os.environ
     claude = find_claude(env["USERPROFILE"])
     if not claude:
@@ -770,10 +820,12 @@ def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = Fals
         return 3
     if banner:
         print(banner_text(folder, has_sandbox()))
-    model = model or windows_model(env["USERPROFILE"])
-    rc = _run(windows_cmd(claude, model, not fresh), cwd=folder)
+    saved_model, saved_effort = windows_model_effort(env["USERPROFILE"])
+    model = model or saved_model
+    effort = saved_effort if effort is None else effort  # None: take the saved level
+    rc = _run(windows_cmd(claude, model, not fresh, effort), cwd=folder)
     if rc and not fresh:
-        rc = _run(windows_cmd(claude, model, False), cwd=folder)
+        rc = _run(windows_cmd(claude, model, False, effort), cwd=folder)
     return rc
 
 

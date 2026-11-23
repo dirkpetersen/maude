@@ -17,11 +17,13 @@ Projects are sorted by last change, newest first. After you close a project, the
 | Control | What it does |
 |---------|--------------|
 | Autostart | The TUI starts at every new terminal. Clear the box to opt out. This creates `~/.maude-tui-disabled`, and you get the text banner instead. |
-| Perplexity | Off by default. Saved in `~/.maude-perplexity`. When on, Maude adds the Perplexity Computer connector to Claude Code when you open a project, and runs `claude mcp login`. Clearing the box removes the connector. A connector that you added by hand is not touched while the box was never ticked. |
-| Claude model | `opus` (default), `fable`, `sonnet` or `haiku`. Saved in `~/.maude-model`. |
-| AI tool | `Claude Code` (default), `Kiro CLI`, `OpenCode` or `Crush`. Saved in `~/.maude-tool`. |
+| Clear History | Off by default. When ticked, the next project you open starts Claude Code with no earlier conversation (no `--continue`). It is reset after each launch. |
+| Perplexity MCP | Off by default. Saved in `~/.maude-perplexity`. When on, Maude adds the Perplexity Computer connector to Claude Code when you open a project, and runs `claude mcp login`. Clearing the box removes the connector. A connector that you added by hand is not touched while the box was never ticked. |
+| Model | `opus` (default), `fable`, `sonnet` or `haiku`. Saved in `~/.maude/maude-model` together with the thinking level (`opus,high`). |
+| AI tool | `Claude Code` (default), `Kiro CLI`, `OpenCode` or `Crush`. Saved in `~/.maude/maude-tool`. |
+| Thinking | `auto` (default, Claude Code decides), `low`, `medium`, `high`, `xhigh` or `max`. Passed to Claude Code as `--effort`. Saved as the second field of `~/.maude/maude-model`. |
 
-The Claude model applies to Claude Code only. The other tools start on their own default model. `fable` exists only in Claude Code. If you pick `fable`, Maude selects Claude Code. If you pick another tool while `fable` is set, Maude changes the model to `opus`.
+The model and thinking level apply to Claude Code only. The other tools start on their own default model. `fable` exists only in Claude Code. If you pick `fable`, Maude selects Claude Code. If you pick another tool while `fable` is set, Maude changes the model to `opus`.
 
 Kiro CLI asks for a device-code sign-in on first use. A missing tool is installed by `maude update`.
 

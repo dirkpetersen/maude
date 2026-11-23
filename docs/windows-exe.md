@@ -11,7 +11,7 @@ This is Windows mode of the TUI. It lists the projects of the Maude share (the s
 | TUI feature | On Windows (maude.exe) |
 |---|---|
 | Project list, New, Delete | Works on the share's `Projects` folder (Delete = soft delete to `Projects\.deleted`) plus the outside-sandbox projects (see next section). New always creates the folder in the share |
-| Model picker, AI tool picker, Clear context, Perplexity checkbox | Work. State files are in `%USERPROFILE%` (`.maude-model`, `.maude-tool`, `.maude-perplexity`) |
+| Model picker, Thinking picker, AI tool picker, Clear History, Perplexity MCP | Work. Model and tool are stored in `%USERPROFILE%\.maude\maude-model` (`<model>[,<thinking-level>]`, for example `opus,high`) and `%USERPROFILE%\.maude\maude-tool`, the same files as on Linux and macOS. An old `%USERPROFILE%\.maude-model` / .maude-tool is moved there once. A bad value falls back to `opus` / no level / `Claude Code`. The Perplexity flag is the file `%USERPROFILE%\.maude-perplexity`. Image paste into Claude Code works with Alt+V (the tip in the TUI says so) |
 | Open Project | Runs the selected AI tool natively on Windows in the project folder, OUTSIDE the sandbox, with normal permission prompts (see below) |
 | Command Line | Exits the TUI and returns to the PowerShell that started `maude.exe` (same as on Linux). Run `maude.exe` again to come back. |
 | Web UI (kanna), To Github, Setup Git(hub), Set Creds, Update Maude, Autostart | Hidden. They need the sandbox (bash helpers, ssh, gpg, `mom`, `.bashrc`, `fuser`, process groups, the `claude` wrapper). Use the sandbox for them |
@@ -21,7 +21,7 @@ Open Project runs these commands (working directory is the project folder):
 
 | Tool | Command |
 |---|---|
-| Claude Code | `claude --model <alias> --continue`; if that exits non-zero, `claude --model <alias>`. With Clear context only `claude --model <alias>` |
+| Claude Code | `claude --model <alias> --continue`; if that exits non-zero, `claude --model <alias>`. With a thinking level, `--effort <level>` follows the model. With Clear History only `claude --model <alias>` (plus `--effort`) |
 | Kiro CLI | `kiro-cli chat --resume` (then `kiro-cli chat` if that fails); fresh: `kiro-cli chat` |
 | OpenCode, Crush | `opencode --continue`, `crush --continue` (fresh: no flag) |
 
@@ -109,7 +109,7 @@ The sandbox is the default. Windows mode is a deliberate choice.
 | outside the share | `--windows` | Launches Claude Code directly in the folder (and registers it in the project list), no TUI |
 | outside the share | `--sandbox` | Not started. Prints that the folder must be moved into the share, exit code 2 |
 | inside the share | `--windows` | Windows mode too: an explicit choice is honoured even for a folder inside the share |
-| any | `--model <alias>` | Model override (`opus`, `sonnet`, `haiku`, `fable` or a full model name; letters, digits, `.`, `_`, `-` only; default: sandbox `~/.maude-model`, or `%USERPROFILE%\.maude-model` in Windows mode, else `opus`) |
+| any | `--model <alias>` | Model override (`opus`, `sonnet`, `haiku`, `fable` or a full model name; letters, digits, `.`, `_`, `-` only; default: sandbox `~/.maude/maude-model` (`<model>[,<level>]`; the level becomes `--effort`), or `%USERPROFILE%\.maude\maude-model` in Windows mode, else `opus`) |
 
 Windows mode runs `claude --model <alias> --continue` in the folder. If that exits non-zero it runs `claude --model <alias>`. It looks for `claude` on PATH, then `%USERPROFILE%\.local\bin\claude.exe`. It never passes `--dangerously-skip-permissions` or any bypass mode. If Claude Code is not found it prints `irm https://claude.ai/install.ps1 | iex` and exits with code 3. Folder mode installs nothing; only the TUI offers installs.
 

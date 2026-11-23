@@ -59,7 +59,7 @@ KANNA_CMD    = "kanna"
 KANNA_PORT   = 3210
 # Widgets hidden on Windows: only available inside the Maude sandbox.
 WIN_HIDDEN = ("#btn-web", "#btn-togithub", "#btn-github", "#btn-creds", "#btn-update",
-              "#autostart-label", "#autostart")
+              "#autostart")
 
 UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/maude.py"
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
@@ -67,10 +67,17 @@ UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 
 MODELS        = ("fable", "opus", "sonnet", "haiku")
 DEFAULT_MODEL = "opus"
-MODEL_FILE    = Path.home() / ".maude-model"
+STATE_DIR     = Path.home() / ".maude"
+MODEL_FILE    = STATE_DIR / "maude-model"   # "<model>[,<effort>]", e.g. "opus,high" or "opus"
+OLD_MODEL_FILE = Path.home() / ".maude-model"  # previous location, migrated on first read
 AI_TOOLS      = ("Claude Code", "Kiro CLI", "OpenCode", "Crush")
 DEFAULT_TOOL  = "Claude Code"
-TOOL_FILE     = Path.home() / ".maude-tool"
+TOOL_FILE     = STATE_DIR / "maude-tool"
+OLD_TOOL_FILE = Path.home() / ".maude-tool"
+# Claude Code `--effort <level>` (verified in `claude --help`); "" = Claude Code's own default.
+EFFORTS       = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORT = ""
+EFFORT_LABELS = ("auto",) + EFFORTS  # "auto" = Claude Code's own default (passes nothing)
 VERSION_FILE  = Path.home() / ".local" / "share" / "maude" / "version"
 
 LOGO = (
@@ -505,16 +512,32 @@ def remove_perplexity() -> None:
         pass
 
 
-def tool_command(tool: str, model: str, fresh: bool) -> list[str]:
+def tool_command(tool: str, model: str, fresh: bool, effort: str = "") -> list[str]:
     """Command line for an AI tool. Only Claude Code takes the model: the
     others have no stable alias mapping, so they start on their own default."""
     cont = [] if fresh else ["--continue"]
     return {
-        "Claude Code": ["claude", model, *cont],
+        "Claude Code": ["claude", model, *effort_args(effort), *cont],
         "Kiro CLI": ["kiro-cli", "chat", *([] if fresh else ["--resume"])],
         "OpenCode": ["opencode", *cont],
         "Crush": ["crush", *cont],
     }[tool]
+
+
+def effort_args(effort: str) -> list[str]:
+    """`--effort <level>` for a known level, else nothing (nothing unvalidated reaches a command line)."""
+    return ["--effort", effort] if effort in EFFORTS else []
+
+
+def parse_model_pref(raw: str) -> tuple[str, str]:
+    """"<model>[,<effort>]" -> (model, effort). Unknown model -> opus, unknown effort -> default."""
+    m, _, e = raw.strip().partition(",")
+    m, e = m.strip(), e.strip().lower()
+    return (m if m in MODELS else DEFAULT_MODEL, e if e in EFFORTS else DEFAULT_EFFORT)
+
+
+def format_model_pref(model: str, effort: str) -> str:
+    return f"{model},{effort}" if effort in EFFORTS else model
 
 
 def reconcile(model: str, tool: str, changed: str) -> tuple[str, str]:
@@ -538,7 +561,7 @@ def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
         subprocess.run(tool_command(tool, model, True), check=False)  # nothing to resume
 
 
-def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
+def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: str = "") -> None:
     """Windows: run the tool natively in the project folder, OUTSIDE the sandbox, with normal
     permission prompts (no bypass flag anywhere). Children go through mx._run so Ctrl+C
     never kills them."""
@@ -550,7 +573,7 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
                 input("Press Enter to go back. ")
                 return
         sync_perplexity()
-        rc = mx.run_windows(str(path), model, fresh=fresh)
+        rc = mx.run_windows(str(path), model, fresh=fresh, effort=effort)
         if rc == 3:  # claude missing: run_windows printed the install hint
             input("Press Enter to go back. ")
         return
@@ -565,7 +588,7 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
 
 
 def open_project(project_path: Path, model: str, *, fresh: bool = False,
-                 tool: str = DEFAULT_TOOL) -> None:
+                 tool: str = DEFAULT_TOOL, effort: str = "") -> None:
     """Launch the selected AI tool for a project (Claude Code by default).
 
     For Claude Code:
@@ -578,59 +601,105 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
     starts with no history.
     """
     if IS_WIN:  # no chdir: the TUI must not hold the folder (delete would fail); children get cwd=
-        _open_project_win(project_path, model, fresh, tool)
+        _open_project_win(project_path, model, fresh, tool, effort)
         return
     os.chdir(project_path)
     if tool != DEFAULT_TOOL:
         _open_other_tool(tool, model, fresh)
         return
     sync_perplexity()
+    eff = effort_args(effort)
     if fresh:
-        subprocess.run(["claude", model], check=False)
+        subprocess.run(["claude", model, *eff], check=False)
         return
-    ret = subprocess.run(["claude", model, "--continue"], check=False).returncode
+    ret = subprocess.run(["claude", model, *eff, "--continue"], check=False).returncode
     if ret != 0 and _has_claude_sessions(project_path):
-        ret = subprocess.run(["claude", model, "--resume"], check=False).returncode
+        ret = subprocess.run(["claude", model, *eff, "--resume"], check=False).returncode
     if ret != 0:
-        subprocess.run(["claude", model], check=False)
+        subprocess.run(["claude", model, *eff], check=False)
+
+
+def maude_dir() -> Path:
+    """~/.maude (Path.home(): %USERPROFILE% on Windows), created with mode 0700 if missing.
+    Shared by the model/tool state; credentials can move here too. Same on Linux, macOS and Windows."""
+    d = STATE_DIR
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)  # the mode has no effect on Windows
+    return d
+
+
+def _decode_state(raw: bytes) -> str:
+    """Tolerant text decode for state files: a UTF-16 BOM (PowerShell 5.1 `>`) is honoured, a UTF-8
+    BOM is dropped, and undecodable bytes are replaced (the value then simply fails validation)."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
+
+
+def _migrate_state(new: Path, old: Path) -> None:
+    """Move the legacy ~/.maude-model|tool into ~/.maude/ (only if the new file is missing)."""
+    try:
+        if not new.exists() and old.exists():
+            val = _decode_state(old.read_bytes())
+            maude_dir()
+            new.write_text(val, encoding="utf-8")
+            old.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _read_state(path: Path, old: Path) -> str:
+    _migrate_state(path, old)
+    try:
+        return _decode_state(path.read_bytes())
+    except (OSError, ValueError):
+        return ""
+
+
+def _write_state(path: Path, text: str) -> None:
+    try:
+        maude_dir()
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_model_effort() -> tuple[str, str]:
+    """Saved (model, effort) from ~/.maude/maude-model ("<model>[,<effort>]")."""
+    return parse_model_pref(_read_state(MODEL_FILE, OLD_MODEL_FILE))
+
+
+def _save_model_effort(model: str, effort: str) -> None:
+    _write_state(MODEL_FILE, format_model_pref(model, effort))
 
 
 def read_model() -> str:
     """Return the user's saved Claude model alias, or the default."""
-    try:
-        m = MODEL_FILE.read_text().strip()
-        if m in MODELS:
-            return m
-    except OSError:
-        pass
-    return DEFAULT_MODEL
+    return read_model_effort()[0]
+
+
+def read_effort() -> str:
+    return read_model_effort()[1]
 
 
 def save_model(name: str) -> None:
     if name in MODELS:
-        try:
-            MODEL_FILE.write_text(name)
-        except OSError:
-            pass
+        _save_model_effort(name, read_effort())
+
+
+def save_effort(effort: str) -> None:
+    if effort == "" or effort in EFFORTS:
+        _save_model_effort(read_model(), effort)
 
 
 def read_tool() -> str:
     """Return the user's saved AI tool, or the default."""
-    try:
-        t = TOOL_FILE.read_text().strip()
-        if t in AI_TOOLS:
-            return t
-    except OSError:
-        pass
-    return DEFAULT_TOOL
+    t = _read_state(TOOL_FILE, OLD_TOOL_FILE).strip()
+    return t if t in AI_TOOLS else DEFAULT_TOOL
 
 
 def save_tool(name: str) -> None:
     if name in AI_TOOLS:
-        try:
-            TOOL_FILE.write_text(name)
-        except OSError:
-            pass
+        _write_state(TOOL_FILE, name)
 
 
 def features(github: bool, outside: bool) -> str:
@@ -2932,8 +3001,8 @@ class MaudeApp(App):
     }
 
     #sidebar {
-        width: 40;
-        padding: 1 1;
+        width: 41;
+        padding: 0 1;
         background: #242424;
         border-right: solid #b87878;
     }
@@ -2942,16 +3011,16 @@ class MaudeApp(App):
         height: 5;
         color: #72c09a;
         text-style: bold;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     #divider {
         color: #6a5058;
         height: 1;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
-    #opts-row, #pick-row {
+    #pick-row {
         height: auto;
     }
 
@@ -2960,29 +3029,26 @@ class MaudeApp(App):
         height: auto;
     }
 
-    #autostart-label, #perplexity-label {
-        color: #c09898;
-        margin-top: 0;
-        margin-bottom: 0;
+    /* three pickers share the sidebar width: model | AI tool | thinking */
+    #pick-row #model-col { width: 11; }
+    #pick-row #tool-col  { width: 16; }
+    #pick-row #effort-col { width: 11; }
+
+    /* Compact one-line toggles: box left of the label, no border/padding, all in one column. */
+    #sidebar Checkbox {
+        border: none;
+        padding: 0;
+        margin: 0;
+        height: 1;
+        width: 100%;
     }
 
-    #perplexity, #autostart {
-        margin-top: 0;
-        margin-bottom: 0;
+    #sidebar Checkbox:focus {
+        border: none;
     }
 
     #maude-version {
         color: #6a5058;
-        margin-top: 1;
-    }
-
-    #fresh-label {
-        color: #c09898;
-        margin-top: 1;
-        margin-bottom: 0;
-    }
-
-    #fresh-context {
         margin-top: 0;
     }
 
@@ -2990,7 +3056,7 @@ class MaudeApp(App):
         color: #6a5058;
         height: 1;
         margin-top: 1;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     #tips-title {
@@ -3007,23 +3073,23 @@ class MaudeApp(App):
         color: #6a5058;
         height: 1;
         margin-top: 1;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
-    #model-label, #tool-label {
+    #model-label, #tool-label, #effort-label {
         color: #d4a0a0;
         text-style: bold;
         margin-bottom: 0;
     }
 
-    #model-select, #tool-select {
+    #model-select, #tool-select, #effort-select {
         background: #242424;
         border: none;
         padding: 0;
         height: auto;
     }
 
-    #model-select:focus-within, #tool-select:focus-within {
+    #model-select:focus-within, #tool-select:focus-within, #effort-select:focus-within {
         background: #2a2424;
     }
 
@@ -3510,7 +3576,8 @@ class MaudeApp(App):
         self._bar_on = False  # the warning bar (#win-warning) is active
         self._tool = read_tool()
         want = model if model in MODELS else ""
-        model = want or read_model()
+        saved_model, self._effort = read_model_effort()
+        model = want or saved_model
         self._model, self._tool = reconcile(model, self._tool, "model" if want else "tool")
         if want:
             save_model(self._model)
@@ -3527,32 +3594,32 @@ class MaudeApp(App):
                 yield Label("Tips", id="tips-title")
                 yield Static(
                     "Screen split:  Alt+Shift+Plus | Minus\n"
-                    "Share image:   drop into ~/Maude\n"
+                    + ("Paste image:   Alt+V\n" if IS_WIN else "Share image:   drop into ~/Maude\n") +
                     "Voice dictate: Win+H (Windows mic)",
                     id="tips",
                 )
                 yield Static("─" * 28, id="divider2")
                 with Horizontal(id="pick-row"):
-                    with Vertical(classes="opt-col"):
-                        yield Label("Claude model", id="model-label")
+                    with Vertical(classes="opt-col", id="model-col"):
+                        yield Label("Model", id="model-label")
                         with RadioSet(id="model-select"):
                             for m in MODELS:
                                 yield RadioButton(m, value=(m == self._model))
-                    with Vertical(classes="opt-col"):
+                    with Vertical(classes="opt-col", id="tool-col"):
                         yield Label("AI tool", id="tool-label")
                         with RadioSet(id="tool-select"):
                             for t in AI_TOOLS:
                                 yield RadioButton(t, value=(t == self._tool))
-                yield Label("Clear context (no history)", id="fresh-label")
-                yield Checkbox("", value=False, id="fresh-context")
+                    with Vertical(classes="opt-col", id="effort-col"):
+                        yield Label("Thinking", id="effort-label")
+                        with RadioSet(id="effort-select"):
+                            for e in EFFORT_LABELS:
+                                yield RadioButton(e, value=(e == (self._effort or "auto")))
                 yield Static("─" * 28, id="divider3")
-                with Horizontal(id="opts-row"):
-                    with Vertical(classes="opt-col"):
-                        yield Label("Autostart", id="autostart-label")
-                        yield Checkbox("", value=not DISABLE_FLAG.exists(), id="autostart")
-                    with Vertical(classes="opt-col"):
-                        yield Label("Perplexity", id="perplexity-label")
-                        yield Checkbox("", value=PERPLEXITY_FLAG.exists(), id="perplexity")
+                # One column of one-line checkboxes (box to the left of the label), boxes aligned.
+                yield Checkbox("Clear History", value=False, id="fresh-context")
+                yield Checkbox("Perplexity MCP", value=PERPLEXITY_FLAG.exists(), id="perplexity")
+                yield Checkbox("Autostart", value=not DISABLE_FLAG.exists(), id="autostart")
                 yield Static(
                     Text.assemble(
                         ("  maude ", "#505050"),
@@ -3609,6 +3676,7 @@ class MaudeApp(App):
     def _sync_model_cursor(self) -> None:
         self._sync_cursor("#model-select", MODELS, self._model)
         self._sync_cursor("#tool-select", AI_TOOLS, self._tool)
+        self._sync_cursor("#effort-select", EFFORT_LABELS, self._effort or "auto")
 
     def _sync_cursor(self, sel: str, items: tuple, value: str) -> None:
         try:
@@ -3941,6 +4009,16 @@ class MaudeApp(App):
             self._press("#tool-select", AI_TOOLS, tool)
         self.query_one("#projects-table", DataTable).focus()
 
+    @on(RadioSet.Changed, "#effort-select")
+    def effort_changed(self, event: RadioSet.Changed) -> None:
+        label = str(event.pressed.label)
+        new = "" if label == "auto" else label
+        if new == self._effort:
+            return
+        self._effort = new
+        save_effort(new)
+        self.query_one("#projects-table", DataTable).focus()
+
     @on(RadioSet.Changed, "#tool-select")
     def tool_changed(self, event: RadioSet.Changed) -> None:
         new = str(event.pressed.label)
@@ -4005,7 +4083,7 @@ class MaudeApp(App):
                 fresh = False
         self._register_selected(path)
         with self.suspend():
-            open_project(path, self._model, fresh=fresh, tool=self._tool)
+            open_project(path, self._model, fresh=fresh, tool=self._tool, effort=self._effort)
         # Auto-clear the checkbox after use — fresh-context is a one-shot
         # exception; the default is always to resume with history.
         if fresh:

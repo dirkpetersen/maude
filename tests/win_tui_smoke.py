@@ -223,6 +223,69 @@ try:
         asyncio.run(check_bar())
     finally:
         maude.open_project = orig_open
+    # Picker state lives in <home>/.maude/maude-model|maude-tool (all platforms): loaded at startup, written on change.
+    sd = home / ".maude"; mf, tf = sd / "maude-model", sd / "maude-tool"
+    sd.mkdir(exist_ok=True); mf.write_text("sonnet,high\n"); tf.write_text("Kiro CLI")
+    (home / ".maude-model").write_text("haiku")  # legacy file must lose against the new file
+    async def check_files():
+        from textual.widgets import RadioButton, Static
+        async with maude.MaudeApp().run_test(size=(120, 35)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            lit = lambda sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
+            assert lit("#model-select") == ["sonnet"] and lit("#tool-select") == ["Kiro CLI"], (lit("#model-select"), lit("#tool-select"))
+            assert lit("#effort-select") == ["high"], lit("#effort-select")
+            # Layout at a typical 120x35 terminal: every picker and the toggles sit fully inside the sidebar.
+            side = app.query_one("#sidebar").region
+            for i in ("#model-select", "#tool-select", "#effort-select", "#fresh-context", "#perplexity", "#maude-version"):
+                r = app.query_one(i).region
+                assert r.height > 0 and r.y >= side.y and r.bottom <= side.bottom and r.right <= side.right, (i, r, side)
+            # Toggles: one line each, box left of the label, same x, Perplexity MCP directly under Clear History.
+            from textual.widgets import Checkbox
+            fresh, perp = app.query_one("#fresh-context", Checkbox), app.query_one("#perplexity", Checkbox)
+            assert str(fresh.label) == "Clear History" and str(perp.label) == "Perplexity MCP", (fresh.label, perp.label)
+            assert not app.query_one("#autostart").display            # Windows: no Autostart
+            for cb in (fresh, perp):
+                assert cb.region.height == 1 and cb.region.x == fresh.region.x, (cb.id, cb.region)
+            assert perp.region.y == fresh.region.y + 1, (fresh.region, perp.region)
+            assert [w.id for w in app.query_one("#sidebar").children if isinstance(w, Checkbox)] == ["fresh-context", "perplexity", "autostart"]
+            # Linux sandbox layout (Autostart shown): same column, one more row, still inside the sidebar.
+            try:
+                app.query_one("#autostart").display = True
+                await pilot.pause()
+                auto = app.query_one("#autostart", Checkbox)
+                assert str(auto.label) == "Autostart" and auto.region.height == 1 and auto.region.x == fresh.region.x, auto.region
+                assert auto.region.y == perp.region.y + 1 and auto.region.bottom <= side.bottom, (auto.region, side)
+                assert app.query_one("#maude-version").region.bottom <= side.bottom
+            finally:
+                app.query_one("#autostart").display = False
+            assert [str(b.label) for b in app.query_one("#effort-select").query(RadioButton)] == ["auto", "low", "medium", "high", "xhigh", "max"]
+            tips = str(app.query_one("#tips", Static).render())
+            assert "Alt+V" in tips and "Paste image" in tips and "drop" not in tips, tips
+            await pilot.click(app.query_one("#model-select").query(RadioButton)[3]); await pilot.pause()
+            await pilot.click(app.query_one("#tool-select").query(RadioButton)[3]); await pilot.pause()
+            assert mf.read_text() == "haiku,high" and tf.read_text() == "Crush", (mf.read_text(), tf.read_text())  # model change keeps the level
+            await pilot.click(app.query_one("#effort-select").query(RadioButton)[4]); await pilot.pause()
+            assert mf.read_text() == "haiku,xhigh", mf.read_text()
+            await pilot.click(app.query_one("#effort-select").query(RadioButton)[0]); await pilot.pause()
+            assert mf.read_text() == "haiku", mf.read_text()                       # auto = model alone
+            await pilot.click(app.query_one("#effort-select").query(RadioButton)[2]); await pilot.pause()
+            assert mf.read_text() == "haiku,medium", mf.read_text()
+    asyncio.run(check_files())
+    assert maude.EFFORTS == mx.EFFORTS
+    assert (home / ".maude-model").read_text() == "haiku"  # the legacy file was never touched while the new one existed
+    # Legacy files: moved once into ~/.maude, then deleted. Bad values: defaults.
+    mf.unlink(); tf.unlink()
+    assert maude.read_model() == "haiku" and mf.read_text() == "haiku" and not (home / ".maude-model").exists()
+    (home / ".maude-tool").write_text("Crush\n")
+    assert maude.read_tool() == "Crush" and tf.read_text().strip() == "Crush" and not (home / ".maude-tool").exists()
+    tf.write_text("Bogus"); assert maude.read_tool() == "Claude Code"
+    mf.write_text("sonnet,bogus"); assert maude.read_model_effort() == ("sonnet", "")
+    mf.write_text("opus,max"); assert maude.read_model_effort() == ("opus", "max")
+    mf.write_text("nope,high"); assert maude.read_model_effort() == ("opus", "high")
+    mf.unlink(); tf.unlink()
+    assert maude.read_model_effort() == ("opus", "") and maude.read_tool() == "Claude Code"   # nothing saved
+    assert maude.maude_dir() == sd and sd.is_dir()
 
     # Three modes: Windows mode with a sandbox (caption) and without one (no caption); the logo is red in both.
     reds = {f"bold {c}" for c in maude._LOGO_GRADIENT_WIN}
@@ -263,6 +326,12 @@ try:
     maude.open_project(proj, "sonnet", fresh=True)
     assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
+    calls.clear()
+    maude.open_project(proj, "sonnet", fresh=False, effort="high")
+    maude.open_project(proj, "sonnet", fresh=True, effort="x;id")
+    assert calls == [(["C:/c.exe", "--model", "sonnet", "--effort", "high", "--continue"], str(proj)),
+                     (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
+    calls[:] = [calls[0], calls[1]]
     assert not any("skip" in a or "bypass" in a for c, _ in calls for a in c)
     # Missing non-Claude tool: install offered (declined here), nothing is run, TUI gets control back.
     calls.clear()

@@ -126,6 +126,8 @@ assert_contains "banner with sandbox" "OUTSIDE the sandbox in C:\\x" "$(py "m.ba
 assert_eq "banner without sandbox" "Maude: running on Windows in C:\\x. Maude's AI agents have your full Windows user rights here." "$(py "m.banner_text(r'C:\\x', False)")"
 assert_eq "windows cmd continue" "['C:/c.exe', '--model', 'opus', '--continue']" "$(py "m.windows_cmd(r'C:/c.exe','opus',True)")"
 assert_eq "windows cmd fallback" "['C:/c.exe', '--model', 'sonnet']" "$(py "m.windows_cmd(r'C:/c.exe','sonnet',False)")"
+assert_eq "windows cmd effort" "['C:/c.exe', '--model', 'opus', '--effort', 'high', '--continue']" "$(py "m.windows_cmd(r'C:/c.exe','opus',True,'high')")"
+assert_eq "windows cmd bad effort dropped" "['C:/c.exe', '--model', 'opus']" "$(py "m.windows_cmd(r'C:/c.exe','opus',False,'x;id')")"
 assert_eq "no bypass flag" 0 "$(py "int(any('skip' in a or 'bypass' in a for a in m.windows_cmd('c','opus',True)))")"
 assert_eq "sandbox cmd" "['wsl.exe', '-d', 'Maude', '--cd', '~/Maude/p', '-e', '/usr/bin/env', 'MAUDE_WELCOMED=1', 'bash', '-lc', m.OPEN_SH, 'maude', 'fable']" "$(py "str(m.sandbox_cmd('~/Maude/p','fable')).replace(repr(m.OPEN_SH),'m.OPEN_SH')")"
 for ok in opus fable sonnet haiku claude-opus-4-5 sonnet-4.5; do assert_eq "model ok $ok" True "$(py "m.valid_model('$ok')")"; done
@@ -511,5 +513,97 @@ assert_eq "git: another winget error is not retried" "flag" "$(wr_run other)"
 
 # find_tool looks in the Kiro per-user folder too
 assert_eq "find_tool kiro localappdata" 'K' "$(py "m.find_tool('kiro-cli', {'USERPROFILE': r'C:\\u', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: 'K' if path == r'C:\\L\\Programs\\Kiro-Cli' else None)")"
+
+# Picker state in <home>/.maude/maude-model|maude-tool on every platform (no registry): read, validation, migration
+PREF_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" 2>/dev/null <<'PY'
+import sys, os, tempfile, shutil, stat
+sys.path.insert(0, sys.argv[1])
+import maude_exe as m
+out = []
+d = tempfile.mkdtemp()
+try:
+    rd = lambda home, n, old: m.read_state(home, n, old)
+    out.append(repr(m.windows_model_effort(d)))                 # nothing anywhere -> defaults
+    os.makedirs(os.path.join(d, ".maude"))
+    mf = os.path.join(d, ".maude", "maude-model")
+    for raw in ("sonnet,high\n", "claude-opus-4-5,turbo", "haiku,", "x;id,max", "fable , MAX ", ""):
+        with open(mf, "w") as f: f.write(raw)
+        out.append(repr(m.windows_model_effort(d)))
+    out.append(m.windows_model(d))
+    # legacy ~/.maude-model: value moved into the new file, old one deleted
+    os.remove(mf)
+    with open(os.path.join(d, ".maude-model"), "w") as f: f.write("sonnet,low\n")
+    out.append(repr(m.windows_model_effort(d)))
+    out.append(open(mf).read().strip())
+    out.append(str(os.path.exists(os.path.join(d, ".maude-model"))))
+    # a present new file wins and the legacy file is left alone
+    with open(os.path.join(d, ".maude-model"), "w") as f: f.write("opus")
+    out.append(repr(m.windows_model_effort(d)))
+    out.append(str(os.path.exists(os.path.join(d, ".maude-model"))))
+    # maude_dir creates ~/.maude with 0700 (POSIX only)
+    d2 = tempfile.mkdtemp()
+    try:
+        p2 = m.maude_dir(d2)
+        out.append(str(p2 == __import__("pathlib").Path(d2) / ".maude" and p2.is_dir()))
+        out.append(oct(stat.S_IMODE(os.stat(p2).st_mode)) if os.name != "nt" else "0o700")
+        out.append(str(m.maude_dir(d2) == p2))                  # second call is a no-op
+    finally:
+        shutil.rmtree(d2, ignore_errors=True)
+    # undecodable / UTF-16 (PowerShell 5.1 redirection) / UTF-8-BOM state files never crash
+    d3 = tempfile.mkdtemp()
+    try:
+        os.makedirs(os.path.join(d3, ".maude"))
+        f3 = os.path.join(d3, ".maude", "maude-model")
+        for raw in (b"\xff\xfe\x00\xd8", b"\xff", "opus,high\r\n".encode("utf-16"), "\ufeffsonnet,low".encode("utf-8"), b"opus,max\r\n"):
+            with open(f3, "wb") as f: f.write(raw)
+            out.append(repr(m.windows_model_effort(d3)))
+        os.remove(f3)
+        with open(os.path.join(d3, ".maude-model"), "wb") as f: f.write("haiku,low".encode("utf-16"))
+        out.append(repr(m.windows_model_effort(d3)))               # UTF-16 legacy file migrates
+        out.append(str(os.path.exists(os.path.join(d3, ".maude-model"))))
+        os.remove(f3)
+        with open(os.path.join(d3, ".maude-model"), "wb") as f: f.write(b"\xff\xfe\xff")
+        out.append(repr(m.windows_model_effort(d3)))               # undecodable legacy file: no crash
+    finally:
+        shutil.rmtree(d3, ignore_errors=True)
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+print("|".join(out))
+PY
+)"
+assert_eq "state files: read, validation, migration" "('opus', '')|('sonnet', 'high')|('claude-opus-4-5', '')|('haiku', '')|('opus', 'max')|('fable', 'max')|('opus', '')|opus|('sonnet', 'low')|sonnet,low|False|('sonnet', 'low')|True|True|0o700|True|('opus', '')|('opus', '')|('opus', 'high')|('sonnet', 'low')|('opus', 'max')|('haiku', 'low')|False|('opus', '')" "$PREF_OUT"
+
+# OPEN_SH: reads ~/.maude/maude-model ("<model>[,<effort>]"), old file as fallback; fake claude echoes its args
+OSH_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" 2>/dev/null <<'PY'
+import sys, os, subprocess, tempfile, shutil
+sys.path.insert(0, sys.argv[1])
+import maude_exe as m
+d = tempfile.mkdtemp()
+try:
+    home = os.path.join(d, "h"); os.makedirs(os.path.join(home, ".maude")); os.makedirs(os.path.join(d, "bin"))
+    cl = os.path.join(d, "bin", "claude")
+    with open(cl, "w") as f: f.write('#!/bin/bash\necho "claude $*"\nexit 1\n')  # always fails -> fallback runs too
+    os.chmod(cl, 0o755)
+    env = dict(os.environ, HOME=home, PATH=os.path.join(d, "bin") + os.pathsep + os.environ["PATH"])
+    def run(*arg):
+        r = subprocess.run(["bash", "-c", m.OPEN_SH, "maude", *arg], env=env, capture_output=True, text=True)
+        return r.stdout.replace("\n", ";")
+    new, old = os.path.join(home, ".maude", "maude-model"), os.path.join(home, ".maude-model")
+    out = [run()]                                              # nothing -> opus
+    open(old, "w").write("haiku\n"); out.append(run())          # old file fallback
+    open(new, "w").write("sonnet,high\n"); out.append(run())    # new file with effort wins
+    open(new, "w").write("fable"); out.append(run())           # model only
+    open(new, "w").write("opus,turbo"); out.append(run())      # bad effort dropped
+    open(new, "w").write("x;touch pwn,max"); out.append(run()) # bad model -> opus, effort kept
+    out.append(run("haiku"))                                   # override model keeps the saved effort
+    open(new, "wb").write(b"sonnet\r\n"); out.append(run())     # CRLF written by Windows tools
+    open(new, "wb").write(b"opus,max\r\n"); out.append(run())
+    out.append(str(os.path.exists(os.path.join(d, "pwn")) or os.path.exists(os.path.join(home, "pwn"))))
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+print("|".join(out))
+PY
+)"
+assert_eq "OPEN_SH reads model,effort" "claude opus --continue;claude opus;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude opus --effort max --continue;claude opus --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False" "$OSH_OUT"
 
 suite_summary
