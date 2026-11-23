@@ -198,10 +198,25 @@ build-vm-vmware: packer-init ## Build VMware image only (.ova)
 
 # ── Release ───────────────────────────────────────────────────────────────────
 .PHONY: release tag
+tag: export VERSION := $(VERSION)
 tag: ## Create and push a version tag (e.g. make tag VERSION=v0.1.0)
-	@[[ "$(VERSION)" == v* ]] || { echo "VERSION must start with 'v' (e.g. v0.1.0)"; exit 1; }
-	git tag -a "$(VERSION)" -m "Release $(VERSION)"
-	git push origin "$(VERSION)"
+	@[[ "$$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$$ ]] || { echo "VERSION must look like vX.Y.Z (e.g. v0.1.0)"; exit 1; }
+	@[[ "$$(git symbolic-ref --short -q HEAD)" == main ]] || { echo "make tag must run from branch 'main' (not detached/other)"; exit 1; }
+	@[[ -z "$$(git status --porcelain --untracked-files=no)" ]] || { echo "Tracked files have uncommitted changes; commit or stash them first (the release commit must contain only checksums.txt)"; exit 1; }
+	@! git rev-parse -q --verify "refs/tags/$$VERSION" >/dev/null || { echo "Tag $$VERSION already exists locally"; exit 1; }
+	@[[ -z "$$(git ls-remote --tags origin "refs/tags/$$VERSION")" ]] || { echo "Tag $$VERSION already exists on origin"; exit 1; }
+	@git fetch -q origin main || { echo "git fetch origin main failed"; exit 1; }
+	@[[ "$$(git rev-list --count HEAD..origin/main)" == 0 ]] || { echo "HEAD is behind origin/main; pull first"; exit 1; }
+	bash scripts/gen-checksums.sh
+	git add light/checksums.txt
+	@if git diff --cached --quiet -- light/checksums.txt; then \
+		echo "light/checksums.txt already up to date"; \
+	else \
+		git commit -m "chore(release): checksums for $$VERSION" -- light/checksums.txt; \
+	fi
+	git push origin main
+	git tag -a "$$VERSION" -m "Release $$VERSION"
+	git push origin "$$VERSION"
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 .PHONY: clean
