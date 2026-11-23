@@ -67,7 +67,7 @@ FEATURES = {
     "web":       {"linux-sandbox": True, "windows": False, "macos": False},
     "togithub":  {"linux-sandbox": True, "windows": False, "macos": False},
     "github":    {"linux-sandbox": True, "windows": False, "macos": False},  # Setup Git(hub)
-    "creds":     {"linux-sandbox": True, "windows": False, "macos": False},
+    "creds":     {"linux-sandbox": True, "windows": True,  "macos": True},   # Set Creds -> ~/.maude/clauderc
     "update":    {"linux-sandbox": True, "windows": False, "macos": False},
     "autostart": {"linux-sandbox": True, "windows": False, "macos": False},
 }
@@ -78,6 +78,11 @@ FEATURE_WIDGETS = {"web": "#btn-web", "togithub": "#btn-togithub", "github": "#b
 def current_platform() -> str:
     """PLATFORM, re-derived from IS_WIN/IS_MAC so tests that force those flags are honoured."""
     return "windows" if IS_WIN else "macos" if IS_MAC else "linux-sandbox"
+
+
+def is_native() -> bool:
+    """Running on the host OS (Windows/macOS), not in the sandbox. Honours forced IS_WIN/IS_MAC like current_platform()."""
+    return current_platform() != "linux-sandbox"
 
 
 def feature_on(name: str) -> bool:
@@ -224,16 +229,137 @@ def plat_real_claude() -> str:
     return (plat_tool("claude") or "claude") if IS_MAC else "claude"
 
 
+def clauderc_path(create: bool = False) -> Path:
+    """The one place Claude credentials (`export K="V"` lines) live.
+    Sandbox: ~/.azure/clauderc (read by the ~/bin/claude wrapper). Windows/macOS: ~/.maude/clauderc
+    (there is no wrapper; Maude itself loads it, see plat_claude_env). create=True makes ~/.maude
+    (mode 0700) through maude_dir(); reads must not create anything."""
+    if current_platform() == "linux-sandbox":
+        return Path.home() / ".azure" / "clauderc"
+    return (maude_dir() if create else STATE_DIR) / "clauderc"
+
+
+def clauderc_inactive_path() -> Path:
+    """Where clauderc is parked while "Default to AWS Bedrock" is on (same toggle on every platform)."""
+    p = clauderc_path()
+    return p.with_name(p.name + ".inactive")
+
+
+_BEDROCK_PROFILE_RE = re.compile(r"^\[(profile\s+)?bedrock\]", re.MULTILINE)
+_DUMMY_API_KEY = "sk-ant-dummy"
+
+
+def claude_env_from(rc: dict, environ, logged_in: bool, aws_config: str, parked_bedrock: bool = False) -> dict:
+    """The environment the ~/bin/claude wrapper would give Claude Code, for Windows/macOS (no wrapper).
+    Pure. `rc` = parsed clauderc, `environ` = ambient env, `logged_in` = a native claude.ai login
+    exists, `aws_config` = text of ~/.aws/config, `parked_bedrock` = clauderc is parked as .inactive
+    because the user made Bedrock the default (that is a Maude-saved state too). Result: the clauderc
+    exports plus what the wrapper sets in the same order of precedence (custom ANTHROPIC_BASE_URL,
+    native login, Foundry, Bedrock). Applies ONLY to a Maude-saved state: with no clauderc (and nothing
+    parked) the result is {} and the child inherits the environment unchanged; ambient files alone
+    (~/.aws/config, a login whose Keychain token cannot be read) never select a backend. Bedrock counts
+    only when the user saved it through Set Creds (CLAUDE_CODE_USE_BEDROCK=1 in the clauderc, or parked).
+    A value of None means "remove this variable". Model ids are not set: the wrapper pins ids that
+    change with every release, Claude Code's own defaults apply."""
+    if not rc and not parked_bedrock:
+        return {}
+    env: dict = dict(rc)
+    merged = {**environ, **rc}  # the wrapper sources clauderc over the environment
+
+    def set_(k: str, v) -> None:
+        if v is None:
+            if k in merged:
+                env[k] = None
+        else:
+            env[k] = v
+
+    if merged.get("ANTHROPIC_BASE_URL"):  # custom endpoint: no cloud backend
+        for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY"):
+            if k in merged:
+                set_(k, "0")
+        if not str(merged.get("ANTHROPIC_API_KEY", "")).startswith("sk-ant-"):
+            env["ANTHROPIC_API_KEY"] = _DUMMY_API_KEY
+    elif logged_in:  # native login wins: clear every cloud setting
+        for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
+            set_(k, None)
+        for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY"):
+            if k in merged:
+                set_(k, "0")
+    elif merged.get("CLAUDE_CODE_USE_FOUNDRY") == "1":
+        url, key = merged.get("ANTHROPIC_FOUNDRY_BASE_URL"), merged.get("ANTHROPIC_FOUNDRY_API_KEY")
+        if url and key:  # incomplete: the wrapper would refuse to start, we just add nothing
+            env["ANTHROPIC_BASE_URL"] = url
+            env["ANTHROPIC_API_KEY"] = _DUMMY_API_KEY
+            env["CLAUDE_CODE_USE_BEDROCK"] = "0"
+    elif (rc.get("CLAUDE_CODE_USE_BEDROCK") == "1" or parked_bedrock) and _BEDROCK_PROFILE_RE.search(aws_config):
+        env.update(CLAUDE_CODE_USE_BEDROCK="1", CLAUDE_CODE_USE_FOUNDRY="0",
+                   AWS_DEFAULT_REGION="us-west-2", AWS_PROFILE="bedrock")
+        set_("ANTHROPIC_API_KEY", None)
+    return env
+
+
+def _decode_text_strict(raw: bytes) -> str:
+    """UTF-8, UTF-8 with BOM or UTF-16 (BOM) text. Raises ValueError (UnicodeDecodeError) when the
+    bytes are none of those, so a caller never mistakes an undecodable file for an empty one."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    return raw.decode("utf-8-sig")
+
+
+def read_clauderc(path: Path | None = None) -> dict:
+    """Parsed clauderc ({} when missing or unreadable or undecodable). The parked .inactive file is
+    a different name, so it is never read here."""
+    try:
+        return parse_clauderc(_decode_text_strict((path or clauderc_path()).read_bytes()))
+    except (OSError, ValueError):
+        return {}
+
+
 def plat_claude_env() -> dict:
-    """Extra environment for every AI tool Maude starts. Empty everywhere for now (the credentials
-    package fills it in for Windows/macOS)."""
-    return {}
+    """Extra environment for Claude Code (None value = remove the variable).
+    Sandbox: {} (the ~/bin/claude wrapper does this). Windows/macOS: clauderc + wrapper rules,
+    only when a clauderc exists (see claude_env_from)."""
+    if current_platform() == "linux-sandbox":
+        return {}
+    rc = read_clauderc()
+    inactive = clauderc_inactive_path()
+    parked = False
+    if not rc and not clauderc_path().exists() and inactive.exists():
+        parked = read_clauderc(inactive).get("CLAUDE_CODE_USE_BEDROCK") == "1"
+    if not rc and not parked:
+        return {}
+    try:
+        aws = AWS_CONFIG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        aws = ""
+    return claude_env_from(rc, os.environ, have_claude_login(), aws, parked)
 
 
-def _child_env() -> dict | None:
-    """env= for child processes: None (inherit) unless claude_env() has something to add."""
-    extra = plat_claude_env()
-    return {**os.environ, **extra} if extra else None
+def plat_tool_env() -> dict:
+    """Extra environment for the non-Claude tools (Kiro, OpenCode, Crush): the raw clauderc exports
+    only, no wrapper rewrites (no dummy key, no login stripping)."""
+    return {} if current_platform() == "linux-sandbox" else read_clauderc()
+
+
+def _child_env(tools: bool = False) -> dict | None:
+    """env= for child processes: None (inherit) unless there is something to add.
+    tools=True: for Kiro/OpenCode/Crush (raw clauderc exports), else for Claude Code."""
+    extra = plat_tool_env() if tools else plat_claude_env()
+    if not extra:
+        return None
+    env = dict(os.environ)
+    for k, v in extra.items():
+        if IS_WIN:  # Windows names are case-insensitive: drop any differently-cased twin
+            for e in [e for e in env if e.upper() == k.upper()]:
+                del env[e]
+        else:
+            env.pop(k, None)
+        if v is not None:
+            env[k] = v
+    return env
+
+if IS_WIN:
+    mx.child_env = _child_env  # maude_exe.run_windows (Explorer / --windows route) picks up the same env
 
 
 def plat_open_url(url: str) -> bool:
@@ -511,8 +637,43 @@ def have_claude_login() -> bool:
     # type() not isinstance(): bool is a subclass of int, and a JSON `true`
     # here must mean "can't tell", not "expired at 1ms epoch".
     if type(expires_ms) in (int, float) and expires_ms > 0:
-        return expires_ms > time.time() * 1000
+        now_ms = time.time() * 1000
+        if expires_ms > now_ms:
+            return True
+        # The access token is short-lived and lapses several times a day; Claude Code refreshes it
+        # silently while the refresh token is valid (same rule as the wrapper's _is_claude_logged_in).
+        if not oauth.get("refreshToken"):
+            return False
+        refresh_exp = oauth.get("refreshTokenExpiresAt")
+        if type(refresh_exp) in (int, float) and refresh_exp > 0:
+            return refresh_exp > now_ms
+        return True
     return True
+
+
+NATIVE_CRED_ENV = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX",
+                   "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")  # also count as configured on Windows/macOS
+
+
+def credentials_configured() -> bool:
+    """True if any non-login credentials are configured (env vars, ~/.aws/credentials, clauderc)."""
+    # Azure AI Foundry
+    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
+        return True
+    # Anthropic direct
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    if is_native() and any(os.environ.get(k) for k in NATIVE_CRED_ENV):
+        return True
+    # AWS Bedrock
+    aws_creds = Path.home() / ".aws" / "credentials"
+    if aws_creds.exists() and aws_creds.stat().st_size > 0:
+        return True
+    # clauderc (sandbox: ~/.azure/clauderc, Windows/macOS: ~/.maude/clauderc)
+    rc = clauderc_path()
+    if rc.exists() and rc.stat().st_size > 0:
+        return True
+    return False
 
 
 def check_credentials() -> bool:
@@ -520,21 +681,53 @@ def check_credentials() -> bool:
     # Native claude.ai login (claude /login)
     if have_claude_login():
         return True
-    # Azure AI Foundry
-    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
-        return True
-    # Anthropic direct
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    # AWS Bedrock
-    aws_creds = Path.home() / ".aws" / "credentials"
-    if aws_creds.exists() and aws_creds.stat().st_size > 0:
-        return True
-    # Azure clauderc
-    azure_rc = Path.home() / ".azure" / "clauderc"
-    if azure_rc.exists() and azure_rc.stat().st_size > 0:
-        return True
-    return False
+    return credentials_configured()
+
+
+_LOGIN_OK = [False]  # a True answer of `claude auth status` is remembered for the session
+
+
+def claude_login_status(timeout: float = 10.0) -> bool | None:
+    """Windows/macOS fallback when ~/.claude/.credentials.json does not show a login (macOS keeps the
+    token in the Keychain): `claude auth status` (JSON, verified in `claude auth --help`). True/False
+    when claude answered, None when it could not be asked (missing, timeout, unparseable)."""
+    try:
+        r = subprocess.run([plat_real_claude(), "auth", "status", "--json"], capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
+        data = json.loads(r.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    flag = data.get("loggedIn") if isinstance(data, dict) else None
+    if flag is True:
+        _LOGIN_OK[0] = True
+    return flag if isinstance(flag, bool) else None
+
+
+def creds_gate_decision(native: bool, login_file: bool, configured: bool, status) -> bool:
+    """True = the credential gate (CredsEntryScreen) shows before a project opens.
+    Sandbox: whenever nothing is configured. Windows/macOS: never on a login file, configured
+    credentials or a status that says logged in; and not when the status could not be determined
+    (None): only when claude itself answered "not logged in". Even then the screen can be
+    cancelled and the project still opens (see _on_creds_for_project)."""
+    if login_file or configured or status is True:
+        return False
+    return True if not native else status is False
+
+
+def creds_gate_precheck():
+    """The cheap part of the gate (no process spawned): False = no gate, True = show the gate,
+    None = Windows/macOS and only `claude auth status` can tell (ask it off the UI thread)."""
+    if have_claude_login() or credentials_configured() or (is_native() and _LOGIN_OK[0]):
+        return False
+    return None if is_native() else True
+
+
+def creds_gate_blocks() -> bool:
+    """Blocking variant (tests, scripts): the precheck, then `claude auth status` when needed."""
+    pre = creds_gate_precheck()
+    if pre is not None:
+        return pre
+    return creds_gate_decision(True, False, False, claude_login_status())
 
 
 _GIT_SECTION = re.compile(r'^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\](.*)$')
@@ -897,7 +1090,7 @@ def reconcile(model: str, tool: str, changed: str) -> tuple[str, str]:
 
 def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
     cmd = tool_command(tool, model, fresh)
-    env = _child_env()
+    env = _child_env(tools=True)  # raw clauderc exports only
     if IS_MAC:  # no installers on macOS yet: say how to get the tool
         exe = plat_tool(cmd[0])
         if not exe:
@@ -938,8 +1131,9 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: st
         input("Press Enter to go back. ")
         return
     print(mx.banner_text(str(path), HAS_SANDBOX))
-    if mx._run([exe, *cmd[1:]], cwd=str(path)) and tool == "Kiro CLI" and not fresh:
-        mx._run([exe, *tool_command(tool, model, True)[1:]], cwd=str(path))  # nothing to resume
+    env = _child_env(tools=True)  # raw clauderc exports (None = inherit)
+    if mx._run([exe, *cmd[1:]], cwd=str(path), env=env) and tool == "Kiro CLI" and not fresh:
+        mx._run([exe, *tool_command(tool, model, True)[1:]], cwd=str(path), env=env)  # nothing to resume
 
 
 def open_project(project_path: Path, model: str, *, fresh: bool = False,
@@ -1646,8 +1840,7 @@ def add_keychain_to_bashrc() -> bool:
 
 # ── Modal screens ──────────────────────────────────────────────────────────
 
-CLAUDERC_PATH    = Path.home() / ".azure"  / "clauderc"
-AWS_CREDS_PATH   = Path.home() / ".aws"    / "credentials"
+AWS_CREDS_PATH  = Path.home() / ".aws"    / "credentials"
 AWS_CONFIG_PATH  = Path.home() / ".aws"    / "config"
 GEMINI_ENV_PATH  = Path.home() / ".gemini" / ".env"
 
@@ -1663,6 +1856,32 @@ GEMINI_PREFIXES = ("GEMINI_", "GOOGLE_")
 # tab defaulting to us-west-2, also Oregon).
 DEFAULT_VERTEX_LOCATION = "us-west1"
 CRED_KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
+
+
+def _unquote_rc_value(v: str) -> str:
+    """Value of an `export K=V` line. Reads the old form (`"V"`, taken raw between the quotes) and
+    the shell-safe form write_clauderc writes (single quotes; a quote inside V becomes
+    quote, backslash, quote, quote)."""
+    if len(v) >= 2 and v[0] == v[-1] == '"':
+        return v[1:-1]
+    if v.startswith("'"):
+        out, i, n = [], 0, len(v)
+        while i < n:
+            if v[i] == "'":
+                j = v.find("'", i + 1)
+                if j < 0:
+                    break
+                out.append(v[i + 1:j])
+                i = j + 1
+            elif v.startswith("\\'", i):
+                out.append("'")
+                i += 2
+            else:
+                break
+        else:
+            return "".join(out)
+        return v[1:-1] if v.endswith("'") and len(v) >= 2 else v
+    return v
 
 
 def parse_creds_text(text: str) -> dict[str, str]:
@@ -1686,10 +1905,7 @@ def parse_creds_text(text: str) -> dict[str, str]:
         m = CRED_KEY_RE.match(line)
         if not m:
             continue
-        key, val = m.group(1), m.group(2).strip()
-        if (val.startswith('"') and val.endswith('"')) or \
-           (val.startswith("'") and val.endswith("'")):
-            val = val[1:-1]
+        key, val = m.group(1), _unquote_rc_value(m.group(2).strip())
         # Skip empty values — a bare `FOO=` is junk that would only mask
         # the real "not authenticated" error downstream.
         if key.startswith(CRED_PREFIXES) and val:
@@ -1697,40 +1913,66 @@ def parse_creds_text(text: str) -> dict[str, str]:
     return out
 
 
-def write_clauderc(values: dict[str, str]) -> None:
-    """Write env vars to ~/.azure/clauderc as `export KEY=VALUE` lines."""
-    CLAUDERC_PATH.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f'export {k}="{v}"' for k, v in values.items()]
-    CLAUDERC_PATH.write_text("\n".join(lines) + "\n")
+def parse_clauderc(text: str) -> dict[str, str]:
+    """Parse the lines of a clauderc (`export K="V"`, any prefix) into a dict. Same quote rules
+    as parse_creds_text but keeps every key and empty values."""
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        m = CRED_KEY_RE.match(line)
+        if m:
+            k, v = m.group(1), _unquote_rc_value(m.group(2).strip())
+            out[k] = v
+    return out
+
+
+def _sh_quote(v: str) -> str:
+    """Single-quote v for a bash `source` (the wrapper and the reviewer skills source clauderc):
+    nothing inside is expanded. A quote becomes quote-backslash-quote-quote. CR/LF cannot be stored
+    on one line and are dropped."""
+    return "'" + re.sub(r"[\r\n]", "", v).replace("'", "'\\''") + "'"
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    """Write bytes to a file that is created mode 0600 (no window where it is group/world readable).
+    The mode has no effect on Windows, where the user profile ACL protects the file."""
+    flags = os.O_WRONLY
+    flags |= os.O_CREAT
+    flags |= os.O_TRUNC
+    flags |= getattr(os, "O_BINARY", 0)
+    fd = os.open(str(path), flags, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
     try:
-        CLAUDERC_PATH.chmod(0o600)
+        path.chmod(0o600)  # a pre-existing file keeps its old mode otherwise
     except OSError:
         pass
 
 
+def write_clauderc(values: dict[str, str]) -> None:
+    """Write env vars to clauderc_path() as `export KEY='VALUE'` lines (mode 0600 from creation)."""
+    path = clauderc_path(create=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"export {k}={_sh_quote(str(v))}" for k, v in values.items() if CRED_KEY_RE.match(f"{k}=x")]
+    _write_private(path, ("\n".join(lines) + "\n").encode("utf-8"))  # LF on Windows too (also read by bash)
+
+
 def merge_clauderc(values: dict[str, str]) -> None:
-    """Merge `values` into ~/.azure/clauderc, preserving any existing
+    """Merge `values` into clauderc_path(), preserving any existing
     exports that aren't in `values`. Values from `values` win on collision.
+    An existing file that cannot be decoded (not UTF-8/UTF-16) is never overwritten: OSError.
     """
     existing: dict[str, str] = {}
-    if CLAUDERC_PATH.exists():
+    path = clauderc_path()
+    if path.exists():
         try:
-            for raw in CLAUDERC_PATH.read_text().splitlines():
-                line = raw.strip()
-                if line.startswith("export "):
-                    line = line[len("export "):].lstrip()
-                m = CRED_KEY_RE.match(line)
-                if m:
-                    k, v = m.group(1), m.group(2).strip()
-                    if (v.startswith('"') and v.endswith('"')) or \
-                       (v.startswith("'") and v.endswith("'")):
-                        v = v[1:-1]
-                    existing[k] = v
-        except OSError:
-            pass
+            existing = parse_clauderc(_decode_text_strict(path.read_bytes()))
+        except ValueError:
+            raise OSError(f"{path} is not valid UTF-8/UTF-16 text; it was left untouched") from None
     existing.update(values)
     write_clauderc(existing)
-
 
 def merge_gemini_env(values: dict[str, str], remove=None) -> None:
     """Merge `values` into ~/.gemini/.env (dotenv format), the file the
@@ -1842,29 +2084,82 @@ def finalize_gemini_vals(gemini_vals: dict[str, str]):
     return out, drop
 
 
+_INI_HEADER_RE = re.compile(r"^\s*\[([^\]\r\n]*)\]")
+
+
+def replace_ini_section(text: str, header: str, body: str) -> str:
+    """Replace the section `[header]` of an ini text with `body` (the complete new section including
+    its header line) and keep every other byte. Trailing blank/comment lines of the old section stay
+    (they usually introduce the next section). Further duplicates of the section are removed. A
+    missing section is appended. Line ending style follows the file."""
+    eol = "\r\n" if "\r\n" in text else "\n"
+    body = body.replace("\n", eol)
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    i, placed = 0, False
+    while i < len(lines):
+        m = _INI_HEADER_RE.match(lines[i].lstrip("\ufeff"))
+        if m and m.group(1).strip() == header:
+            j = i + 1
+            while j < len(lines) and not _INI_HEADER_RE.match(lines[j]):
+                j += 1
+            k = j
+            while k > i + 1 and (not lines[k - 1].strip() or lines[k - 1].lstrip().startswith(("#", ";"))):
+                k -= 1
+            if not placed:
+                out.append(lines[i][:1] if lines[i].startswith("\ufeff") else "")  # keep a BOM
+                out.append(body)
+                placed = True
+            out.extend(lines[k:j])
+            i = j
+        else:
+            out.append(lines[i])
+            i += 1
+    joined = "".join(out)
+    if not placed:
+        if joined and not joined.endswith(("\n", "\r")):
+            joined += eol
+        if joined.strip() and not joined.endswith(eol + eol):
+            joined += eol  # blank line before the new section
+        joined += body
+    return joined
+
+
+def _merge_ini_file(path: Path, header: str, body: str) -> None:
+    """replace_ini_section on a file: other sections stay byte for byte, a one-time `.maude-bak`
+    copy is taken before the first change, undecodable files are refused (OSError)."""
+    raw = path.read_bytes() if path.exists() else b""
+    try:
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            raise ValueError("utf-16")
+        text = raw.decode("utf-8")
+    except ValueError:
+        raise OSError(f"{path} is not UTF-8 text; it was left untouched") from None
+    new = replace_ini_section(text, header, body)
+    if new == text:
+        return
+    bak = path.with_name(path.name + ".maude-bak")
+    if raw and not bak.exists():
+        shutil.copy2(path, bak)
+    _write_private(path, new.encode("utf-8"))
+
+
 def write_aws_credentials(access_key: str, secret_key: str, region: str) -> None:
     """Persist AWS creds to ~/.aws/credentials and ~/.aws/config so that
     boto3 / claude-wrapper / kanna can pick them up.
 
     Uses the [bedrock] profile to match the convention in the maude
     welcome banner (which suggests `aws --profile bedrock configure`).
+    Only that profile is replaced: the user's other profiles, SSO config and comments stay
+    byte for byte (a `.maude-bak` copy is made before the first change).
     """
+    one = lambda v: re.sub(r"[\r\n]", "", v)
     AWS_CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    AWS_CREDS_PATH.write_text(
-        f"[bedrock]\n"
-        f"aws_access_key_id = {access_key}\n"
-        f"aws_secret_access_key = {secret_key}\n"
-    )
-    AWS_CONFIG_PATH.write_text(
-        f"[profile bedrock]\n"
-        f"region = {region}\n"
-    )
-    try:
-        AWS_CREDS_PATH.chmod(0o600)
-        AWS_CONFIG_PATH.chmod(0o600)
-    except OSError:
-        pass
-
+    _merge_ini_file(AWS_CREDS_PATH, "bedrock",
+                    f"[bedrock]\naws_access_key_id = {one(access_key)}\n"
+                    f"aws_secret_access_key = {one(secret_key)}\n")
+    _merge_ini_file(AWS_CONFIG_PATH, "profile bedrock",
+                    f"[profile bedrock]\nregion = {one(region)}\n")
 
 def have_bedrock_creds() -> bool:
     return AWS_CREDS_PATH.exists() and AWS_CREDS_PATH.stat().st_size > 0
@@ -1875,8 +2170,7 @@ def have_foundry_creds() -> bool:
         return True
     # Check both the active clauderc and the parked .inactive sibling
     # (the latter exists when Bedrock is currently the default).
-    inactive = CLAUDERC_PATH.with_name(CLAUDERC_PATH.name + ".inactive")
-    for p in (CLAUDERC_PATH, inactive):
+    for p in (clauderc_path(), clauderc_inactive_path()):
         if not p.exists():
             continue
         try:
@@ -1899,7 +2193,8 @@ class CredsEntryScreen(ModalScreen[bool]):
         ~/.local/bin/claude /login for native claude.ai OAuth; dismisses
         the modal as saved when a valid token lands in
         ~/.claude/.credentials.json.
-    All modes save to ~/.azure/clauderc (merged) so existing creds
+    All modes save to clauderc_path() (merged; ~/.azure/clauderc in the
+    sandbox, ~/.maude/clauderc on Windows/macOS) so existing creds
     survive across modes; AWS Bedrock additionally writes
     ~/.aws/credentials + ~/.aws/config under the [bedrock] profile.
 
@@ -1918,6 +2213,8 @@ class CredsEntryScreen(ModalScreen[bool]):
     def __init__(self) -> None:
         super().__init__()
         self.mode = self.MODE_PASTE
+        self._want = self.MODE_PASTE
+        self._busy = False
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -1943,8 +2240,11 @@ class CredsEntryScreen(ModalScreen[bool]):
                 yield Button("Cancel", variant="primary", id="btn-creds-cancel")
 
     async def on_mount(self) -> None:
-        await self._render_body()
+        await self._switch_mode(self.MODE_PASTE)
         self._update_default_checkbox()
+        if is_native() and have_claude_login():
+            self._set_status("[yellow]A Claude login is active and takes precedence over saved cloud "
+                             "credentials. Run `claude /logout` to use them.[/]")
 
     # ── Mode switcher ──────────────────────────────────────────────────
 
@@ -1970,6 +2270,27 @@ class CredsEntryScreen(ModalScreen[bool]):
         it. Interop is disabled in the sandbox, so Claude Code prints the
         OAuth URL for the user to open in a Windows browser manually.
         """
+        if is_native():  # Windows/macOS: the real claude opens the browser itself
+            exe = plat_real_claude()
+            if exe == "claude" and not plat_tool("claude"):
+                self._set_status("[bold red]Claude Code was not found. Install it first, then try again.[/]")
+                return
+            with self.app.suspend():
+                print("Starting Claude Code for /login: your browser opens, finish signing in "
+                      "there.\nExit Claude Code when done.", flush=True)
+                try:
+                    subprocess.run([exe, "/login"])
+                except KeyboardInterrupt:
+                    pass  # user Ctrl+C'd out of claude: not an error
+                except OSError as err:
+                    print(f"Could not run claude: {err}")
+            if have_claude_login() or claude_login_status() is True:
+                self.dismiss(True)
+            else:
+                self._set_status(
+                    "[bold yellow]Login not completed: Claude reports no login. "
+                    "Try again, or use one of the other methods.[/]")
+            return
         claude_bin = Path.home() / ".local" / "bin" / "claude"
         if not claude_bin.exists():
             self._set_status(
@@ -1994,59 +2315,78 @@ class CredsEntryScreen(ModalScreen[bool]):
                 "Try again, or use one of the other methods.[/]")
 
     async def _switch_mode(self, mode: str) -> None:
-        self.mode = mode
-        for btn_id, btn_mode in (
-            ("#btn-creds-mode-paste",   self.MODE_PASTE),
-            ("#btn-creds-mode-bedrock", self.MODE_BEDROCK),
-            ("#btn-creds-mode-foundry", self.MODE_FOUNDRY),
-        ):
-            btn = self.query_one(btn_id, Button)
-            btn.variant = "primary" if mode == btn_mode else "default"
-        await self._render_body()
+        # Re-entry guard: a press while a render is in flight only records the wanted mode; the
+        # running loop renders it afterwards. Overlapping remove_children()/mount() calls made
+        # textual crash (KeyError text-area--gutter, NoMatches) on rapid clicks.
+        self._want = mode
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            while True:
+                m = self._want
+                self.mode = m
+                for btn_id, btn_mode in (
+                    ("#btn-creds-mode-paste",   self.MODE_PASTE),
+                    ("#btn-creds-mode-bedrock", self.MODE_BEDROCK),
+                    ("#btn-creds-mode-foundry", self.MODE_FOUNDRY),
+                ):
+                    btn = self.query_one(btn_id, Button)
+                    btn.variant = "primary" if m == btn_mode else "default"
+                await self._render_body()
+                if self._want == m:
+                    break
+        finally:
+            self._busy = False
+
+    def _focus_later(self, selector: str) -> None:
+        def go() -> None:
+            try:
+                self.query_one(selector).focus()
+            except Exception:  # the widget is gone (mode switched again): nothing to focus
+                pass
+        self.call_after_refresh(go)
 
     async def _render_body(self) -> None:
         body = self.query_one("#creds-body", Container)
         await body.remove_children()
         if self.mode == self.MODE_PASTE:
-            body.mount(Label(
-                "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
-                "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
-                "For Gemini, paste an API key (GEMINI_API_KEY or GOOGLE_API_KEY "
-                "from aistudio.google.com/apikey) — it's routed to AI Studio, no "
-                "OAuth. Vertex (needs a service account) is used only if you paste "
-                "GOOGLE_GENAI_USE_VERTEXAI=true / GOOGLE_APPLICATION_CREDENTIALS. "
-                "Saved to ~/.gemini/.env."
-            ))
-            body.mount(TextArea("", id="creds-text",
-                                language=None, show_line_numbers=False))
-            self.call_after_refresh(
-                lambda: self.query_one("#creds-text", TextArea).focus()
-            )
+            widgets = [
+                Label(
+                    "Paste shell `export` lines or KEY=VALUE pairs. Recognised "
+                    "prefixes: ANTHROPIC_*, CLAUDE_*, AWS_*, AZURE_*, OPENAI_*. "
+                    "For Gemini, paste an API key (GEMINI_API_KEY or GOOGLE_API_KEY "
+                    "from aistudio.google.com/apikey) — it's routed to AI Studio, no "
+                    "OAuth. Vertex (needs a service account) is used only if you paste "
+                    "GOOGLE_GENAI_USE_VERTEXAI=true / GOOGLE_APPLICATION_CREDENTIALS. "
+                    "Saved to ~/.gemini/.env."
+                ),
+                TextArea("", id="creds-text", language=None, show_line_numbers=False),
+            ]
+            focus = "#creds-text"
         elif self.mode == self.MODE_BEDROCK:
-            body.mount(Label("AWS Bedrock — region defaults to us-west-2."))
-            body.mount(Label("AWS_ACCESS_KEY_ID:"))
-            body.mount(Input(placeholder="AKIA…", id="creds-aws-key"))
-            body.mount(Label("AWS_SECRET_ACCESS_KEY:"))
-            body.mount(Input(placeholder="secret", id="creds-aws-secret",
-                             password=True))
-            body.mount(Label("AWS_REGION:"))
-            body.mount(Input(value="us-west-2", id="creds-aws-region"))
-            self.call_after_refresh(
-                lambda: self.query_one("#creds-aws-key", Input).focus()
-            )
+            widgets = [
+                Label("AWS Bedrock — region defaults to us-west-2."),
+                Label("AWS_ACCESS_KEY_ID:"),
+                Input(placeholder="AKIA…", id="creds-aws-key"),
+                Label("AWS_SECRET_ACCESS_KEY:"),
+                Input(placeholder="secret", id="creds-aws-secret", password=True),
+                Label("AWS_REGION:"),
+                Input(value="us-west-2", id="creds-aws-region"),
+            ]
+            focus = "#creds-aws-key"
         else:  # MODE_FOUNDRY
-            body.mount(Label("Azure AI Foundry — Anthropic-compatible endpoint."))
-            body.mount(Label("ANTHROPIC_FOUNDRY_BASE_URL:"))
-            body.mount(Input(
-                placeholder="https://<resource>.services.ai.azure.com/anthropic",
-                id="creds-foundry-url"))
-            body.mount(Label("ANTHROPIC_FOUNDRY_API_KEY:"))
-            body.mount(Input(placeholder="api key",
-                             id="creds-foundry-key", password=True))
-            self.call_after_refresh(
-                lambda: self.query_one("#creds-foundry-url", Input).focus()
-            )
-
+            widgets = [
+                Label("Azure AI Foundry — Anthropic-compatible endpoint."),
+                Label("ANTHROPIC_FOUNDRY_BASE_URL:"),
+                Input(placeholder="https://<resource>.services.ai.azure.com/anthropic",
+                      id="creds-foundry-url"),
+                Label("ANTHROPIC_FOUNDRY_API_KEY:"),
+                Input(placeholder="api key", id="creds-foundry-key", password=True),
+            ]
+            focus = "#creds-foundry-url"
+        await body.mount(*widgets)  # wait until they are mounted: the next switch must not race them
+        self._focus_later(focus)
     def _update_default_checkbox(self) -> None:
         """Show the Bedrock-vs-Foundry default toggle only when both
         credential families are present on disk (active or parked)."""
@@ -2055,8 +2395,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             cb.display = True
             # If clauderc is parked as .inactive, Bedrock is the
             # currently-default provider; check the box accordingly.
-            inactive = CLAUDERC_PATH.with_name(CLAUDERC_PATH.name + ".inactive")
-            parked = inactive.exists() and not CLAUDERC_PATH.exists()
+            parked = clauderc_inactive_path().exists() and not clauderc_path().exists()
             cb.value = parked or (
                 bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
                 and not bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
@@ -2174,9 +2513,8 @@ class CredsEntryScreen(ModalScreen[bool]):
         cb = self.query_one("#creds-default-bedrock", Checkbox)
         if not cb.display:
             return
-        active   = CLAUDERC_PATH
-        inactive = active.with_suffix(active.suffix + ".inactive") \
-                   if active.suffix else active.with_name(active.name + ".inactive")
+        active   = clauderc_path()
+        inactive = clauderc_inactive_path()
         if cb.value:
             # Bedrock active → park clauderc out of the way so the
             # wrapper doesn't source Foundry creds.
@@ -4421,7 +4759,31 @@ class MaudeApp(App):
         # skip `claude --continue` — otherwise it errors ("No conversation to
         # continue"), flashes on screen, and only then falls back to a fresh
         # launch.
-        if not (IS_WIN or IS_MAC) and not check_credentials():  # native: claude has its own login (until the creds package)
+        pre = creds_gate_precheck()
+        if is_native() and self._tool != DEFAULT_TOOL:
+            pre = False  # the claude login says nothing about Kiro/OpenCode/Crush
+        if pre is None:  # Windows/macOS: `claude auth status` can take seconds, so ask it off the UI thread
+            if getattr(self, "_checking_login", False):
+                return
+            self._checking_login = True
+            self.notify("Checking sign-in...", timeout=3)
+
+            def ask() -> None:
+                try:
+                    status = claude_login_status()
+                except Exception:
+                    status = None
+                self.call_from_thread(self._after_login_check, path, fresh, status)
+            self.run_worker(ask, thread=True)
+            return
+        self._gate_or_launch(path, fresh, bool(pre))
+
+    def _after_login_check(self, path: Path, fresh: bool | None, status) -> None:
+        self._checking_login = False
+        self._gate_or_launch(path, fresh, creds_gate_decision(True, False, False, status))
+
+    def _gate_or_launch(self, path: Path, fresh: bool | None, gate: bool) -> None:
+        if gate:  # Windows/macOS: only when claude itself says "not logged in" (see creds_gate_decision)
             self._pending_project = path
             self._pending_fresh = fresh
             self.push_screen(CredsEntryScreen(), self._on_creds_for_project)
@@ -4433,7 +4795,8 @@ class MaudeApp(App):
         fresh = getattr(self, "_pending_fresh", None)
         self._pending_project = None
         self._pending_fresh = None
-        if saved and path is not None:
+        # Sandbox: no credentials, no launch. Windows/macOS: Cancel still opens (claude can sign in itself).
+        if path is not None and (saved or is_native()):
             self._launch_project_now(path, fresh=fresh)
 
     def _launch_project_now(self, path: Path, *, fresh: bool | None = None) -> None:

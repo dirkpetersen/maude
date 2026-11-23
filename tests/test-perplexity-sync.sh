@@ -33,7 +33,8 @@ import ast, os, subprocess, sys
 from pathlib import Path
 src = open(sys.argv[1]).read()
 want = {"PLATFORM", "IS_WIN", "IS_MAC", "PERPLEXITY_FLAG", "PERPLEXITY_NAME", "PERPLEXITY_URL", "_claude_mcp",
-        "sync_perplexity", "remove_perplexity", "plat_tool", "plat_real_claude", "plat_claude_env", "_child_env"}
+        "sync_perplexity", "remove_perplexity", "plat_tool", "plat_real_claude", "plat_claude_env", "_child_env",
+        "current_platform"}
 ns = {"os": os, "sys": sys, "subprocess": subprocess, "Path": Path, "shutil": __import__("shutil")}
 for n in ast.parse(src).body:
     names = {t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)} | {getattr(n, "name", "")}

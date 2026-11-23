@@ -260,10 +260,11 @@ load_lib refresh-md.sh   || true   # refresh_claude_md falls through if not load
 load_lib update-skills.sh || true
 load_lib kanna.sh || true
 
-# Pin rationale: 8.2.3 (and only 8.2.3) crashes the Set Creds modal with
-# KeyError 'text-area--gutter' (textual#6528); every other 8.x is verified
-# fine against maude.py. <9 shields auto-updating end-user machines from an
-# unknown future major-version break.
+# Pin rationale: 8.2.3 crashes the Set Creds modal as it opens with
+# KeyError 'text-area--gutter' (textual#6528); >=8.2.4 fixes that. Rapid clicks
+# on the mode buttons could still trigger it (or NoMatches) on later 8.x until
+# CredsEntryScreen got a re-entry guard. <9 shields auto-updating end-user
+# machines from an unknown future major-version break.
 TEXTUAL_PIN='textual>=8.2.4,<9'
 
 _pip_install_textual() {

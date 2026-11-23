@@ -952,6 +952,35 @@ def projects_dir(env=os.environ) -> str:
     return str(W(os.path.realpath(resolve_share(env))) / "Projects")
 
 
+child_env = None  # maude.py (Windows) sets this to its _child_env: callable -> env dict | None
+
+
+def _creds_env() -> dict | None:
+    """Environment for Claude Code with the saved credentials (~/.maude/clauderc), or None to
+    inherit. Reached without the TUI (Explorer menu / --windows): maude.py is then loaded only when
+    a clauderc (or the parked clauderc.inactive of "Default to AWS Bedrock") exists, so the plain
+    start stays fast and an ~/.aws/config alone changes nothing. A load failure prints one line."""
+    f = child_env
+    if f is None:
+        up = os.environ.get("USERPROFILE", "")
+        if not (up and (os.path.isfile(os.path.join(up, ".maude", "clauderc"))
+                        or os.path.isfile(os.path.join(up, ".maude", "clauderc.inactive")))):
+            return None
+        try:
+            sys.modules.setdefault("maude_exe", sys.modules[__name__])
+            import maude
+            f = maude._child_env
+        except Exception as e:
+            print(f"Maude: could not load the saved credentials ({e}); starting without them.",
+                  file=sys.stderr)
+            return None
+    try:
+        return f()
+    except Exception as e:
+        print(f"Maude: could not load the saved credentials ({e}); starting without them.",
+              file=sys.stderr)
+        return None
+
 def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = False,
                 effort: str | None = None) -> int:
     env = os.environ
@@ -964,9 +993,13 @@ def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = Fals
     saved_model, saved_effort = windows_model_effort(env["USERPROFILE"])
     model = model or saved_model
     effort = saved_effort if effort is None else effort  # None: take the saved level
-    rc = _run(windows_cmd(claude, model, not fresh, effort), cwd=folder)
+    kw = {"cwd": folder}
+    cenv = _creds_env()
+    if cenv is not None:
+        kw["env"] = cenv
+    rc = _run(windows_cmd(claude, model, not fresh, effort), **kw)
     if rc and not fresh:
-        rc = _run(windows_cmd(claude, model, False, effort), cwd=folder)
+        rc = _run(windows_cmd(claude, model, False, effort), **kw)
     return rc
 
 

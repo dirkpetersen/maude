@@ -23,9 +23,11 @@ set -e
 
 # ── Install textual (Maude TUI dependency) ───────────────────────────
 echo "Installing textual..."
-# 8.2.3 (and only 8.2.3) crashes the Set Creds modal with KeyError
-# 'text-area--gutter' (textual#6528); >=8.2.4 is verified fine against
-# maude.py. <9 shields against an unknown future major-version break.
+# 8.2.3 crashes the Set Creds modal as it opens with KeyError
+# 'text-area--gutter' (textual#6528); >=8.2.4 fixes that. Rapid clicks on the
+# mode buttons could still trigger the same KeyError (or NoMatches) on later
+# 8.x until CredsEntryScreen got a re-entry guard. <9 shields against an
+# unknown future major-version break.
 pip install --quiet --break-system-packages 'textual>=8.2.4,<9'
 
 # ── Source maude shell libraries ──────────────────────────────────────

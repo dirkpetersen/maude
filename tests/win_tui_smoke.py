@@ -85,10 +85,10 @@ try:
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
             assert maude.current_platform() == "windows"
             hidden = maude.hidden_widgets()  # from the FEATURES map: everything off on Windows for now
-            assert set(hidden) == {"#btn-web", "#btn-togithub", "#btn-github", "#btn-creds", "#btn-update", "#autostart"}, hidden
+            assert set(hidden) == {"#btn-web", "#btn-togithub", "#btn-github", "#btn-update", "#autostart"}, hidden  # Set Creds is on
             for i in hidden:
                 assert not app.query_one(i).display, i
-            for i in ("#btn-open", "#btn-new", "#btn-cli", "#fresh-context", "#perplexity"):
+            for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i
             # Radio coupling: fable then Crush must leave exactly one button on per set (opus, Crush).
             from textual.widgets import RadioButton
@@ -336,7 +336,109 @@ try:
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
     calls[:] = [calls[0], calls[1]]
     assert not any("skip" in a or "bypass" in a for c, _ in calls for a in c)
-    # Missing non-Claude tool: install offered (declined here), nothing is run, TUI gets control back.
+    # Set Creds on Windows: the button opens the screen, Save writes <home>/.maude/clauderc (never ~/.azure),
+    # and the saved env reaches Claude Code and the other tools.
+    rc_file = home / ".maude" / "clauderc"
+    assert maude.clauderc_path() == rc_file
+    async def check_creds():
+        async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app.query_one("#btn-creds").press(); await pilot.pause()
+            assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
+            await pilot.pause()  # let the first render settle (a click within milliseconds of opening is not a human click)
+            app.screen.query_one("#btn-creds-mode-foundry").press(); await pilot.pause(); await pilot.pause()
+            app.screen.query_one("#creds-foundry-url").value = "https://u.example/anthropic"
+            app.screen.query_one("#creds-foundry-key").value = "kk"
+            app.screen.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            assert len(app.screen_stack) == 1, app.screen_stack
+    saved_env = dict(os.environ)
+    try:
+        asyncio.run(check_creds())
+    finally:
+        os.environ.clear(); os.environ.update(saved_env)  # the screen also updates this process's env
+    assert rc_file.is_file() and not (home / ".azure").exists()
+    assert "export ANTHROPIC_FOUNDRY_BASE_URL='https://u.example/anthropic'" in rc_file.read_text(), rc_file.read_text()
+    maude.have_claude_login = lambda: False
+    envs, old_run, old_ensure = [], mx._run, mx.ensure_tool
+    mx._run = lambda cmd, **kw: envs.append((cmd[0], kw.get("env"))) or 0
+    maude.open_project(proj, "sonnet", fresh=True)  # Claude Code through run_windows
+    assert envs[-1][0] == "C:/c.exe" and envs[-1][1]["ANTHROPIC_BASE_URL"] == "https://u.example/anthropic", envs
+    assert envs[-1][1]["ANTHROPIC_API_KEY"] == "sk-ant-dummy" and "PATH" in {k.upper() for k in envs[-1][1]}, envs
+    mx.ensure_tool = lambda tool, *a, **k: "C:/" + tool.replace(" ", "") + ".exe"
+    for tool in ("Kiro CLI", "OpenCode", "Crush"):
+        envs.clear()
+        maude.open_project(proj, "opus", tool=tool)
+        assert envs and envs[-1][1]["ANTHROPIC_FOUNDRY_API_KEY"] == "kk", (tool, envs)
+    mcp = []
+    real_run = subprocess.run
+    subprocess.run = lambda cmd, **kw: mcp.append((cmd, kw.get("env"))) or subprocess.CompletedProcess(cmd, 0, "", "")
+    try:
+        maude._claude_mcp("get", "x", capture=True)
+    finally:
+        subprocess.run = real_run
+    assert mcp and mcp[0][1]["ANTHROPIC_FOUNDRY_API_KEY"] == "kk", mcp
+    # No saved credentials: the child env is None (inherit), as before.
+    rc_file.unlink()
+    assert maude._child_env() is None
+    mx._run, mx.ensure_tool = old_run, old_ensure
+    # Rapid mode switching on the Set Creds screen (no pauses): no crash, one render at a time, the last press wins.
+    async def check_rapid():
+        async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app.query_one("#btn-creds").press(); await pilot.pause()
+            scr = app.screen
+            assert isinstance(scr, maude.CredsEntryScreen)
+            for _ in range(6):
+                for b in ("#btn-creds-mode-foundry", "#btn-creds-mode-bedrock", "#btn-creds-mode-paste", "#btn-creds-mode-foundry"):
+                    scr.query_one(b).press()  # no pause between presses
+            for _ in range(20):
+                await pilot.pause(0.05)
+            assert not scr._busy and scr._want == scr.mode, (scr.mode, scr._want, scr._busy)  # idle, nothing queued
+            # (the buttons' own message pumps run concurrently, so which press lands last is not fixed)
+            body = {"paste": "#creds-text", "bedrock": "#creds-aws-key", "foundry": "#creds-foundry-url"}
+            assert all(len(scr.query(sel)) == (1 if m == scr.mode else 0) for m, sel in body.items()), "exactly one mode body"
+            scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
+    asyncio.run(check_rapid())
+    # Native credential gate: `claude auth status` runs off the UI thread; only an explicit "not logged in" shows
+    # the screen, and Cancel still opens the project.
+    import time as _time
+    old_cfg, old_status, old_open = maude.credentials_configured, maude.claude_login_status, maude.MaudeApp._launch_project_now
+    maude.credentials_configured = lambda: False
+    def slow_status(*a, **k):
+        _time.sleep(0.4)
+        return False
+    maude.claude_login_status = slow_status
+    async def check_gate():
+        opened = []
+        async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app._launch_project_now = lambda path, fresh=None: opened.append(path)
+            t0 = _time.perf_counter()
+            app._launch_project(proj)
+            assert _time.perf_counter() - t0 < 0.2, "the UI thread must not wait for claude auth status"
+            assert not opened
+            for _ in range(60):
+                if isinstance(app.screen, maude.CredsEntryScreen):
+                    break
+                await pilot.pause(0.05)
+            assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
+            app.screen.query_one("#btn-creds-cancel").press(); await pilot.pause(); await pilot.pause()
+            assert opened == [proj], opened  # Cancel on Windows/macOS still opens the project
+            maude.claude_login_status = lambda *a, **k: None  # unknown answer: no screen at all
+            opened.clear()
+            app._launch_project(proj)
+            for _ in range(40):
+                if opened:
+                    break
+                await pilot.pause(0.05)
+            assert opened == [proj] and len(app.screen_stack) == 1, (opened, app.screen_stack)
+    try:
+        asyncio.run(check_gate())
+    finally:
+        maude.credentials_configured, maude.claude_login_status = old_cfg, old_status    # Missing non-Claude tool: install offered (declined here), nothing is run, TUI gets control back.
     calls.clear()
     asked = []
     mx.find_tool = lambda b, *a, **k: None
