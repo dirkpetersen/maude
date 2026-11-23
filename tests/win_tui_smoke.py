@@ -381,6 +381,10 @@ try:
             app.query_one("#btn-creds").press(); await pilot.pause()
             assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
             await pilot.pause()  # let the first render settle (a click within milliseconds of opening is not a human click)
+            for _ in range(60):  # slow CI runners: children can mount after the screen is pushed
+                if app.screen.query("#btn-creds-mode-foundry"):
+                    break
+                await pilot.pause(0.05)
             app.screen.query_one("#btn-creds-mode-foundry").press(); await pilot.pause(); await pilot.pause()
             app.screen.query_one("#creds-foundry-url").value = "https://u.example/anthropic"
             app.screen.query_one("#creds-foundry-key").value = "kk"
@@ -460,6 +464,10 @@ try:
                     break
                 await pilot.pause(0.05)
             assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
+            for _ in range(60):  # slow CI runners: the screen is pushed before its children are mounted
+                if app.screen.query("#btn-creds-cancel"):
+                    break
+                await pilot.pause(0.05)
             app.screen.query_one("#btn-creds-cancel").press(); await pilot.pause(); await pilot.pause()
             assert opened == [proj], opened  # Cancel on Windows/macOS still opens the project
             maude.claude_login_status = lambda *a, **k: None  # unknown answer: no screen at all
