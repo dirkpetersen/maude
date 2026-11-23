@@ -170,7 +170,12 @@ _validate_maude_py() {
     if ! grep -q '^def maybe_self_update' "$f" || ! grep -q '^if __name__ == "__main__":' "$f"; then
         echo "missing markers (truncated?)" >&2; return 1
     fi
-    if ! err=$(timeout 30 python3 -c "$_MAUDE_PY_CHECK" "$f" 2>&1 >/dev/null </dev/null); then
+    # Run from the file's own directory (python -c puts the cwd first on
+    # sys.path, so a json.py in the caller's cwd would shadow stdlib);
+    # PYTHONSAFEPATH=1 additionally drops it on Python >= 3.11.
+    local fdir fbase
+    fdir=$(dirname "$f"); fbase=$(basename "$f")
+    if ! err=$(cd "$fdir" && PYTHONSAFEPATH=1 timeout 30 python3 -c "$_MAUDE_PY_CHECK" "$fbase" 2>&1 >/dev/null </dev/null); then
         echo "import check failed: $(printf '%s\n' "$err" | tail -n1)" >&2
         return 1
     fi
@@ -181,20 +186,32 @@ _validate_maude_py() {
 # On any failure the old file is kept, the temp removed, a yellow warning
 # printed to stderr and 1 returned (callers must not stamp the daily update).
 _fetch_maude_py() {
-    local ts="${1:-$(date +%s)}" tmp why
+    local ts="${1:-$(date +%s)}" tmp why rc=0
     tmp="${MAUDE_PY}.new.$$"
     mkdir -p "$(dirname "$MAUDE_PY")"
-    if ! curl -fsSL "${MAUDE_PY_URL}?cache=${ts}" -o "$tmp"; then
-        rm -f "$tmp"
-        echo -e "${YELLOW}maude.py download failed (kept existing copy, if any)${NC}" >&2
-        return 1
-    fi
-    if ! why=$(_validate_maude_py "$tmp" 2>&1); then
-        rm -f "$tmp"
-        echo -e "${YELLOW}downloaded maude.py failed validation: ${why} (kept existing copy, if any)${NC}" >&2
-        return 1
-    fi
-    mv -f "$tmp" "$MAUDE_PY"
+    # Run the work in a subshell so its INT/TERM trap (remove the temp, then
+    # exit) can never clobber the caller's traps.
+    (
+        trap 'rm -f "$tmp"; exit 130' INT
+        trap 'rm -f "$tmp"; exit 143' TERM
+        if ! curl -fsSL "${MAUDE_PY_URL}?cache=${ts}" -o "$tmp"; then
+            rm -f "$tmp"
+            echo -e "${YELLOW}maude.py download failed (kept existing copy, if any)${NC}" >&2
+            exit 1
+        fi
+        if ! why=$(_validate_maude_py "$tmp" 2>&1); then
+            rm -f "$tmp"
+            echo -e "${YELLOW}downloaded maude.py failed validation: ${why} (kept existing copy, if any)${NC}" >&2
+            exit 1
+        fi
+        if ! mv -f "$tmp" "$MAUDE_PY"; then
+            rm -f "$tmp"
+            echo -e "${YELLOW}could not install maude.py (kept existing copy, if any)${NC}" >&2
+            exit 1
+        fi
+    ) || rc=$?
+    rm -f "$tmp"
+    return "$rc"
 }
 
 # Pin: keep in sync with light/maude-bootstrap.sh's kanna-code install line.
@@ -681,7 +698,11 @@ update_all() {
     if [[ "${JRC[maudepy]:-1}" -eq 0 ]]; then
         echo -e "${GREEN}  ✓ maude.py refreshed${NC}"
     else
-        echo -e "${YELLOW}  ✗ $(cat "${JOUT[maudepy]}")${NC}"
+        # The captured text carries its own colour codes (whose reset would
+        # un-colour later lines): strip them and colour every line yellow.
+        while IFS= read -r _l; do
+            echo -e "${YELLOW}  ✗ ${_l}${NC}"
+        done < <(sed $'s/\033\\[[0-9;]*m//g' "${JOUT[maudepy]}")
         rc=1
     fi
     echo ""

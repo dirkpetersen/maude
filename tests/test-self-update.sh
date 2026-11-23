@@ -18,10 +18,10 @@ python3 -c 'import textual, rich' >/dev/null 2>&1 && have_textual=1
 # Pull only the update helpers out of maude.py (no textual import needed).
 # No -I when running: textual is usually a user-site install, which -I hides.
 cat > "$d/run.py" <<'PY'
-import ast, re, subprocess, sys
+import ast, os, re, subprocess, sys
 mode, src_path, target = sys.argv[1:4]
 src = open(src_path, "rb").read()
-ns = {"re": re, "subprocess": subprocess, "sys": sys}
+ns = {"os": os, "re": re, "subprocess": subprocess, "sys": sys}
 want = {"valid_update", "_IMPORT_CHECK_CODE", "import_check_update"}
 for n in ast.parse(src).body:
     names = {t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)} | {getattr(n, "name", "")}
@@ -59,6 +59,10 @@ if [[ $have_textual -eq 1 ]]; then
   assert_eq "import: urllib.erro rejected"           "REJECT" "$(imp "$d/badimport.py")"
   assert_eq "import: from pathlib import Pat rejected" "REJECT" "$(imp "$d/badfrom.py")"
   assert_eq "import: module-level NameError rejected" "REJECT" "$(imp "$d/nameerror.py")"
+  # A json.py in the caller's cwd must not shadow stdlib in the check.
+  mkdir "$d/shadow"
+  echo 'raise RuntimeError("shadowed json imported")' > "$d/shadow/json.py"
+  assert_eq "import: cwd json.py does not cause rejection" "OK" "$(cd "$d/shadow" && imp "$d/good.py")"
 else
   skip "textual/rich not installed: import-check cases skipped"
 fi
@@ -74,6 +78,8 @@ if [[ $have_textual -eq 1 ]]; then
   assert_exit_nonzero "bash: urllib.erro rejected"            _validate_maude_py "$d/badimport.py"
   assert_exit_nonzero "bash: from pathlib import Pat rejected" _validate_maude_py "$d/badfrom.py"
   assert_exit_nonzero "bash: module-level NameError rejected" _validate_maude_py "$d/nameerror.py"
+  shadow_validate() { ( cd "$d/shadow" && _validate_maude_py "$d/good.py" ); }
+  assert_exit_zero    "bash: cwd json.py does not cause rejection" shadow_validate
 else
   skip "textual/rich not installed: bash import-check cases skipped"
 fi

@@ -175,8 +175,16 @@ def import_check_update(path: str, timeout: int = 30) -> str:
     up, but the TUI never starts). Returns "" on success, else a short reason.
     Not isolated (-I) on purpose: user-site packages such as textual must be visible."""
     try:
+        # `-c` puts the cwd first on sys.path, so a stray json.py etc. in the
+        # caller's cwd would shadow stdlib: run from the file's own directory
+        # (and add -P where supported) instead.
+        path = os.path.abspath(path)
+        cmd = [sys.executable]
+        if sys.version_info >= (3, 11):
+            cmd.append("-P")
+        cmd += ["-c", _IMPORT_CHECK_CODE, path]
         r = subprocess.run(
-            [sys.executable, "-c", _IMPORT_CHECK_CODE, path],
+            cmd, cwd=os.path.dirname(path),
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             timeout=timeout,
         )
