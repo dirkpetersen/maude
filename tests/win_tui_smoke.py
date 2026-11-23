@@ -9,6 +9,41 @@ import sys
 import tempfile
 from pathlib import Path
 
+
+async def wait_until(pilot, cond, timeout=5.0):
+    """Poll cond() until it is truthy or the timeout expires (slow CI runners); returns the final bool."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while True:
+        try:
+            if cond():
+                return True
+        except Exception:
+            pass  # widget not mounted yet etc.: keep waiting
+        if loop.time() >= end:
+            break
+        await pilot.pause(0.05)
+    try:
+        return bool(cond())
+    except Exception:
+        return False
+
+
+async def wait_query(pilot, screen_getter, selector, timeout=5.0):
+    """Wait until selector exists on screen_getter() (a screen or the app) and return the widget.
+    On timeout the plain query_one raises the real NoMatches."""
+    await wait_until(pilot, lambda: len(screen_getter().query(selector)) > 0, timeout)
+    return screen_getter().query_one(selector)
+
+
+async def wait_table(pilot, rows=1, timeout=5.0):
+    """Wait for #projects-table on the app screen to have at least `rows` rows; returns it."""
+    app = pilot.app
+    table = await wait_query(pilot, lambda: app, "#projects-table", timeout)
+    await wait_until(pilot, lambda: table.row_count >= rows, timeout)
+    return table
+
+
 LIGHT = Path(__file__).resolve().parent.parent / "light"
 sys.path.insert(0, str(LIGHT))
 d = tempfile.mkdtemp()
@@ -45,7 +80,7 @@ try:
         async with maude.MaudeApp().run_test(size=(140, 40)) as pilot:
             app = pilot.app
             await pilot.pause()
-            table = app.query_one("#projects-table")
+            table = await wait_table(pilot, 4)
             assert str(table.columns[list(table.columns)[2]].label) == "Features"
             cells = [[str(c) for c in table.get_row_at(i)] for i in range(table.row_count)]
             # outside first (newest content first), then share; missing folder hidden; same names get a parent
@@ -53,9 +88,12 @@ try:
             assert set(cells[2][0].strip()) == {"─"} and list(table.rows)[2].value == "__sep__", cells
             assert [c[2] for c in cells] == ["No Sandbox"] * 2 + [cells[2][2], "·"], cells
             table.move_cursor(row=1); await pilot.pause()
+            await wait_until(pilot, lambda: table.cursor_row == 1)
             await pilot.press("down"); await pilot.pause()
+            await wait_until(pilot, lambda: table.cursor_row == 3)
             assert table.cursor_row == 3, table.cursor_row   # skips the rule: first share project
             await pilot.press("up"); await pilot.pause()
+            await wait_until(pilot, lambda: table.cursor_row == 1)
             assert table.cursor_row == 1, table.cursor_row   # last outside project
             from textual.coordinate import Coordinate
             table.cursor_coordinate = Coordinate(2, 0)       # cursor forced onto the rule (message not yet handled)
@@ -63,8 +101,10 @@ try:
             app.action_delete_selected(); await pilot.pause()
             assert len(app.screen_stack) == 1, "delete on the rule must open nothing"
             await pilot.pause()
+            await wait_until(pilot, lambda: table.cursor_row != 2)
             assert table.cursor_row != 2, table.cursor_row
             logo = app.query_one("#logo")
+            await wait_until(pilot, lambda: logo.size.height >= 6)
             assert logo.size.height >= 6, logo.size
             from textual.geometry import Region
             shown = "".join(s.text for s in logo.render_lines(Region(0, 0, logo.size.width, logo.size.height))[5]) if hasattr(logo, "render_lines") else ""
@@ -72,14 +112,15 @@ try:
             table.move_cursor(row=0)
             app.action_delete_selected(); await pilot.pause()
             from textual.widgets import Label
-            assert "folder is not deleted" in str(app.screen.query_one("#confirm-sub", Label).render())
-            app.screen.query_one("#btn-yes").press(); await pilot.pause()
+            sub = await wait_query(pilot, lambda: app.screen, "#confirm-sub")
+            assert "folder is not deleted" in str(sub.render())
+            (await wait_query(pilot, lambda: app.screen, "#btn-yes")).press(); await pilot.pause()
+            await wait_until(pilot, lambda: str(out2) not in reg)
             assert str(out2) not in reg and str(out1) in reg and out2.is_dir(), reg  # registry entry only
-            for _ in range(40):  # notify() is delivered as a message: wait for it on slow runners
-                if any(str(out2) in n.message and "manually" in n.message for n in app._notifications):
-                    break
-                await pilot.pause(0.05)
+            # notify() is delivered as a message: wait for it on slow runners
+            await wait_until(pilot, lambda: any(str(out2) in n.message and "manually" in n.message for n in app._notifications))
             assert any(str(out2) in n.message and "manually" in n.message for n in app._notifications), list(app._notifications)
+            await wait_until(pilot, lambda: table.row_count == 3)
             assert table.row_count == 3
             table.move_cursor(row=2)  # share project: still soft-deleted
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
@@ -95,13 +136,16 @@ try:
             rb = lambda sel, n: app.query_one(sel).query(RadioButton)[n]
             await pilot.click(rb("#model-select", 0)); await pilot.pause()
             await pilot.click(rb("#tool-select", 3)); await pilot.pause()
-            on = {sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
-                  for sel in ("#model-select", "#tool-select")}
+            get_on = lambda: {sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
+                              for sel in ("#model-select", "#tool-select")}
+            await wait_until(pilot, lambda: get_on() == {"#model-select": ["opus"], "#tool-select": ["Crush"]})
+            on = get_on()
             assert on == {"#model-select": ["opus"], "#tool-select": ["Crush"]}, on
             exited = []
             app.exit = lambda *a, **k: exited.append(1)
             app.query_one("#btn-cli").press()
             await pilot.pause()
+            await wait_until(pilot, lambda: exited)
             assert exited  # Command Line returns to the PowerShell that started maude.exe
             # Update Maude: visible on Windows, runs native_update (stubbed: no network) into the log,
             # and "Reload UI" exits the app with 42 (maude_exe.run_tui relaunches the exe on that).
@@ -111,37 +155,31 @@ try:
             app.exit = lambda *a, **k: exits.append(a)
             app.query_one("#btn-update").press()
             await pilot.pause()
+            await wait_until(pilot, lambda: type(app.screen).__name__ == "UpdateMaudeScreen")
             scr = app.screen
             assert type(scr).__name__ == "UpdateMaudeScreen", scr
             from textual.widgets import Button, RichLog
-            for _ in range(60):
-                if not scr.query_one("#btn-update-reload", Button).disabled:
-                    break
-                await pilot.pause(0.05)
+            reload_btn = await wait_query(pilot, lambda: scr, "#btn-update-reload")
+            await wait_until(pilot, lambda: not reload_btn.disabled)
+            await wait_until(pilot, lambda: "maude.exe v9.9.9 downloaded." in " | ".join(
+                str(getattr(l, "text", l)) for l in scr.query_one("#update-log", RichLog).lines))
             log = " | ".join(str(getattr(l, "text", l)) for l in scr.query_one("#update-log", RichLog).lines)
             assert "maude.exe v9.9.9 downloaded." in log, log
             assert not scr.query_one("#btn-update-reload", Button).disabled
             assert scr.query_one("#btn-update-close", Button).disabled  # staged exe: Reload is the only way out
             scr.query_one("#btn-update-reload", Button).press()
-            for _ in range(60):  # the exit can land a moment later on slow CI runners
-                if exits:
-                    break
-                await pilot.pause(0.05)
+            await wait_until(pilot, lambda: exits)  # the exit can land a moment later on slow CI runners
             assert exits == [(42,)], exits
             # With something staged, Escape must reload too (same exit value 42).
-            app.query_one("#btn-update").press()
+            (await wait_query(pilot, lambda: app, "#btn-update")).press()
             await pilot.pause()
+            await wait_until(pilot, lambda: type(app.screen).__name__ == "UpdateMaudeScreen" and app.screen is not scr)
             scr = app.screen
             assert type(scr).__name__ == "UpdateMaudeScreen", scr
-            for _ in range(60):
-                if not scr.query_one("#btn-update-reload", Button).disabled:
-                    break
-                await pilot.pause(0.05)
+            reload_btn = await wait_query(pilot, lambda: scr, "#btn-update-reload")
+            await wait_until(pilot, lambda: not reload_btn.disabled)
             await pilot.press("escape")
-            for _ in range(60):
-                if len(exits) >= 2:
-                    break
-                await pilot.pause(0.05)
+            await wait_until(pilot, lambda: len(exits) >= 2)
             assert exits == [(42,), (42,)], exits
 
     asyncio.run(check())
@@ -156,15 +194,19 @@ try:
         async with maude.MaudeApp(select=str(folder), model=model).run_test(size=(140, 40)) as pilot:
             app = pilot.app
             await pilot.pause()
-            table = app.query_one("#projects-table")
-            key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+            table = await wait_table(pilot)
             want = str(Path(os.path.realpath(folder)))
+            sel_key = lambda: table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+            await wait_until(pilot, lambda: maude.mx.project_key(sel_key()) == maude.mx.project_key(want) and table.has_focus)
+            key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
             assert maude.mx.project_key(key) == maude.mx.project_key(want), (key, want)
             assert [str(r.value) for r in table.rows].count(key) == 1  # never duplicated
             assert table.has_focus, "table must be focused so Enter opens the row"
             warn = app.query_one("#win-warning")
+            await wait_until(pilot, lambda: warn.display and "OUTSIDE the sandbox" in str(warn.render()))
             assert warn.display and "OUTSIDE the sandbox" in str(warn.render()) and "full Windows user rights" in str(warn.render()), warn.render()
             assert str(Path(os.path.realpath(folder)).name) in str(warn.render())
+            await wait_until(pilot, lambda: app._selected_project() == Path(want))
             assert app._selected_project() == Path(want)
             assert len(reg) == n_reg  # the TUI itself never writes the registry
             on = [str(b.label) for b in app.query_one("#model-select").query(maude.RadioButton) if b.value]
@@ -176,7 +218,10 @@ try:
     async def check_plain():  # no select: no warning
         async with maude.MaudeApp().run_test(size=(140, 40)) as pilot:
             await pilot.pause()
-            assert not pilot.app.query_one("#win-warning").display
+            await wait_table(pilot)
+            warn = await wait_query(pilot, lambda: pilot.app, "#win-warning")
+            await pilot.pause()
+            assert not warn.display
     asyncio.run(check_plain())
 
     # Registration only on open; the bar follows the cursor; delete hides it; a folder that cannot be listed gets no Enter hint.
@@ -190,14 +235,17 @@ try:
         async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
             app = pilot.app
             await pilot.pause()
-            table = app.query_one("#projects-table")
+            table = await wait_table(pilot)
             bar = lambda: str(app.query_one("#win-warning").render())
+            await wait_until(pilot, lambda: "Press Enter" in bar())
             assert "Press Enter" in bar() and not added, (bar(), added)  # starting registers nothing
             on_row = table.cursor_row
             table.move_cursor(row=table.row_count - 1)  # a share project, below the rule row
             await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: "Press Enter" not in bar())
             assert "Press Enter" not in bar() and "full Windows user rights" in bar(), bar()  # cursor left the row
             table.move_cursor(row=on_row); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: "Press Enter" in bar())
             assert "Press Enter" in bar(), bar()
             # open: registered even though the registry write may fail
             app.suspend = contextlib.nullcontext
@@ -217,9 +265,13 @@ try:
             async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
                 app = pilot.app
                 await pilot.pause()
+                await wait_table(pilot)
+                await wait_until(pilot, lambda: app._selected_project() == Path(want))
                 assert app._selected_project() == Path(want)
                 app._on_confirm_delete(True); await pilot.pause()
+                await wait_until(pilot, lambda: not app.query_one("#win-warning").display)
                 assert not app.query_one("#win-warning").display, "bar must go with the deleted row"
+                await wait_until(pilot, lambda: all(mx.project_key(str(r.value)) != mx.project_key(want) for r in app.query_one("#projects-table").rows))
                 assert all(mx.project_key(str(r.value)) != mx.project_key(want) for r in app.query_one("#projects-table").rows)
         finally:
             mx.remove_project = saved
@@ -230,7 +282,9 @@ try:
             async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
                 app = pilot.app
                 await pilot.pause()
-                app._on_confirm_delete(True); await pilot.pause()
+                await wait_table(pilot)
+                await wait_until(pilot, lambda: app._bar_on and app._extra)
+                app._on_confirm_delete(True); await pilot.pause(); await pilot.pause()
                 assert app.query_one("#win-warning").display and app._bar_on and app._extra, "bar must stay"
                 assert any(mx.project_key(str(r.value)) == mx.project_key(want) for r in app.query_one("#projects-table").rows)
         finally:
@@ -240,6 +294,7 @@ try:
         async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
             app = pilot.app
             await pilot.pause()
+            await wait_table(pilot)
             app.suspend = contextlib.nullcontext
             app._launch_project_now(Path(os.path.realpath(out1)))
             assert not added, added
@@ -254,12 +309,17 @@ try:
             async with maude.MaudeApp(select=root).run_test(size=(140, 40)) as pilot:
                 app = pilot.app
                 await pilot.pause(); await pilot.pause()
-                table = app.query_one("#projects-table")
-                key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+                table = await wait_table(pilot)
+                sel_key = lambda: table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+                await wait_until(pilot, lambda: mx.project_key(sel_key()) == mx.project_key(root))
+                key = sel_key()
                 assert mx.project_key(key) == mx.project_key(root), (key, root)
+                await wait_until(pilot, lambda: "Press Enter" in str(app.query_one("#win-warning").render()))
                 assert "Press Enter" in str(app.query_one("#win-warning").render())
         async with maude.MaudeApp(select=str(Path(d) / "nonexistent")).run_test(size=(140, 40)) as pilot:
             await pilot.pause()
+            await wait_table(pilot)
+            await wait_until(pilot, lambda: "full Windows user rights" in str(pilot.app.query_one("#win-warning").render()))
             bar = str(pilot.app.query_one("#win-warning").render())
             assert "Press Enter" not in bar and "full Windows user rights" in bar, bar
     try:
@@ -276,6 +336,8 @@ try:
             app = pilot.app
             await pilot.pause()
             lit = lambda sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
+            await wait_until(pilot, lambda: lit("#model-select") == ["sonnet"] and lit("#tool-select") == ["Kiro CLI"] and lit("#effort-select") == ["high"])
+            await wait_until(pilot, lambda: all(app.query_one(i).region.height > 0 for i in ("#model-select", "#tool-select", "#effort-select", "#fresh-context", "#perplexity", "#maude-version")))
             assert lit("#model-select") == ["sonnet"] and lit("#tool-select") == ["Kiro CLI"], (lit("#model-select"), lit("#tool-select"))
             assert lit("#effort-select") == ["high"], lit("#effort-select")
             # Layout at a typical 120x35 terminal: every picker and the toggles sit fully inside the sidebar.
@@ -296,6 +358,7 @@ try:
             try:
                 app.query_one("#autostart").display = True
                 await pilot.pause()
+                await wait_until(pilot, lambda: app.query_one("#autostart").region.height == 1)
                 auto = app.query_one("#autostart", Checkbox)
                 assert str(auto.label) == "Autostart" and auto.region.height == 1 and auto.region.x == fresh.region.x, auto.region
                 assert auto.region.y == perp.region.y + 1 and auto.region.bottom <= side.bottom, (auto.region, side)
@@ -307,12 +370,16 @@ try:
             assert "Alt+V" in tips and "Paste image" in tips and "drop" not in tips, tips
             await pilot.click(app.query_one("#model-select").query(RadioButton)[3]); await pilot.pause()
             await pilot.click(app.query_one("#tool-select").query(RadioButton)[3]); await pilot.pause()
+            await wait_until(pilot, lambda: mf.read_text() == "haiku,high" and tf.read_text() == "Crush")
             assert mf.read_text() == "haiku,high" and tf.read_text() == "Crush", (mf.read_text(), tf.read_text())  # model change keeps the level
             await pilot.click(app.query_one("#effort-select").query(RadioButton)[4]); await pilot.pause()
+            await wait_until(pilot, lambda: mf.read_text() == "haiku,xhigh")
             assert mf.read_text() == "haiku,xhigh", mf.read_text()
             await pilot.click(app.query_one("#effort-select").query(RadioButton)[0]); await pilot.pause()
+            await wait_until(pilot, lambda: mf.read_text() == "haiku")
             assert mf.read_text() == "haiku", mf.read_text()                       # auto = model alone
             await pilot.click(app.query_one("#effort-select").query(RadioButton)[2]); await pilot.pause()
+            await wait_until(pilot, lambda: mf.read_text() == "haiku,medium")
             assert mf.read_text() == "haiku,medium", mf.read_text()
     asyncio.run(check_files())
     assert maude.EFFORTS == mx.EFFORTS
@@ -343,9 +410,14 @@ try:
                 app = pilot.app
                 await pilot.pause()
                 from textual.geometry import Region
-                lg = app.query_one("#logo")
-                shown = "".join("".join(s.text for s in ln) for ln in lg.render_lines(Region(0, 0, lg.size.width, lg.size.height)))
+                lg = await wait_query(pilot, lambda: app, "#logo")
+                await wait_until(pilot, lambda: lg.size.height >= 6)
+                shown_of = lambda: "".join("".join(s.text for s in ln) for ln in lg.render_lines(Region(0, 0, lg.size.width, lg.size.height)))
+                await wait_until(pilot, lambda: (maude.WIN_CAPTION in shown_of()) == has_sb)
+                shown = shown_of()
                 assert (maude.WIN_CAPTION in shown) == has_sb, shown
+                await wait_table(pilot)
+                await wait_until(pilot, lambda: "full Windows user rights" in str(app.query_one("#win-warning").render()))
                 warn = str(app.query_one("#win-warning").render())
                 assert "full Windows user rights" in warn and str(fresh.name) in warn, warn
                 assert ("OUTSIDE the sandbox" in warn) == has_sb, warn
@@ -385,16 +457,16 @@ try:
             app = pilot.app
             await pilot.pause()
             app.query_one("#btn-creds").press(); await pilot.pause()
+            await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
             await pilot.pause()  # let the first render settle (a click within milliseconds of opening is not a human click)
-            for _ in range(60):  # slow CI runners: children can mount after the screen is pushed
-                if app.screen.query("#btn-creds-mode-foundry"):
-                    break
-                await pilot.pause(0.05)
-            app.screen.query_one("#btn-creds-mode-foundry").press(); await pilot.pause(); await pilot.pause()
-            app.screen.query_one("#creds-foundry-url").value = "https://u.example/anthropic"
-            app.screen.query_one("#creds-foundry-key").value = "kk"
-            app.screen.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            # slow CI runners: children can mount after the screen is pushed
+            (await wait_query(pilot, lambda: app.screen, "#btn-creds-mode-foundry")).press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: app.screen.query_one("#creds-pane-foundry").display)
+            (await wait_query(pilot, lambda: app.screen, "#creds-foundry-url")).value = "https://u.example/anthropic"
+            (await wait_query(pilot, lambda: app.screen, "#creds-foundry-key")).value = "kk"
+            (await wait_query(pilot, lambda: app.screen, "#btn-creds-save")).press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
             assert len(app.screen_stack) == 1, app.screen_stack
     saved_env = dict(os.environ)
     try:
@@ -432,25 +504,35 @@ try:
             app = pilot.app
             await pilot.pause()
             app.query_one("#btn-creds").press(); await pilot.pause()
+            await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             scr = app.screen
             assert isinstance(scr, maude.CredsEntryScreen)
+            for b in ("#btn-creds-mode-foundry", "#btn-creds-mode-bedrock", "#btn-creds-mode-paste", "#btn-creds-cancel"):
+                await wait_query(pilot, lambda: scr, b)  # all children mounted before the rapid presses
+            calls = []
+            real_switch = scr._switch_mode
+            scr._switch_mode = lambda m: (calls.append(m), real_switch(m))[1]
             for _ in range(6):
                 for b in ("#btn-creds-mode-foundry", "#btn-creds-mode-bedrock", "#btn-creds-mode-paste", "#btn-creds-mode-foundry"):
                     scr.query_one(b).press()  # no pause between presses
-            for _ in range(20):
-                await pilot.pause(0.05)
             # (the buttons' own message pumps run concurrently, so which press lands last is not fixed)
             body = {"paste": "#creds-text", "bedrock": "#creds-aws-key", "foundry": "#creds-foundry-url"}
             panes = {"paste": "#creds-pane-paste", "bedrock": "#creds-pane-bedrock", "foundry": "#creds-pane-foundry"}
+            one_visible = lambda: all(scr.query_one(pid).display == (m == scr.mode) for m, pid in panes.items())
+            await wait_until(pilot, lambda: len(calls) >= 24, timeout=10.0)  # every queued press handled
+            await pilot.pause()
+            assert len(calls) >= 24, len(calls)
             assert all(len(scr.query(sel)) == 1 for sel in body.values()), "all mode bodies stay mounted"
-            assert all(scr.query_one(pid).display == (m == scr.mode) for m, pid in panes.items()), "exactly one mode body visible"
+            assert one_visible(), "exactly one mode body visible"
             scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
     asyncio.run(check_rapid())
     # Deterministic regression: a late RowHighlighted after the app has exited (screens torn down) must not raise.
     async def check_bar_after_exit():
         async with maude.MaudeApp(select=str(fresh)).run_test(size=(140, 40)) as pilot:
             app = pilot.app
             await pilot.pause()
+            await wait_until(pilot, lambda: app._bar_on and app._select)
             assert app._bar_on and app._select
         for key in (None, str(fresh), maude.SEP_KEY):  # called AFTER the run_test block has exited
             app._update_bar(key)
@@ -461,20 +543,20 @@ try:
             app = pilot.app
             await pilot.pause()
             app.query_one("#btn-creds").press(); await pilot.pause()
+            await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             scr = app.screen
             assert isinstance(scr, maude.CredsEntryScreen)
             await pilot.pause()
-            for _ in range(60):
-                if scr.query("#btn-creds-mode-foundry"):
-                    break
-                await pilot.pause(0.05)
-            scr.query_one("#creds-text").text = "export ANTHROPIC_API_KEY=sk-ant-hidden-pane\n"
-            scr.query_one("#creds-aws-key").value = "AKIAHIDDENPANE"
+            await wait_query(pilot, lambda: scr, "#btn-creds-mode-foundry")
+            (await wait_query(pilot, lambda: scr, "#creds-text")).text = "export ANTHROPIC_API_KEY=sk-ant-hidden-pane\n"
+            (await wait_query(pilot, lambda: scr, "#creds-aws-key")).value = "AKIAHIDDENPANE"
             scr.query_one("#btn-creds-mode-foundry").press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: not scr.query_one("#creds-pane-paste").display)
             assert not scr.query_one("#creds-pane-paste").display
-            scr.query_one("#creds-foundry-url").value = "https://v.example/anthropic"
-            scr.query_one("#creds-foundry-key").value = "fk"
-            scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            (await wait_query(pilot, lambda: scr, "#creds-foundry-url")).value = "https://v.example/anthropic"
+            (await wait_query(pilot, lambda: scr, "#creds-foundry-key")).value = "fk"
+            (await wait_query(pilot, lambda: scr, "#btn-creds-save")).press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
             assert len(app.screen_stack) == 1, app.screen_stack
     saved_env = dict(os.environ)
     try:
@@ -495,20 +577,29 @@ try:
         async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
             app = pilot.app
             await pilot.pause()
+            await wait_table(pilot)
             app.query_one("#btn-github").press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: isinstance(app.screen, maude.GitSetupWizard))
             assert isinstance(app.screen, maude.GitSetupWizard), app.screen
             from textual.widgets import Label
+            title = await wait_query(pilot, lambda: app.screen, "#wiz-title")
+            await wait_until(pilot, lambda: "Step 1 of 4" in str(title.render()))
             assert "Step 1 of 4" in str(app.screen.query_one("#wiz-title", Label).render())
             assert maude.GitSetupWizard.NATIVE_STEP_TITLES[3].endswith("Git Config & Signing")
             assert "Keychain" not in app.screen._title(3)
-            app.screen.query_one("#wiz-cancel").press(); await pilot.pause(); await pilot.pause()
+            (await wait_query(pilot, lambda: app.screen, "#wiz-cancel")).press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
             assert len(app.screen_stack) == 1, app.screen_stack
-            table = app.query_one("#projects-table")
+            table = await wait_table(pilot)
             table.move_cursor(row=table.row_count - 1); await pilot.pause()
-            app.query_one("#btn-togithub").press(); await pilot.pause(); await pilot.pause()
+            (await wait_query(pilot, lambda: app, "#btn-togithub")).press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: isinstance(app.screen, maude.PushToGithubScreen))
             assert isinstance(app.screen, maude.PushToGithubScreen), app.screen
+            help_ = await wait_query(pilot, lambda: app.screen, "#push-help")
+            await wait_until(pilot, lambda: "not authenticated" in str(help_.render()))
             assert "not authenticated" in str(app.screen.query_one("#push-help", Label).render())
-            app.screen.query_one("#btn-push-cancel").press(); await pilot.pause()
+            (await wait_query(pilot, lambda: app.screen, "#btn-push-cancel")).press(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
             assert len(app.screen_stack) == 1, app.screen_stack
     try:
         asyncio.run(check_git_screens())
@@ -533,24 +624,18 @@ try:
             app._launch_project(proj)
             assert _time.perf_counter() - t0 < 0.2, "the UI thread must not wait for claude auth status"
             assert not opened
-            for _ in range(60):
-                if isinstance(app.screen, maude.CredsEntryScreen):
-                    break
-                await pilot.pause(0.05)
+            await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
-            for _ in range(60):  # slow CI runners: the screen is pushed before its children are mounted
-                if app.screen.query("#btn-creds-cancel"):
-                    break
-                await pilot.pause(0.05)
-            app.screen.query_one("#btn-creds-cancel").press(); await pilot.pause(); await pilot.pause()
+            # slow CI runners: the screen is pushed before its children are mounted
+            (await wait_query(pilot, lambda: app.screen, "#btn-creds-cancel")).press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: opened)
             assert opened == [proj], opened  # Cancel on Windows/macOS still opens the project
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
             maude.claude_login_status = lambda *a, **k: None  # unknown answer: no screen at all
             opened.clear()
             app._launch_project(proj)
-            for _ in range(40):
-                if opened:
-                    break
-                await pilot.pause(0.05)
+            await wait_until(pilot, lambda: opened)
+            await pilot.pause()
             assert opened == [proj] and len(app.screen_stack) == 1, (opened, app.screen_stack)
     try:
         asyncio.run(check_gate())
