@@ -1210,6 +1210,9 @@ def run_tui(folder: str = "", model: str = "") -> int:
         return 2
     try:
         mark("before import maude")
+        # Run as __main__ (the exe), maude.py's `import maude_exe` would load a SECOND copy of this file
+        # with its own banner state: make it the same module. No-op when we were imported normally.
+        sys.modules.setdefault("maude_exe", sys.modules[__name__])
         import maude  # the Textual TUI, Windows mode
         mark("import maude (textual, rich) done")
         cls = maude.MaudeApp

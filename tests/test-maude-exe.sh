@@ -849,7 +849,7 @@ m.run_windows = lambda *a, **k: log.append("win") or 0
 m.add_project = lambda f: None
 m.folder_mode = lambda f, s: "windows"
 out = io.StringIO(); out.isatty = lambda: tty
-real_out, sys.stdout = sys.stdout, out
+real_out, real_err, sys.stdout, sys.stderr = sys.stdout, sys.stderr, out, io.StringIO()
 m._enable_vt = lambda: True
 real_show = m.show_banner
 m.show_banner = lambda *a, **k: real_show(None, lambda: True, out)
@@ -857,7 +857,7 @@ try:
     os.environ["MAUDE_NO_INSTALL"] = "1"
     m.main(args)
 finally:
-    sys.stdout = real_out
+    sys.stdout, sys.stderr = real_out, real_err
 txt = out.getvalue()
 import re
 plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", txt)
@@ -876,14 +876,17 @@ assert_eq "banner: --uninstall" "quiet,uninstall" "$(bn_run "--uninstall" tty)"
 assert_eq "banner: --windows folder" "quiet,win" "$(bn_run "--windows /tmp" tty)"
 assert_eq "banner: --sandbox folder" "quiet" "$(bn_run "--sandbox /tmp" tty)"
 assert_eq "banner: empty folder argument" "quiet" "$(bn_run '""' tty)"
-# Order of writes: real decide() with a real share folder (temp dir), one event log for stdout, stderr and the
-# launches. The banner must be erased by the very next event, and nothing may erase after a launch/print.
 assert_eq "timing: unset is off" False "$(env -u MAUDE_TIMING python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
 assert_eq "timing: 0 is off" False "$(MAUDE_TIMING=0 python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
 assert_eq "timing: empty is off" False "$(MAUDE_TIMING= python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
 assert_eq "timing: 1 is on" True "$(MAUDE_TIMING=1 python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m; print(m.timing_on())" "${SCRIPT_DIR}/../light")"
 bo_dir=$(mktemp -d)
 mkdir -p "$bo_dir/S/Projects/a" "$bo_dir/Other"
+# Order of writes: real decide() with a real share folder (temp dir), one event log for stdout, stderr and the
+# launches. The banner must be erased by the very next event, and nothing may erase after a launch/print.
+# Modes: ok (stubbed run_tui/_run), nosandbox, warn (self_install warning), installed (install notices),
+# realtui (REAL run_tui with a fake `maude` module), notfolder (real run_tui error path),
+# realshare (REAL resolve_share, uncached share: the "locating" line).
 bo_run() { python3 -I - "${SCRIPT_DIR}/../light" "$bo_dir" "$@" <<'PY'
 import io, os, re, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
 base, mode, folder = sys.argv[2], sys.argv[3], sys.argv[4]
@@ -895,14 +898,33 @@ class Out(io.StringIO):
     def flush(self): pass
     def isatty(self): return True
 real_os_name, os.name = os.name, "nt"
-sys.stdout, sys.stderr = Out("out"), Out("err")
+sys.stdout, sys.stderr, sys.stdin = Out("out"), Out("err"), io.StringIO()
 m._enable_vt = lambda: True
-m.resolve_share = lambda *a, **k: share
 m.has_sandbox = lambda: mode != "nosandbox"
-m.run_tui = lambda *a, **k: (m.clear_banner(), ev.append(("call", "tui")))[1] or 0  # real run_tui erases before app.run()
 m._run = lambda c: ev.append(("call", "_run")) or 0
+if mode == "realshare":      # uncached share: no registry, no wsl.exe; the heuristic picks a folder under LOCALAPPDATA
+    import subprocess, types
+    def no_wsl(*a, **k): raise FileNotFoundError("wsl.exe")
+    subprocess.run = no_wsl
+    os.environ["LOCALAPPDATA"] = base
+else:
+    m.resolve_share = lambda *a, **k: share
+if mode in ("realtui", "notfolder"):
+    import types
+    fake = types.ModuleType("maude")
+    class App:
+        return_code = 0
+        def __init__(self, select="", model=""): pass
+        def run(self): ev.append(("call", "app.run"))
+    fake.MaudeApp = App
+    sys.modules["maude"] = fake
+else:
+    m.run_tui = lambda *a, **k: (m.clear_banner(), ev.append(("call", "tui")))[1] or 0  # real run_tui erases before app.run()
 if mode == "warn":
     m.self_install = lambda env=None, warn=None: (warn("maude: could not update X: denied"), ("x", False, False))[1]
+    os.environ.pop("MAUDE_NO_INSTALL", None)
+elif mode == "installed":
+    m.self_install = lambda env=None, warn=None: ("C:\\x\\maude.exe", True, True)
     os.environ.pop("MAUDE_NO_INSTALL", None)
 else:
     os.environ["MAUDE_NO_INSTALL"] = "1"
@@ -922,7 +944,66 @@ assert_eq "order: outside folder -> TUI: erase before the TUI" "banner,erase,cal
 assert_eq "order: no args -> TUI" "banner,erase,call:tui" "$(bo_run ok -)"
 assert_eq "order: no sandbox installed: erase before the error" "banner,erase,err:Maude: not started." "$(bo_run nosandbox S/Projects/a)"
 assert_eq "order: self_install warning: erase before it" "banner,erase,err:maude: could not up,call:tui" "$(bo_run warn Other)"
-rm -rf "$bo_dir"
+assert_eq "order: install notices: erase before them" "banner,erase,out:Maude is installed ,out:Added %USERPROFILE%,call:tui" "$(bo_run installed Other)"
+assert_eq "order: REAL run_tui: erase right before app.run" "banner,erase,call:app.run" "$(bo_run realtui Other)"
+assert_eq "order: REAL run_tui: not a folder -> erase before the error" "banner,erase,err:Maude: not started." "$(bo_run notfolder Missing)"
+assert_eq "order: REAL resolve_share (uncached): erase, then the locating line stays" "banner,erase,out:Maude: locating the,call:tui" "$(bo_run realshare Other)"
+# maude_exe runs as __main__ (the exe) and maude.py does `import maude_exe`: both must be ONE module, or the
+# "locating" line printed during `import maude` is erased instead of the banner. Fake maude.py, real launcher.
+tm_dir=$(mktemp -d)
+cat > "$tm_dir/maude.py" <<'PY'
+import sys
+import maude_exe as mx
+SHARE = mx.resolve_share()          # like maude.py: PROJECTS_DIR = Path(mx.projects_dir()) at import time
+class MaudeApp:
+    return_code = 0
+    def __init__(self, select="", model=""): pass
+    def run(self): sys.stdout.write("<<app.run>>\n")
+PY
+mkdir -p "$tm_dir/local"
+tm_run() { python3 -I - "${SCRIPT_DIR}/../light" "$tm_dir" <<'PY'
+import io, os, re, runpy, subprocess, sys, types
+from unittest import mock
+light, d = sys.argv[1], sys.argv[2]
+sys.path[:0] = [d, light]
+ev = []
+class Out(io.StringIO):
+    def __init__(self, tag): super().__init__(); self.tag = tag
+    def write(self, s): ev.append((self.tag, s)); return len(s)
+    def flush(self): pass
+    def isatty(self): return True
+import ctypes, maude_exe          # preload the stdlib modules maude_exe needs (they import `nt` once os.name is "nt")
+del sys.modules["maude_exe"]      # the launcher below must be the only copy, as in the exe
+os.name = "nt"
+ctypes.windll = types.SimpleNamespace(kernel32=mock.MagicMock())   # VT "works"
+def no_wsl(*a, **k): raise FileNotFoundError("wsl.exe")
+subprocess.run = no_wsl
+os.environ.update(MAUDE_NO_INSTALL="1", LOCALAPPDATA=d + "/local")
+sys.stdout, sys.stderr, sys.stdin = Out("out"), Out("err"), io.StringIO()
+sys.argv = ["maude.exe"]
+path = os.path.join(light, "maude_exe.py")
+code = compile(open(path, encoding="utf-8").read(), path, "exec")
+main_mod = types.ModuleType("__main__")          # what the interpreter does for the entry script
+main_mod.__file__ = path
+sys.modules["__main__"] = main_mod
+try:
+    exec(code, main_mod.__dict__)
+except SystemExit:
+    pass
+except BaseException as e:   # show a harness/launcher crash instead of an empty result
+    import traceback
+    ev.append(("exc", repr(e).replace(",", ";") + " @ " + "|".join(f"{os.path.basename(f.filename)}:{f.lineno}" for f in traceback.extract_tb(e.__traceback__)[-4:])))
+sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+names = []
+for tag, s in ev:
+    if "Starting Maude" in s: names.append("banner")
+    elif s == "\x1b[1A\r\x1b[2K": names.append("erase")
+    elif s.strip(): names.append(tag + ":" + re.sub(r"\s+", " ", s.strip())[:200 if tag == "exc" else 19])
+print(",".join(names))
+PY
+}
+assert_eq "two modules: banner erased first, locating line and app.run after, never erased" "banner,erase,out:Maude: locating the,out:<<app.run>>" "$(tm_run)"
+rm -rf "$bo_dir" "$tm_dir"
 # show_banner itself: coloured with VT, plain without, silent on a non-TTY, never raises
 sb_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import io, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
