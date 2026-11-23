@@ -123,7 +123,10 @@ try:
             assert not scr.query_one("#btn-update-reload", Button).disabled
             assert scr.query_one("#btn-update-close", Button).disabled  # staged exe: Reload is the only way out
             scr.query_one("#btn-update-reload", Button).press()
-            await pilot.pause()
+            for _ in range(60):  # the exit can land a moment later on slow CI runners
+                if exits:
+                    break
+                await pilot.pause(0.05)
             assert exits == [(42,)], exits
             # With something staged, Escape must reload too (same exit value 42).
             app.query_one("#btn-update").press()
@@ -135,7 +138,10 @@ try:
                     break
                 await pilot.pause(0.05)
             await pilot.press("escape")
-            await pilot.pause()
+            for _ in range(60):
+                if len(exits) >= 2:
+                    break
+                await pilot.pause(0.05)
             assert exits == [(42,), (42,)], exits
 
     asyncio.run(check())
