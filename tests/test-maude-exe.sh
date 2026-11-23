@@ -14,20 +14,110 @@ assert_eq "case insensitive" '~/Maude/Projects' "$(py "m.wsl_dir(r'c:\\users\\BO
 assert_eq "outside share" 'None' "$(py "m.wsl_dir(r'C:\\Users\\bob\\Documents', r'$S')")"
 assert_eq "sibling prefix" 'None' "$(py "m.wsl_dir(r'${S}2\\x', r'$S')")"
 assert_eq "version exits 0" 0 "$(python3 -I "${SCRIPT_DIR}/../light/maude_exe.py" --version >/dev/null; echo $?)"
-D() { py "m.decide(r'$1', r'$S', $2, $3)"; }
-O='C:\Users\bob\Documents'; I="$S\\Projects\\a"
-assert_eq "inside -> sandbox" sandbox "$(D "$I" None None)"
-assert_eq "inside, dotdot escape -> ask" ask "$(D "$S\\..\\x" None None)"
-assert_eq "outside, no answer -> ask" ask "$(D "$O" None None)"
-assert_eq "outside, y" windows "$(D "$O" None "'y'")"
-assert_eq "outside, Yes" windows "$(D "$O" None "'Yes '")"
-assert_eq "outside, empty = No" deny "$(D "$O" None "''")"
-assert_eq "outside, n" deny "$(D "$O" None "'n'")"
-assert_eq "outside, --windows" windows "$(D "$O" "'windows'" None)"
-assert_eq "outside, --sandbox" refuse "$(D "$O" "'sandbox'" None)"
-assert_eq "inside, --sandbox" sandbox "$(D "$I" "'sandbox'" None)"
-assert_eq "prefix trick Maude2" ask "$(D "${S}2\\x" None None)"
-assert_eq "case-insensitive inside" sandbox "$(D 'c:\users\BOB\appdata\local\maude\data\maude\p' None None)"
+D() { py "m.decide(r'$1', r'$S', $2)"; }
+O='C:\Users\bob\Documents'; I="$S\Projects\a"
+assert_eq "inside -> sandbox" sandbox "$(D "$I" None)"
+assert_eq "inside, dotdot escape -> tui (no question)" tui "$(D "$S\..\x" None)"
+assert_eq "outside, no flag (context menu) -> tui" tui "$(D "$O" None)"
+assert_eq "outside, --windows" windows "$(D "$O" "'windows'")"
+assert_eq "outside, --sandbox" refuse "$(D "$O" "'sandbox'")"
+assert_eq "inside, --sandbox" sandbox "$(D "$I" "'sandbox'")"
+assert_eq "inside, --windows" windows "$(D "$I" "'windows'")"
+assert_eq "prefix trick Maude2" tui "$(D "${S}2\x" None)"
+assert_eq "case-insensitive inside" sandbox "$(D 'c:\users\BOB\appdata\local\maude\data\maude\p' None)"
+# run_tui: starts MaudeApp(select=, model=) and does NOT register the folder itself (the TUI does when it is opened).
+# Real Textual does not re-raise handler errors: App.run() prints them and sets return_code = 1.
+rtd=$(mktemp -d)
+RT_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" "$rtd" 2>/dev/null <<'PY'
+import sys, types
+sys.path.insert(0, sys.argv[1])
+import maude_exe as m
+calls = []
+fake = types.ModuleType("maude")
+class A:
+    return_code = 0
+    def __init__(self, select="", model=""): calls.append(("app", select, model))
+    def run(self): calls.append(("run",))
+fake.MaudeApp = A
+sys.modules["maude"] = fake
+m.add_project = lambda f: calls.append(("add", f))
+d = sys.argv[2]
+print("rc", m.run_tui(d, "sonnet"), [(c[0], c[1:] if c[0] != "app" else (c[1] == d, c[2])) for c in calls]); calls.clear()
+print("rc", m.run_tui(), calls); calls.clear()
+class C(A):
+    def run(self): self.return_code = 1   # like Textual: error printed, run() returns, return_code 1
+fake.MaudeApp = C
+print("rc", m.run_tui(d)); calls.clear()
+class B(A):
+    def run(self): raise RuntimeError("boom")
+fake.MaudeApp = B
+print("rc", m.run_tui(d)); calls.clear()
+fake.MaudeApp = A
+print("rc", m.run_tui(d + "/missing"), calls)  # not a folder: nothing started, nothing registered
+for s in (r'C:"', r'C:\foo"', r'C:\x y', r'D:', 'C:' + chr(92)):
+    print(m.fix_folder_arg(s))
+PY
+)"
+rm -rf "$rtd"
+assert_eq "run_tui folder: select + model, no registry write" "rc 0 [('app', (True, 'sonnet')), ('run', ())]" "$(sed -n 1p <<<"$RT_OUT")"
+assert_eq "run_tui no folder" "rc 0 [('app', '', ''), ('run',)]" "$(sed -n 2p <<<"$RT_OUT")"
+assert_eq "run_tui app error (return_code 1) -> rc 1" "rc 1" "$(sed -n 3p <<<"$RT_OUT")"
+assert_eq "run_tui exception -> rc 1, not raised" "rc 1" "$(sed -n 4p <<<"$RT_OUT")"
+assert_eq "run_tui missing folder -> rc 2, nothing started" "rc 2 []" "$(sed -n 5p <<<"$RT_OUT")"
+assert_eq "drive root arg (quote eaten by argv) -> root" 'C:\' "$(sed -n 6p <<<"$RT_OUT")"
+assert_eq "arg trailing quote stripped" 'C:\foo' "$(sed -n 7p <<<"$RT_OUT")"
+assert_eq "arg unchanged" 'C:\x y' "$(sed -n 8p <<<"$RT_OUT")"
+assert_eq "bare drive -> root" 'D:\' "$(sed -n 9p <<<"$RT_OUT")"
+assert_eq "root unchanged" 'C:\' "$(sed -n 10p <<<"$RT_OUT")"
+# lxss_names with a fake winreg: missing key, denied key, denied subkey, subkey without DistributionName, other distros
+LX_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" 2>&1 <<'PY'
+import sys, types
+sys.path.insert(0, sys.argv[1])
+import maude_exe as m
+class K:
+    def __init__(s, children=None, name=None, err=None):
+        s.children, s.name, s.err = children or {}, name, err
+    def __enter__(s): return s
+    def __exit__(s, *a): return False
+ROOT = {}
+fw = types.ModuleType("winreg")
+fw.HKEY_CURRENT_USER = "HKCU"
+def OpenKey(h, name, *a):
+    k = ROOT["root"] if h == "HKCU" else h.children[name]
+    if isinstance(k, Exception): raise k
+    return k
+fw.OpenKey = OpenKey
+fw.QueryInfoKey = lambda h: (len(h.children), 0, 0)
+fw.EnumKey = lambda h, i: list(h.children)[i]
+def QueryValueEx(k, n):
+    if k.name is None: raise FileNotFoundError(n)
+    return (k.name, 1)
+fw.QueryValueEx = QueryValueEx
+sys.modules["winreg"] = fw
+def run(root):
+    ROOT["root"] = root
+    r = m.lxss_names()
+    print(r, m.sandbox_present(r))
+run(FileNotFoundError())
+run(PermissionError())
+run(K({"{1}": K(name="Maude"), "{2}": PermissionError()}))
+run(K({"{1}": K(), "{2}": K(name="Maude")}))
+run(K({"{1}": K(name="Ubuntu"), "{2}": K(name="Maude-old")}))
+PY
+)"
+assert_eq "lxss missing key -> [] (no sandbox)" "[] False" "$(sed -n 1p <<<"$LX_OUT")"
+assert_eq "lxss denied key -> None (assume sandbox)" "None True" "$(sed -n 2p <<<"$LX_OUT")"
+assert_eq "lxss denied subkey -> None" "None True" "$(sed -n 3p <<<"$LX_OUT")"
+assert_eq "lxss subkey without DistributionName skipped" "['Maude'] True" "$(sed -n 4p <<<"$LX_OUT")"
+assert_eq "lxss other distros do not match" "['Ubuntu', 'Maude-old'] False" "$(sed -n 5p <<<"$LX_OUT")"
+assert_eq "sandbox present" True "$(py "m.sandbox_present(['Ubuntu', 'Maude'])")"
+assert_eq "sandbox present, case-insensitive" True "$(py "m.sandbox_present(['maude'])")"
+assert_eq "sandbox absent (other distros)" False "$(py "m.sandbox_present(['Ubuntu', 'Maude-old'])")"
+assert_eq "sandbox absent (WSL never used)" False "$(py "m.sandbox_present([])")"
+assert_eq "sandbox unknown -> assume present" True "$(py "m.sandbox_present(None)")"
+assert_eq "lxss unreadable off Windows -> None" None "$(py "m.lxss_names()")"
+assert_contains "banner with sandbox" "OUTSIDE the sandbox in C:\\x" "$(py "m.banner_text(r'C:\\x')")"
+assert_eq "banner without sandbox" "Maude: running on Windows in C:\\x. Maude's AI agents have your full Windows user rights here." "$(py "m.banner_text(r'C:\\x', False)")"
 assert_eq "windows cmd continue" "['C:/c.exe', '--model', 'opus', '--continue']" "$(py "m.windows_cmd(r'C:/c.exe','opus',True)")"
 assert_eq "windows cmd fallback" "['C:/c.exe', '--model', 'sonnet']" "$(py "m.windows_cmd(r'C:/c.exe','sonnet',False)")"
 assert_eq "no bypass flag" 0 "$(py "int(any('skip' in a or 'bypass' in a for a in m.windows_cmd('c','opus',True)))")"

@@ -93,6 +93,9 @@ _LOGO_GRADIENT = [
 
 _LOGO_GRADIENT_WIN = ["#ff9a9a", "#f27474", "#e05252", "#c93a3a", "#a82a2a"]  # reds: outside the sandbox
 WIN_CAPTION = "running outside the sandbox"
+# Windows only: is the Maude WSL distro installed? The red logo is always used on Windows, but the
+# caption only makes sense when there is a sandbox to be outside of. Unknown counts as installed.
+HAS_SANDBOX = mx.has_sandbox() if IS_WIN else True
 
 def make_gradient_logo() -> Text:
     grad = _LOGO_GRADIENT_WIN if IS_WIN else _LOGO_GRADIENT
@@ -100,7 +103,7 @@ def make_gradient_logo() -> Text:
     for i, line in enumerate(LOGO.splitlines()):
         colour = grad[i] if i < len(grad) else grad[-1]
         text.append(line + "\n", style=f"bold {colour}")
-    if IS_WIN:
+    if IS_WIN and HAS_SANDBOX:
         text.append(" " + WIN_CAPTION + "\n", style="dim #e05252")
     return text
 
@@ -386,7 +389,7 @@ def gh_user_login() -> str:
 REG_ORIG: dict[str, str] = {}  # Windows: resolved registry project path -> path as stored
 
 
-def list_projects() -> list[dict]:
+def list_projects(extra: tuple = ()) -> list[dict]:
     """Return projects sorted by last-modified time, newest first.
 
     Windows: outside-sandbox projects (registry) first, then share projects, each group sorted
@@ -399,7 +402,7 @@ def list_projects() -> list[dict]:
         # (realpath expands 8.3 short names and drops trailing separators).
         have = {mx.project_key(os.path.realpath(p)) for p, _ in dirs}
         share = os.path.realpath(PROJECTS_DIR.parent)
-        for r in mx.read_projects():
+        for r in list(mx.read_projects()) + [str(e) for e in extra]:  # extra: shown even if the registry write failed
             rp = os.path.realpath(r)
             if mx.project_key(rp) not in have and mx.folder_mode(rp, share) == "windows":
                 dirs.append((Path(rp), True))
@@ -556,7 +559,7 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str) -> None:
     if not exe:  # ensure_tool said why (declined, failed, not found)
         input("Press Enter to go back. ")
         return
-    print(mx.BANNER.format(path))
+    print(mx.banner_text(str(path), HAS_SANDBOX))
     if mx._run([exe, *cmd[1:]], cwd=str(path)) and tool == "Kiro CLI" and not fresh:
         mx._run([exe, *tool_command(tool, model, True)[1:]], cwd=str(path))  # nothing to resume
 
@@ -631,7 +634,7 @@ def save_tool(name: str) -> None:
 
 
 def features(github: bool, outside: bool) -> str:
-    return mx.features(github, outside) if IS_WIN else "GitHub" if github else ""
+    return mx.features(github, outside and HAS_SANDBOX) if IS_WIN else "GitHub" if github else ""
 
 
 def soft_delete(project_path: Path) -> None:
@@ -3084,6 +3087,15 @@ class MaudeApp(App):
         padding: 1 2;
     }
 
+    #win-warning {
+        height: auto;
+        margin-bottom: 1;
+        padding: 0 1;
+        color: #ffffff;
+        background: #a82a2a;
+        text-style: bold;
+    }
+
     #main-header {
         height: auto;
         margin-bottom: 1;
@@ -3488,12 +3500,22 @@ class MaudeApp(App):
         Binding("q",     "quit_to_shell", "Quit", show=True),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, select: str = "", model: str = "") -> None:
+        """select: Windows only. Folder (outside the share) preselected in the list, with the
+        outside-the-sandbox warning shown; it is listed even if it is not in the registry.
+        model: optional model alias to preselect (ignored unless it is one of MODELS)."""
         super().__init__()
+        self._select = os.path.realpath(select) if (IS_WIN and select) else ""
+        self._extra: tuple = (self._select,) if self._select else ()
+        self._bar_on = False  # the warning bar (#win-warning) is active
         self._tool = read_tool()
-        model = read_model()
-        self._model, self._tool = reconcile(model, self._tool, "tool")
-        if self._model != model:
+        want = model if model in MODELS else ""
+        model = want or read_model()
+        self._model, self._tool = reconcile(model, self._tool, "model" if want else "tool")
+        if want:
+            save_model(self._model)
+            save_tool(self._tool)
+        elif self._model != model:
             save_model(self._model)
 
     def compose(self) -> ComposeResult:
@@ -3539,6 +3561,7 @@ class MaudeApp(App):
                     id="maude-version",
                 )
             with Vertical(id="main"):
+                yield Static("", id="win-warning")  # shown only when started on a folder (Explorer menu)
                 with Horizontal(id="main-header"):
                     yield Label("Projects", id="section-title")
                     yield Static("", id="kanna-url")
@@ -3560,8 +3583,16 @@ class MaudeApp(App):
         if IS_WIN:  # sandbox-only features (bash helpers, ssh/gpg, kanna, wrapper creds)
             for i in WIN_HIDDEN:
                 self.query_one(i).display = False
-            self.query_one("#logo").styles.height = 6  # room for the caption line
+            if HAS_SANDBOX:
+                self.query_one("#logo").styles.height = 6  # room for the caption line
+        warn = self.query_one("#win-warning", Static)
+        warn.display = False
         self._refresh_table()
+        if self._select:
+            self._bar_on = True
+            warn.display = True
+            found = self._select_project(Path(self._select))  # Enter sentence only if that row has the cursor
+            self._update_bar(self._select if found else None)
         self.query_one("#projects-table", DataTable).focus()
         # Sync the model RadioSet's keyboard cursor with the actually-
         # pressed (saved) model. Textual tracks the cursor and the
@@ -3624,7 +3655,7 @@ class MaudeApp(App):
         table.clear(columns=True)
         table.add_columns("  Project", "Last modified", "Features")
         now = time.time()
-        projs = list_projects()
+        projs = list_projects(self._extra)
         # Windows: one rule row between the no-sandbox and the share group.
         sep_at = next((i for i in range(1, len(projs))
                        if projs[i - 1]["outside"] and not projs[i]["outside"]), None)
@@ -3676,6 +3707,7 @@ class MaudeApp(App):
         if event.row_key is None or event.row_key.value != SEP_KEY:
             self._last_row = row
             self._clicked = False  # a click on a normal row must not steer the next key press
+            self._update_bar(event.row_key.value if event.row_key is not None else None)
             return
         down = getattr(self, "_clicked", False) or row >= last
         self._clicked = False
@@ -3971,6 +4003,7 @@ class MaudeApp(App):
                 fresh = self.query_one("#fresh-context", Checkbox).value
             except Exception:
                 fresh = False
+        self._register_selected(path)
         with self.suspend():
             open_project(path, self._model, fresh=fresh, tool=self._tool)
         # Auto-clear the checkbox after use — fresh-context is a one-shot
@@ -3983,8 +4016,27 @@ class MaudeApp(App):
         self._refresh_table()
         self._select_project(path)
 
-    def _select_project(self, path: Path) -> None:
-        """Move the table cursor to the row of `path`, if it exists."""
+    def _register_selected(self, path: Path) -> None:
+        """Windows: the folder the app was started on (select=) is written to the registry only when
+        it is really opened, not when the TUI starts. A registry error is ignored (_extra keeps the
+        row listed for this session)."""
+        if IS_WIN and self._select and mx.project_key(str(path)) == mx.project_key(self._select):
+            try:
+                mx.add_project(self._select)
+            except OSError:
+                pass
+
+    def _update_bar(self, key: str | None) -> None:
+        """The "Press Enter" sentence only while the cursor is on the folder the bar is about."""
+        if not self._select or not self._bar_on:
+            return
+        on_row = key is not None and key != SEP_KEY and mx.project_key(key) == mx.project_key(self._select)
+        self.query_one("#win-warning", Static).update(Text(
+            mx.banner_text(self._select, HAS_SANDBOX)
+            + ("\nPress Enter to open it, or pick another project, model or tool first." if on_row else "")))
+
+    def _select_project(self, path: Path) -> bool:
+        """Move the table cursor to the row of `path`. Returns whether the row exists."""
         name = str(path)
         table = self.query_one("#projects-table", DataTable)
         try:
@@ -3998,6 +4050,7 @@ class MaudeApp(App):
         if index >= 0:
             table.move_cursor(row=index)
         table.focus()
+        return index >= 0
 
     def _on_new_project(self, name: str | None) -> None:
         if not name:
@@ -4018,6 +4071,10 @@ class MaudeApp(App):
             return
         path = self._selected_project()
         if path and self._is_outside(path):  # registry entry only: never touch the folder
+            self._extra = tuple(e for e in self._extra if mx.project_key(e) != mx.project_key(str(path)))
+            if self._select and mx.project_key(self._select) == mx.project_key(str(path)):
+                self._bar_on = False  # the folder the bar is about is gone from the list
+                self.query_one("#win-warning", Static).display = False
             try:
                 mx.remove_project(REG_ORIG.get(str(path), str(path)))
             except OSError as e:

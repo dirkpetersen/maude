@@ -148,18 +148,17 @@ def folder_mode(folder: str, share: str) -> str:
     return "sandbox" if f == r or f.startswith(r.rstrip("\\") + "\\") else "windows"
 
 
-def decide(folder: str, share: str, flag: str | None, answer: str | None) -> str:
-    """Return "sandbox", "windows", "ask" (need a y/N answer), "deny" (declined) or "refuse".
-    flag is "windows", "sandbox" or None; answer is the typed reply or None if not asked yet."""
+def decide(folder: str, share: str, flag: str | None) -> str:
+    """Return "sandbox", "windows" (explicit --windows, launch Claude directly), "tui" (outside
+    the share without a flag: the Windows TUI with the folder preselected and a warning) or "refuse".
+    flag is "windows", "sandbox" or None."""
     if flag == "windows":
         return "windows"
     if folder_mode(folder, share) == "sandbox":
         return "sandbox"
     if flag == "sandbox":
         return "refuse"
-    if answer is None:
-        return "ask"
-    return "windows" if answer.strip().lower() in ("y", "yes") else "deny"
+    return "tui"
 
 
 def sandbox_cmd(d: str, model: str) -> list[str]:
@@ -721,6 +720,42 @@ def features(github: bool, outside: bool) -> str:
 
 BANNER = ("Maude: running OUTSIDE the sandbox in {}. "
           "Maude's AI agents have your full Windows user rights here.")
+BANNER_NO_SANDBOX = ("Maude: running on Windows in {}. "
+                     "Maude's AI agents have your full Windows user rights here.")
+REG_LXSS = r"Software\Microsoft\Windows\CurrentVersion\Lxss"  # HKCU; one subkey per WSL distro
+
+
+def lxss_names() -> list[str] | None:
+    """DistributionName of every registered WSL distro (registry only, no wsl.exe). [] if WSL has
+    never been used (no Lxss key). None if it cannot be read (unknown)."""
+    try:
+        import winreg
+        names = []
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_LXSS) as h:
+            for i in range(winreg.QueryInfoKey(h)[0]):
+                try:
+                    with winreg.OpenKey(h, winreg.EnumKey(h, i)) as k:
+                        names.append(str(winreg.QueryValueEx(k, "DistributionName")[0]))
+                except FileNotFoundError:  # a subkey without DistributionName: not a distro, skip
+                    pass
+        return names
+    except FileNotFoundError:
+        return []
+    except (ImportError, OSError):  # e.g. access denied: unknown, not "no sandbox"
+        return None
+
+
+def sandbox_present(names: list[str] | None) -> bool:
+    """Is the Maude distro registered? Unknown (None) counts as yes: the safe default shows the caption."""
+    return names is None or any(n.lower() == DISTRO.lower() for n in names)
+
+
+def has_sandbox() -> bool:
+    return sandbox_present(lxss_names())
+
+
+def banner_text(folder: str, sandbox: bool = True) -> str:
+    return (BANNER if sandbox else BANNER_NO_SANDBOX).format(folder)
 
 
 def projects_dir(env=os.environ) -> str:
@@ -734,7 +769,7 @@ def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = Fals
         print("Maude: Claude Code for Windows was not found.\n" + INSTALL_HINT, file=sys.stderr)
         return 3
     if banner:
-        print(BANNER.format(folder))
+        print(banner_text(folder, has_sandbox()))
     model = model or windows_model(env["USERPROFILE"])
     rc = _run(windows_cmd(claude, model, not fresh), cwd=folder)
     if rc and not fresh:
@@ -850,6 +885,43 @@ def selftest() -> int:
     return 0
 
 
+def fix_folder_arg(arg: str) -> str:
+    """Explorer's "%V" on a drive root is "C:\\" and the closing quote is eaten by argv parsing (\\"),
+    which gives C:" . Strip trailing quotes and turn a bare drive back into its root: C: -> C:\\."""
+    arg = arg.rstrip('"')
+    return arg + "\\" if re.fullmatch(r"[A-Za-z]:", arg) else arg
+
+
+def run_tui(folder: str = "", model: str = "") -> int:
+    """Run the Windows TUI (light/maude.py). With a folder (outside the share): list it, preselect
+    its row and show the OUTSIDE warning. The folder is registered only when it is opened from the
+    TUI (MaudeApp._register_selected), never just by starting. A normal quit (q, Command Line) just
+    returns. Textual's App.run() does not re-raise errors in handlers: it prints the traceback and
+    sets return_code = 1, so check that too. On a failure the window waits for Enter on a terminal,
+    so the window of the Explorer menu does not close over the error."""
+    def wait(msg):
+        if sys.stdin.isatty() and not sys.stdout.closed:
+            with contextlib.suppress(EOFError, OSError):
+                input(msg)
+    if folder and not os.path.isdir(folder):
+        print(f"Maude: not started. This is not a folder: {folder}", file=sys.stderr)
+        wait("Press Enter to close.")
+        return 2
+    try:
+        import maude  # the Textual TUI, Windows mode
+        app = maude.MaudeApp(select=folder, model=model)
+        app.run()
+        rc = getattr(app, "return_code", 0)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        rc = 1
+    if rc not in (0, None):
+        wait("Maude failed to start or crashed. Press Enter to close.")
+        return 1
+    return 0
+
+
 def main(argv: list[str]) -> int:
     # Never resolve programs from the current folder: a cloned repo could plant claude.cmd etc.
     # Read by shutil.which and CreateProcess, and inherited by the AI tools.
@@ -883,28 +955,26 @@ def main(argv: list[str]) -> int:
         if path_changed:
             print(r"Added %USERPROFILE%\.local\bin to your user PATH. Open a new PowerShell window to type 'maude' there.")
     if not args:
-        import maude  # the Textual TUI, Windows mode (light/maude.py)
-        maude.MaudeApp().run()
-        return 0
-    folder = os.path.realpath(args[0])
+        return run_tui()
+    folder = os.path.realpath(fix_folder_arg(args[0]))
     env = os.environ
     share = os.path.realpath(resolve_share(env))
-    answer, asked = None, False
-    while True:
-        what = decide(folder, share, flag, answer)
-        if what != "ask":
-            break
-        print(BANNER.format(folder))
-        answer, asked = "", True
-        if sys.stdin.isatty():  # no terminal means No
-            answer = input("Run Maude on Windows outside the sandbox? [y/N] ")
+    what = decide(folder, share, flag)
+    if what == "tui":  # Explorer menu on a folder outside the share: no question, TUI with a warning
+        return run_tui(folder, model)
     if what == "windows":
         if folder_mode(folder, share) == "windows":  # outside the share: list it in the TUI
             with contextlib.suppress(OSError):
                 add_project(folder)
-        return run_windows(folder, model, banner=not asked)
-    if what in ("deny", "refuse"):
-        print(f"Maude: not started. To use the sandbox, move the folder into {share}.", file=sys.stderr)
+        return run_windows(folder, model)
+    sandbox = has_sandbox()
+    if what == "refuse" or not sandbox:
+        if not sandbox:
+            print("Maude: not started. No Maude sandbox (WSL distro 'Maude') is installed, so there is "
+                  "nothing to run this folder in. Install it with setup-wsl-maude.ps1, or use --windows "
+                  "to run on Windows with your full user rights.", file=sys.stderr)
+        else:
+            print(f"Maude: not started. To use the sandbox, move the folder into {share}.", file=sys.stderr)
         if sys.stdin.isatty() and not sys.stdout.closed:
             input("Press Enter to close.")
         return 2

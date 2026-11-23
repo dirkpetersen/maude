@@ -40,7 +40,7 @@ Goal: start `maude.exe` on a new PC and let it set up what is missing. In order:
 | Tool | Command |
 |---|---|
 | Claude Code | `irm https://claude.ai/install.ps1 \| iex` |
-| Kiro CLI | Python in `maude.exe` (`install_kiro`), not the vendor script: reads `https://prod.download.cli.kiro.dev/stable/latest/manifest.json`, downloads the Windows x86_64 MSI named there, checks its SHA-256, then runs `msiexec /i <msi> /qn /norestart /l*v %TEMP%\maude-kiro-install.log ALLUSERS=2 MSIINSTALLPERUSER=1`. The install is per user even for an administrator and lands in `%LOCALAPPDATA%\Kiro-Cli` (user PATH). On a non-zero msiexec exit code Maude prints the code and the log path |
+| Kiro CLI | Python in `maude.exe` (`install_kiro`), not the vendor script: reads `https://prod.download.cli.kiro.dev/stable/latest/manifest.json`, downloads the Windows x86_64 MSI named there, checks its SHA-256, then runs `msiexec /i <msi> /qn /norestart /l*v %TEMP%\maude-kiro-install.log ALLUSERS=2 MSIINSTALLPERUSER=1`. The install lands in `%LOCALAPPDATA%\Kiro-Cli` (user PATH) and needs no admin rights. The MSI ignores `MSIINSTALLPERUSER`: its log says "MSIINSTALLPERUSER property is not valid for UAC compliant package". It still installs per user (its `INSTALLFOLDER` is under `LocalAppDataFolder`), but Windows registers its Programs and Features entry under HKLM. On a non-zero msiexec exit code Maude prints the code and the log path |
 | OpenCode | `bun install -g --trust opencode-ai` (same npm package as the WSL side, `light/lib/opencode.sh`) |
 | Crush | `bun install -g --trust @charmland/crush` |
 | Bun (first, only if OpenCode or Crush is chosen and bun is missing) | `irm bun.sh/install.ps1 \| iex` |
@@ -72,9 +72,17 @@ No admin rights, no UAC, no installer window. If this PC has no zip (not AMD64 o
 
 ## Outside-sandbox projects
 
-The Windows TUI shows two groups of projects. The red logo with the caption "running outside the sandbox" tells you that you are in this mode.
+The Windows TUI shows two groups of projects. The red logo tells you that you are in Windows mode. There are three modes in total:
 
-- Outside-sandbox projects come first. They are folders that you opened with "Open in Maude" (or `maude.exe <folder>`) outside the share and then confirmed Windows mode (`y`, `yes` or `--windows`). A folder inside the share is not added, because it is already listed.
+| Mode | Logo | Caption |
+|---|---|---|
+| Linux sandbox (`maude tui` in WSL) | green | none |
+| Windows mode, Maude sandbox installed | red | "running outside the sandbox" |
+| Windows mode, no sandbox installed | red | none (there is no sandbox to be outside of) |
+
+"Sandbox installed" means the WSL distro `Maude` is registered. `maude.exe` reads the distro names from `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss` (value `DistributionName` of each subkey), without starting `wsl.exe`. If WSL was never used (no `Lxss` key) there is no sandbox. If the registry cannot be read, Maude assumes a sandbox exists (the caption stays). With no sandbox, the Features column no longer shows `No Sandbox`, the warning reads "running on Windows in <folder>" instead of "OUTSIDE the sandbox", all projects (also those in the share folder) open natively as before, and `maude.exe <folder-in-share>` prints that no sandbox is installed and exits with code 2 (use `--windows` to run on Windows anyway).
+
+- Outside-sandbox projects come first. They are folders that you opened with "Open in Maude" (or `maude.exe <folder>`) outside the share. They are registered when you open the folder from the TUI (or start it with `--windows`), not when the TUI merely starts on it. A folder inside the share is not added, because it is already listed.
 - Then come the share projects. The outside-sandbox projects are not shown when the TUI runs in the sandbox.
 
 Each group is sorted by last change, newest first. Last change = the newest modification time of the folder and its direct children (no deep scan, `.git` is skipped). A folder that no longer exists is hidden, but its registry value stays. If two projects have the same folder name, the list shows `name (parent folder)`.
@@ -97,7 +105,7 @@ The sandbox is the default. Windows mode is a deliberate choice.
 |---|---|---|
 | none (`maude.exe`, or `--tui`) | | The Windows TUI described above (no WSL needed to start it) |
 | inside `%LOCALAPPDATA%\Maude\Data\Maude` | | Sandbox: `wsl.exe -d Maude --cd ~/Maude/<rel> -e /usr/bin/env MAUDE_WELCOMED=1 bash -lc <script> maude <model>`. `-e` runs argv without a shell, so the model stays `$1`. `MAUDE_WELCOMED=1` stops the welcome TUI. The script runs `claude <model> --continue`, else `claude <model>` |
-| outside the share | none | Prints the OUTSIDE warning and asks `Run Maude on Windows outside the sandbox? [y/N]`. Only `y` or `yes` continues. No terminal means No |
+| outside the share | none (what the Explorer menu passes) | No question. If the argument is not an existing folder, Maude prints that, waits for Enter on a terminal, exits with code 2 and registers nothing. Otherwise the Windows TUI starts with that folder's row selected and focused, so Enter opens it with the model and AI tool shown in the TUI (change them first if you like). Nothing is written to the registry at start: the folder is registered only when it is opened from the TUI (a registry error is ignored, the row stays listed for the session), so quitting with `q` leaves the registry as it was. A red warning bar above the list says: "Maude: running OUTSIDE the sandbox in <folder>. Maude's AI agents have your full Windows user rights here." (without a sandbox: "running on Windows in <folder>"). The sentence "Press Enter to open it, ..." is shown only while the cursor is on that folder's row; the bar disappears when that row is deleted. A folder that is already listed is selected, not duplicated. `--model <alias>` preselects (and saves) that model in the picker; only the aliases of the picker (`opus`, `fable`, `sonnet`, `haiku`) are used, any other name is ignored in TUI mode. `--model fable` also switches the tool to Claude Code and saves that too, because Fable only exists there. A drive root from Explorer arrives as `C:"` (argv eats the backslash-quote); Maude turns it back into `C:\`. Quitting the TUI (`q` or Command Line) ends `maude.exe`, so the window of the Explorer menu closes with no "Press Enter". If the TUI fails to start, or Textual reports an error (it prints the traceback and `App.run()` returns with `return_code` 1), the window waits for Enter on a terminal and `maude.exe` exits with code 1 |
 | outside the share | `--windows` | Windows mode without the question |
 | outside the share | `--sandbox` | Not started. Prints that the folder must be moved into the share, exit code 2 |
 | inside the share | `--windows` | Windows mode too: an explicit choice is honoured even for a folder inside the share |
@@ -113,7 +121,7 @@ Share detection order (TUI and folder mode):
 
 A failed registry read or write is ignored. To reset the cache, delete the `Share` value in `regedit` or run `maude.exe --uninstall` (it removes `Share` and leaves `HKCU\Software\Maude\Projects` alone).
 
-Security statement: only exe mode, on a folder outside the share, after `y` or `--windows`, runs outside the sandbox. There Maude's AI agents have your full Windows user rights (all your files, SSH keys, browser data), with normal permission prompts. Everything inside the share stays in the isolated WSL distro. The context menu runs `"<exe>" "%V"` without `--windows`, so it always asks first.
+Security statement: only exe mode, on a folder outside the share, runs outside the sandbox. There Maude's AI agents have your full Windows user rights (all your files, SSH keys, browser data), with normal permission prompts. Everything inside the share stays in the isolated WSL distro. The context menu runs `"<exe>" "%V"` without `--windows`: it shows the red TUI with the warning bar and nothing starts until you press Enter on the selected folder (or pick another row).
 
 ## First run (no admin)
 
@@ -142,7 +150,7 @@ Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and
 
 `.github/workflows/build-maude-exe.yml` builds on `windows-latest` with `pyinstaller==6.11.1` and `textual==8.2.8`: `pyinstaller --onefile --console --name maude --paths light --hidden-import maude --hidden-import maude_exe --collect-all textual --collect-all rich light/maude_exe.py`. It injects the tag as version (`dev` outside tags). Checks in CI:
 
-1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE`, share and registry. It checks the project list and its order, the Features cells, that Delete on an outside project removes only the registry entry, the logo caption, the hidden buttons, that Command Line exits the TUI and the Open Project commands (spawns are patched, nothing opens).
+1. `python tests/win_tui_smoke.py` from source: headless Textual run with a fake `USERPROFILE`, share and registry. It checks the project list and its order, the Features cells, that Delete on an outside project removes only the registry entry, the logo caption (shown with a sandbox, absent without, red logo in both), `MaudeApp(select=...)` (row selected and focused, warning shown, a folder missing from the registry still listed, `model=` preselected), the hidden buttons, that Command Line exits the TUI and the Open Project commands (spawns are patched, nothing opens).
 2. `maude.exe --version`.
 3. `maude.exe --selftest`: starts the TUI headless from the frozen exe. This proves that Textual and its data files are bundled.
 
@@ -154,8 +162,9 @@ The Windows setup script `setup-wsl-maude.ps1` removes the cached `HKCU\Software
 
 - A tool is found on PATH first (also entries written as `%VAR%`, which `shutil.which` does not expand), then in `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin`, `%ProgramFiles%\Kiro-Cli`, `%LOCALAPPDATA%\Programs\Kiro-Cli` and `%LOCALAPPDATA%\Kiro-Cli`. A user reported that Maude offered to install Kiro CLI although `kiro-cli` was on PATH. Cause confirmed on the developer PC (2026-11-22): `kiro-cli.exe` was in `%LOCALAPPDATA%\Kiro-Cli` (a user PATH entry), and that folder was only added to `tool_dirs()` by `9babfcf`, so a maude.exe whose PATH predates the Kiro install missed it. The code before `9babfcf` returned None from `find_tool('kiro-cli')` with a PATH that had no Kiro entry. The current code finds the exe. Fixed in v0.3.3. If it happens again after v0.3.3, run `where.exe kiro-cli` in the same window and add that folder to `tool_dirs()` in `light/maude_exe.py`.
 - Kiro CLI install without admin works (developer PC, 2026-11-22, Windows 11, non-admin user). Maude's command downloads the MSI to `%TEMP%`, checks its SHA-256 from the manifest and runs `msiexec /i <msi> /quiet /norestart`. Result: exit 0, Kiro CLI 3.5.0. The script prints "installed to C:\Program Files\Kiro-Cli\", but the MSI installed per user to `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` and added that folder to the user PATH. Nothing went under Program Files and nothing to the machine PATH.
-- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). At the time Maude only reported "The Kiro CLI install failed." and went back to the menu (now it prints the msiexec code and the `%TEMP%\maude-kiro-install.log` path). Not reproduced on the developer PC. Hypothesis: `/quiet` suppresses UAC, so on a PC where policy forces a per-machine install, a non-admin quiet install could fail with 1603.
-- Uninstalling Kiro CLI leaves `%LOCALAPPDATA%\Kiro-Cli` behind (`bun.exe`, `node.exe`, `tui.js`, `data.sqlite3`, about 880 MB). `run\chat-cli-<version>.exe` there is ACL-protected (Everyone: ReadAndExecute, only SYSTEM and Administrators can delete), so a normal user cannot remove the folder completely.
+- The Kiro CLI MSI can fail with exit code 1603 (installer kept in `%TEMP%\kiro-cli-installer-<version>.msi`). At the time Maude only reported "The Kiro CLI install failed." and went back to the menu (now it prints the msiexec code and the `%TEMP%\maude-kiro-install.log` path). Not reproduced on the developer PC. The hypothesis that `/quiet` suppresses UAC, so that on a PC where policy forces a per-machine install a non-admin quiet install fails with 1603, did not apply on the developer PC: `/qn` worked as a non-admin user there. The cause of 1603 elsewhere is still unknown.
+- Field test 2026-11-23 (clean PC, non-admin): `install_kiro()` took 17 s, exited 0 with no UAC prompt and installed kiro-cli 3.5.0. `find_tool` found it right away and the user PATH got `%LOCALAPPDATA%\Kiro-Cli`.
+- Uninstalling Kiro CLI leaves `%LOCALAPPDATA%\Kiro-Cli` behind (`bun.exe`, `node.exe`, `tui.js`, `data.sqlite3`, about 880 MB). `run\chat-cli-<version>.exe` there is ACL-protected (Everyone: ReadAndExecute), but a normal user can still delete it: `Remove-Item -Force` fails because it first tries to change the file's attributes, while `[IO.File]::Delete('<path>')` works, because the user has FullControl (including FILE_DELETE_CHILD) on the parent folder. After that the folder can be removed.
 - The docs site needs Pages source "GitHub Actions" and the v4 `upload-pages-artifact` and `deploy-pages` actions. The v5 pair did not upload the artifact, and Python 3.15 is not used.
 - `ensure_user_path` and the `WM_SETTINGCHANGE` broadcast are untested on Windows.
 

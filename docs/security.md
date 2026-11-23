@@ -28,9 +28,9 @@ The commands are in the [Maude Light README](https://github.com/dirkpetersen/mau
 
 - The AI tool runs natively on Windows with your full user rights. It can reach all your files, SSH keys and browser data.
 - Normal permission prompts stay on. Maude never passes a bypass flag such as `--dangerously-skip-permissions`.
-- A folder outside the shared folder opens outside the sandbox only after you answer `y` or `yes`, or use `--windows`. The Explorer menu always asks first.
-- A folder inside the shared folder opens in the sandbox, unless you use `--windows`.
+- A folder outside the shared folder never opens in the sandbox. With the Explorer menu (or `maude.exe <folder>`) it opens the red Windows TUI with that folder preselected and a red warning that the AI agents have your full Windows user rights; you start it with Enter. `--windows` starts Claude Code there directly.
+- A folder inside the shared folder opens in the sandbox, unless you use `--windows`. If no Maude sandbox is installed, it does not start (exit code 2) unless you use `--windows`.
 - Web UI, Git setup, credentials and update are hidden. They need the sandbox.
-- The red logo with "running outside the sandbox" shows that you are in this mode.
+- The red logo shows that you are in this mode. With a sandbox installed it also says "running outside the sandbox"; without one the caption is left out, because there is no sandbox to be outside of.
 
 See [maude.exe on Windows](windows-exe.md) for details.
