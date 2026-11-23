@@ -85,10 +85,10 @@ try:
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
             assert maude.current_platform() == "windows"
             hidden = maude.hidden_widgets()  # from the FEATURES map: everything off on Windows for now
-            assert set(hidden) == {"#btn-web", "#btn-togithub", "#btn-github", "#autostart"}, hidden  # Set Creds and Update Maude are on
+            assert set(hidden) == {"#btn-web", "#autostart"}, hidden  # Set Creds, Update Maude, To Github, Setup Git(hub) are on
             for i in hidden:
                 assert not app.query_one(i).display, i
-            for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#btn-update", "#fresh-context", "#perplexity"):
+            for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#btn-update", "#btn-github", "#btn-togithub", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i
             # Radio coupling: fable then Crush must leave exactly one button on per set (opus, Crush).
             from textual.widgets import RadioButton
@@ -440,6 +440,34 @@ try:
             assert all(scr.query_one(pid).display == (m == scr.mode) for m, pid in panes.items()), "exactly one mode body visible"
             scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
     asyncio.run(check_rapid())
+    # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
+    # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
+    old_pt, old_auth = maude.plat_tool, maude.gh_is_authed
+    maude.plat_tool = lambda n: "C:/fake/" + n + ".exe"   # git and gh "installed": no offer, no suspend
+    maude.gh_is_authed = lambda: False
+    async def check_git_screens():
+        async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app.query_one("#btn-github").press(); await pilot.pause(); await pilot.pause()
+            assert isinstance(app.screen, maude.GitSetupWizard), app.screen
+            from textual.widgets import Label
+            assert "Step 1 of 4" in str(app.screen.query_one("#wiz-title", Label).render())
+            assert maude.GitSetupWizard.NATIVE_STEP_TITLES[3].endswith("Git Config & Signing")
+            assert "Keychain" not in app.screen._title(3)
+            app.screen.query_one("#wiz-cancel").press(); await pilot.pause(); await pilot.pause()
+            assert len(app.screen_stack) == 1, app.screen_stack
+            table = app.query_one("#projects-table")
+            table.move_cursor(row=table.row_count - 1); await pilot.pause()
+            app.query_one("#btn-togithub").press(); await pilot.pause(); await pilot.pause()
+            assert isinstance(app.screen, maude.PushToGithubScreen), app.screen
+            assert "not authenticated" in str(app.screen.query_one("#push-help", Label).render())
+            app.screen.query_one("#btn-push-cancel").press(); await pilot.pause()
+            assert len(app.screen_stack) == 1, app.screen_stack
+    try:
+        asyncio.run(check_git_screens())
+    finally:
+        maude.plat_tool, maude.gh_is_authed = old_pt, old_auth
     # Native credential gate: `claude auth status` runs off the UI thread; only an explicit "not logged in" shows
     # the screen, and Cancel still opens the project.
     import time as _time

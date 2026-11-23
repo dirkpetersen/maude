@@ -599,6 +599,13 @@ def offer_git(env=os.environ, find=find_git, install=install_mingit, add_path=la
     env["PATH"] = path_prepend(env.get("PATH", ""), [d])
 
 
+def reset_offers() -> None:
+    """Forget that Git / the GitHub CLI were already offered in this process (an explicit user action,
+    such as opening Setup Git(hub), may ask again)."""
+    global _git_done, _gh_done
+    _git_done = _gh_done = False
+
+
 GH_LINK = "https://cli.github.com"
 GH_API = "https://api.github.com/repos/cli/cli/releases/latest"
 GH_DL = "https://github.com/cli/cli/releases/download/"

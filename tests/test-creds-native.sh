@@ -460,9 +460,9 @@ assert_eq "status: no loggedIn key -> None" "None" "$(val status.nokey)"
 assert_eq "status: missing binary -> None" "None" "$(val status.missing)"
 assert_eq "status: timeout -> None" "None" "$(val status.timeout)"
 
-# hidden widgets: Set Creds and Update Maude are on everywhere now
-assert_eq "win hidden set" "#autostart,#btn-github,#btn-togithub,#btn-web" "$(val win.hidden)"
-assert_eq "mac hidden set" "#autostart,#btn-github,#btn-togithub,#btn-web" "$(val mac.hidden)"
+# hidden widgets: Set Creds, Update Maude, To Github and Setup Git(hub) are on everywhere now
+assert_eq "win hidden set" "#autostart,#btn-web" "$(val win.hidden)"
+assert_eq "mac hidden set" "#autostart,#btn-web" "$(val mac.hidden)"
 assert_eq "linux hides nothing" "" "$(val lin.hidden)"
 
 # login refresh-token rule (also the sandbox gate)

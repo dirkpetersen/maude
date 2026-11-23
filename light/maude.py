@@ -66,8 +66,8 @@ if IS_WIN:
 FEATURES = {
     #  feature      linux-sandbox  windows  macos
     "web":       {"linux-sandbox": True, "windows": False, "macos": False},
-    "togithub":  {"linux-sandbox": True, "windows": False, "macos": False},
-    "github":    {"linux-sandbox": True, "windows": False, "macos": False},  # Setup Git(hub)
+    "togithub":  {"linux-sandbox": True, "windows": True,  "macos": True},
+    "github":    {"linux-sandbox": True, "windows": True,  "macos": True},   # Setup Git(hub)
     "creds":     {"linux-sandbox": True, "windows": True,  "macos": True},   # Set Creds -> ~/.maude/clauderc
     "update":    {"linux-sandbox": True, "windows": True,  "macos": True},
     "autostart": {"linux-sandbox": True, "windows": False, "macos": False},
@@ -866,7 +866,7 @@ def git_remote_origin_url(project_path: Path) -> str:
         return fast
     try:
         r = subprocess.run(
-            ["git", "-C", str(project_path), "config", "--get", "remote.origin.url"],
+            [git_exe(), "-C", str(project_path), "config", "--get", "remote.origin.url"],
             capture_output=True, text=True, timeout=5,
         )
         return r.stdout.strip() if r.returncode == 0 else ""
@@ -897,11 +897,12 @@ def parse_github_owner_repo(url: str) -> tuple[str, str] | None:
 
 def gh_user_login() -> str:
     """Return the authed GitHub username, or empty string."""
-    if not shutil.which("gh"):
+    gh = gh_exe()
+    if not gh:
         return ""
     try:
         r = subprocess.run(
-            ["gh", "api", "user", "--jq", ".login"],
+            [gh, "api", "user", "--jq", ".login"],
             capture_output=True, text=True, timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -1277,12 +1278,386 @@ def soft_delete(project_path: Path) -> None:
 
 SSH_KEY_PATH = Path.home() / ".ssh" / "id_ed25519"
 
+# ── Native (Windows/macOS) Git, SSH and commit-signing helpers ─────────────
+# ONE SSH stack per native platform, never mixed: the OS's own OpenSSH. Windows: C:\Windows\System32\
+# OpenSSH (ssh, ssh-keygen, ssh-add; its ssh-agent is a Windows service we only detect, never
+# start: enabling it needs admin). macOS: /usr/bin (Apple's agent + keychain). MinGit ships no
+# ssh-keygen and its MSYS ssh-agent cannot talk to Windows OpenSSH, so it is not used for keys.
+# Commit signing is SSH signing (gpg.format ssh), never gpg, on Windows/macOS; the sandbox keeps gpg.
+
+def git_exe() -> str:
+    """git binary for subprocess calls: the offered/installed one natively, plain "git" in the sandbox."""
+    return (plat_tool("git") or "git") if is_native() else "git"
+
+
+def gh_exe() -> str | None:
+    """gh binary, or None when it is not installed."""
+    return plat_tool("gh") if is_native() else shutil.which("gh")
+
+
+def ssh_tool(name: str, platform: str | None = None, env=None, exists=os.path.exists) -> str:
+    """Path of an OpenSSH tool ("ssh", "ssh-keygen", "ssh-add", "ssh-agent") for the platform's
+    one SSH stack. Sandbox: the bare name (unchanged behaviour)."""
+    import ntpath
+    platform = platform or current_platform()
+    env = os.environ if env is None else env
+    if platform == "windows":
+        root = env.get("SystemRoot") or env.get("windir") or "C:\\Windows"
+        p = ntpath.join(root, "System32", "OpenSSH", name + ".exe")
+        return p  # always the System32 path: never fall back to a bare name that PATH could resolve to an MSYS tool
+    if platform == "macos":
+        p = "/usr/bin/" + name
+        return p if exists(p) else name
+    return name
+
+
+def _fwd(p: str) -> str:
+    """Forward-slash form: git runs GIT_SSH_COMMAND through sh and reads config values itself."""
+    return p.replace("\\", "/")
+
+
+def git_ssh_command(platform: str | None = None, ssh: str | None = None) -> str:
+    """GIT_SSH_COMMAND for pushes: batch mode, so a bad SSH state fails fast instead of prompting."""
+    platform = platform or current_platform()
+    opts = "-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    if platform == "linux-sandbox":
+        return "ssh " + opts
+    exe = _fwd(ssh or ssh_tool("ssh", platform))
+    if " " in exe:
+        exe = f'"{exe}"'
+    return f"{exe} {opts}"
+
+
+ASKPASS_ENV_VAR = "MAUDE_ASKPASS_PW"
+
+
+def askpass_script(platform: str | None = None) -> tuple[str, str]:
+    """(file suffix, text) of a static SSH_ASKPASS helper that prints $MAUDE_ASKPASS_PW. The
+    passphrase travels in the child's environment only, never on disk. Windows: a .cmd with delayed
+    expansion, so &, |, %, ^ in the passphrase are not interpreted by cmd."""
+    if (platform or current_platform()) == "windows":
+        return ".cmd", "@echo off\r\nsetlocal EnableDelayedExpansion\r\necho(!" + ASKPASS_ENV_VAR + "!\r\n"
+    return ".sh", "#!/bin/sh\nprintf '%s' \"$" + ASKPASS_ENV_VAR + "\"\n"
+
+
+def askpass_env(script_path: str, passphrase: str, base_env=None) -> dict:
+    """Environment that makes ssh/ssh-add read the passphrase from the askpass helper."""
+    env = dict(os.environ if base_env is None else base_env)
+    env["SSH_ASKPASS"] = script_path
+    env["SSH_ASKPASS_REQUIRE"] = "force"     # OpenSSH 8.4+
+    env.setdefault("DISPLAY", ":0")          # older OpenSSH still wants it
+    env[ASKPASS_ENV_VAR] = passphrase
+    return env
+
+
+def make_askpass(platform: str | None = None) -> str:
+    """Write the static askpass helper to a temp file and return its path (caller unlinks it)."""
+    suffix, text = askpass_script(platform)
+    fd, path = tempfile.mkstemp(prefix="maude-askpass-", suffix=suffix)
+    with os.fdopen(fd, "w", newline="") as f:
+        f.write(text)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
+def ssh_add_args(key_path: str, platform: str | None = None, ssh_add: str | None = None) -> list:
+    """ssh-add command line. macOS also stores the passphrase in the login keychain."""
+    platform = platform or current_platform()
+    cmd = [ssh_add or ssh_tool("ssh-add", platform)]
+    if platform == "macos":
+        cmd.append("--apple-use-keychain")
+    return cmd + [str(key_path)]
+
+
+def ssh_signing_config(pub_path: str, platform: str | None = None, env=None, exists=os.path.exists) -> list:
+    """(key, value) pairs for `git config --global`: SSH commit signing with the key's .pub file
+    (ssh-keygen falls back to the matching private key file when the agent does not have it).
+    gpg.ssh.program pins ssh-keygen to the platform's one stack: git would otherwise pick
+    whatever ssh-keygen is first on PATH (MinGit has none, Git for Windows has an MSYS one)."""
+    platform = platform or current_platform()
+    pairs = [("gpg.format", "ssh"), ("user.signingkey", _fwd(str(pub_path))), ("commit.gpgsign", "true")]
+    keygen = ssh_tool("ssh-keygen", platform, env, exists)
+    if keygen != "ssh-keygen":
+        pairs.append(("gpg.ssh.program", _fwd(keygen)))
+    return pairs
+
+
+def signing_conflict(pub_path: str, get=None) -> str:
+    """Reason why an existing signing setup must be left alone, or "". Never overwrite another
+    key, another format, or signing with a default GPG key."""
+    get = get or git_config_get
+    ours = _fwd(str(pub_path))
+    fmt, key, gs = get("gpg.format"), get("user.signingkey"), get("commit.gpgsign").lower()
+    if key and fmt not in ("", "ssh"):
+        return f"user.signingkey is already set ({key}) with gpg.format {fmt}"
+    if key and key != ours:
+        return f"user.signingkey is already set to another key ({key})"
+    if not key and gs == "true":
+        return "commit.gpgsign is already on with your default signing key"
+    return ""
+
+
+def apply_ssh_signing(pub_path: str, get=None, set_=None, platform: str | None = None, env=None,
+                      exists=os.path.exists) -> list:
+    """Set the SSH signing config unless the user already has a different signing setup (then
+    nothing is touched and [] is returned; see signing_conflict). Returns the pairs that were set."""
+    get = get or git_config_get
+    set_ = set_ or git_config_set
+    if signing_conflict(pub_path, get):
+        return []
+    pairs = ssh_signing_config(pub_path, platform, env, exists)
+    for k, v in pairs:
+        set_(k, v)
+    return pairs
+
+
+def ssh_command_pair(get=None, platform: str | None = None, env=None, git_path: str = "", exists=os.path.exists):
+    """(core.sshCommand, value) for Windows or None. Needed only with MinGit (it would use its own
+    MSYS ssh, which cannot reach the Windows agent). Skipped when the user has core.sshCommand, when
+    GIT_SSH / GIT_SSH_COMMAND is set, or when git is not MinGit (Git for Windows brings its own ssh)."""
+    get = get or git_config_get
+    platform = platform or current_platform()
+    env = os.environ if env is None else env
+    if platform != "windows" or get("core.sshCommand") or env.get("GIT_SSH") or env.get("GIT_SSH_COMMAND"):
+        return None
+    if "mingit" not in git_path.lower():
+        return None
+    ssh = _fwd(ssh_tool("ssh", platform, env, exists))
+    return ("core.sshCommand", f'"{ssh}"' if " " in ssh else ssh)
+
+
+def apply_ssh_command(get=None, set_=None, platform: str | None = None, env=None, git_path: str = "",
+                      exists=os.path.exists):
+    """Set core.sshCommand when ssh_command_pair says so. Independent of commit signing."""
+    pair = ssh_command_pair(get, platform, env, git_path, exists)
+    if pair:
+        (set_ or git_config_set)(*pair)
+    return pair
+
+
+def parse_ssh_version(text: str):
+    """(major, minor) from `ssh -V` output ("OpenSSH_for_Windows_9.5p2, ..." / "OpenSSH_9.6p1 ..."), or None."""
+    m = re.search(r"OpenSSH_(?:for_Windows_)?(\d+)\.(\d+)", text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+OPENSSH_MISSING_MSG = ("The OpenSSH client is not installed. Install the OpenSSH Client optional feature "
+                       "(Settings > System > Optional features), then try again.")
+
+
+def openssh_available(platform: str | None = None, env=None, exists=os.path.exists) -> bool:
+    """True when the platform's one SSH stack (ssh-keygen, ssh, ssh-add) is there. Sandbox: always."""
+    platform = platform or current_platform()
+    if platform == "linux-sandbox":
+        return True
+    return all(exists(ssh_tool(n, platform, env, exists)) for n in ("ssh-keygen", "ssh", "ssh-add"))
+
+
+def askpass_unsupported_reason(version) -> str:
+    """Message when this OpenSSH cannot take a passphrase through SSH_ASKPASS_REQUIRE (needs 8.4+), else ""."""
+    if version and version < (8, 4):
+        return (f"OpenSSH {version[0]}.{version[1]} is older than 8.4 and cannot take a passphrase "
+                "non-interactively. Update OpenSSH (Windows: Settings > System > Optional features) "
+                "or use a key without a passphrase.")
+    return ""
+
+
+def ssh_version_now() -> tuple | None:
+    """Installed OpenSSH (major, minor) via `ssh -V`, or None when unknown."""
+    try:
+        r = subprocess.run([ssh_tool("ssh"), "-V"], capture_output=True, text=True, timeout=5,
+                           stdin=subprocess.DEVNULL)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return parse_ssh_version(r.stderr + r.stdout)
+
+
+def kill_proc_tree(p) -> None:
+    """Kill a process and its children (Windows: taskkill /T from System32, as maude_exe does; POSIX:
+    the whole process group, so the child must have been started with start_new_session=True)."""
+    if os.name != "nt":
+        try:
+            os.killpg(p.pid, 9)
+        except Exception:
+            pass
+    else:
+        try:
+            tk = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+            subprocess.run([tk, "/T", "/F", "/PID", str(p.pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except Exception:
+            pass
+    try:
+        p.kill()
+    except Exception:
+        pass
+
+
+def run_capture(cmd: list, timeout: float, env=None):
+    """Run cmd with stdin closed and stdout/stderr in temp files (a pipe held by a grandchild would
+    block us). On timeout the whole process tree is killed. Returns (returncode or None, output)."""
+    with tempfile.TemporaryFile() as out:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env,
+                             start_new_session=(os.name != "nt"))
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_proc_tree(p)
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
+            rc = None
+        out.seek(0)
+        return rc, out.read().decode("utf-8", "replace").strip()
+
+
+def signing_roundtrip(pub_path: str, timeout: float = 8, platform: str | None = None) -> tuple[bool, str]:
+    """Sign a temp file exactly as git will (`ssh-keygen -Y sign -n git -f <pub>`), without any prompt:
+    stdin closed, an askpass that answers with an empty passphrase (so an encrypted key that no agent
+    holds fails at once instead of hanging every `git commit`), a short timeout that kills the tree."""
+    platform = platform or current_platform()
+    keygen = ssh_tool("ssh-keygen", platform)
+    if not os.path.exists(keygen):
+        return False, OPENSSH_MISSING_MSG if platform == "windows" else "ssh-keygen was not found."
+    d = tempfile.mkdtemp(prefix="maude-sign-")
+    askpass = None
+    try:
+        data = os.path.join(d, "data.txt")
+        with open(data, "w") as f:
+            f.write("maude signing test\n")
+        askpass = make_askpass(platform)
+        env = askpass_env(askpass, "")
+        rc, out = run_capture([keygen, "-Y", "sign", "-n", "git", "-f", str(pub_path), data], timeout, env)
+        if rc is None:
+            return False, "signing did not finish (the key probably needs a passphrase that no agent holds)"
+        if rc == 0 and os.path.exists(data + ".sig"):
+            return True, "signing works"
+        low = out.lower()
+        if "passphrase" in low or "incorrect" in low or "agent" in low:
+            return False, "the key has a passphrase and no ssh-agent holds it"
+        return False, (out.splitlines()[-1] if out else f"ssh-keygen exited with {rc}")
+    except OSError as err:
+        return False, str(err)
+    finally:
+        if askpass:
+            try:
+                os.unlink(askpass)
+            except OSError:
+                pass
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def active_ssh_key() -> Path:
+    """The key actually in use: ~/.ssh/id_ed25519, else id_rsa when only that exists."""
+    found = existing_ssh_key()
+    return Path(found) if found else SSH_KEY_PATH
+
+
+def push_guard_key() -> Path:
+    """Key the push guard checks: the sandbox keeps id_ed25519 exactly as before (its unlock screen
+    only handles that file); natively the key actually in use, id_rsa included."""
+    return active_ssh_key() if is_native() else SSH_KEY_PATH
+
+
+def _norm_cmd(s: str) -> str:
+    """Comparable form of a command path: no quotes, forward slashes, lower case."""
+    return s.strip().strip('"').replace("\\", "/").lower()
+
+
+def push_ssh_env(env=None, core_ssh_command: str = "", platform: str | None = None, exists=os.path.exists) -> dict:
+    """GIT_SSH_COMMAND to force for a push. Sandbox: always (unchanged). Native: not when the user set
+    GIT_SSH / GIT_SSH_COMMAND or has a core.sshCommand of their own. A core.sshCommand that is just
+    our own (the plain System32 ssh written by apply_ssh_command) does not count as the user's: it
+    would drop BatchMode/accept-new and an unknown host key would hang the push, so it is still forced."""
+    platform = platform or current_platform()
+    env = os.environ if env is None else env
+    if platform != "linux-sandbox":
+        own = _norm_cmd(ssh_tool("ssh", platform, env, exists))
+        theirs = core_ssh_command and _norm_cmd(core_ssh_command) != own
+        if env.get("GIT_SSH") or env.get("GIT_SSH_COMMAND") or theirs:
+            return {}
+    return {"GIT_SSH_COMMAND": git_ssh_command(platform)}
+
+
+def git_config_effective(project: str, key: str) -> str:
+    """`git -C <project> config --get <key>`: the value git really uses (local, global, system)."""
+    try:
+        r = subprocess.run([git_exe(), "-C", str(project), "config", "--get", key],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+
+def mac_load_keychain() -> None:
+    """macOS: load keys stored in the login keychain into the agent (after a restart the agent is empty)."""
+    if not IS_MAC:
+        return
+    try:
+        subprocess.run([ssh_tool("ssh-add"), "--apple-load-keychain"], capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=10)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+GH_SIGNING_SCOPE = "admin:ssh_signing_key"   # needed by `gh ssh-key add --type signing`
+
+
+def gh_login_scopes(platform: str | None = None) -> str:
+    """Extra OAuth scope the wizard asks gh for: GPG key upload in the sandbox, SSH signing key natively."""
+    return "write:gpg_key" if (platform or current_platform()) == "linux-sandbox" else GH_SIGNING_SCOPE
+
+
+def gh_login_cmd(gh: str, platform: str | None = None) -> list:
+    platform = platform or current_platform()
+    cmd = [gh, "auth", "login", "--hostname", "github.com", "--git-protocol", "ssh", "--web",
+           "--scopes", gh_login_scopes(platform)]
+    if platform != "linux-sandbox":
+        cmd.append("--skip-ssh-key")  # step 2 handles the auth key; no pub-file shuffling needed
+    return cmd
+
+
+def gh_refresh_cmd(gh: str) -> list:
+    """Add the signing-key scope to an already authenticated gh (no new login needed)."""
+    return [gh, "auth", "refresh", "-h", "github.com", "-s", GH_SIGNING_SCOPE]
+
+
+MAC_SSH_CONFIG_BLOCK = (
+    "\n# Added by Maude: keep the key in the macOS agent and keychain\n"
+    "Host *\n"
+    "    IgnoreUnknown UseKeychain\n"
+    "    AddKeysToAgent yes\n"
+    "    UseKeychain yes\n"
+)
+
+
+def ensure_mac_ssh_config(config_path: Path) -> bool:
+    """Append AddKeysToAgent/UseKeychain to ~/.ssh/config unless the file already sets either.
+    Returns True when the file was changed."""
+    try:
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    except (OSError, UnicodeDecodeError):
+        return False
+    low = text.lower()
+    if "usekeychain" in low or "addkeystoagent" in low:
+        return False
+    try:
+        config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with open(config_path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(MAC_SSH_CONFIG_BLOCK if text else MAC_SSH_CONFIG_BLOCK.lstrip("\n"))
+        os.chmod(config_path, 0o600)
+    except OSError:
+        return False
+    return True
+
 
 def git_config_get(key: str) -> str:
     """Return `git config --global <key>` or empty string."""
     try:
         r = subprocess.run(
-            ["git", "config", "--global", key],
+            [git_exe(), "config", "--global", key],
             capture_output=True, text=True, timeout=5,
         )
         return r.stdout.strip() if r.returncode == 0 else ""
@@ -1294,7 +1669,7 @@ def git_config_set(key: str, value: str) -> None:
     """Set `git config --global <key> <value>`. Silent on failure."""
     try:
         subprocess.run(
-            ["git", "config", "--global", key, value],
+            [git_exe(), "config", "--global", key, value],
             check=False, timeout=5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -1350,17 +1725,22 @@ def generate_ssh_key(passphrase: str, comment: str) -> tuple[bool, str]:
 
     Returns (ok, message). Refuses to overwrite if the key already exists.
     """
+    if not openssh_available():
+        return False, OPENSSH_MISSING_MSG
     SSH_KEY_PATH.parent.mkdir(mode=0o700, exist_ok=True)
     if SSH_KEY_PATH.exists():
         return False, f"{SSH_KEY_PATH} already exists; refusing to overwrite."
     try:
         subprocess.run(
-            ["ssh-keygen", "-t", "ed25519", "-C", comment,
+            [ssh_tool("ssh-keygen"), "-t", "ed25519", "-C", comment,
              "-f", str(SSH_KEY_PATH), "-N", passphrase],
             check=True, capture_output=True, text=True, timeout=30,
         )
-        SSH_KEY_PATH.chmod(0o600)
-        SSH_KEY_PATH.with_suffix(".pub").chmod(0o644)
+        try:  # no-op on Windows (ssh-keygen sets the ACL itself)
+            SSH_KEY_PATH.chmod(0o600)
+            SSH_KEY_PATH.with_suffix(".pub").chmod(0o644)
+        except OSError:
+            pass
         return True, "SSH key generated."
     except subprocess.CalledProcessError as err:
         return False, f"ssh-keygen failed: {err.stderr or err}"
@@ -1388,7 +1768,14 @@ def verify_ssh_github(passphrase: str = "", timeout: int = 15) -> tuple[bool, st
     env = os.environ.copy()
     askpass_path: str | None = None
 
-    if passphrase:
+    if passphrase and is_native():
+        why = askpass_unsupported_reason(ssh_version_now())
+        if why:
+            return False, why
+        # Static helper script; the passphrase goes through the environment, never to disk.
+        askpass_path = make_askpass()
+        env = askpass_env(askpass_path, passphrase, env)
+    elif passphrase:
         # Write a tiny shell script that prints the passphrase to stdout.
         fd, askpass_path = tempfile.mkstemp(prefix="maude-askpass-", suffix=".sh")
         with os.fdopen(fd, "w") as f:
@@ -1399,7 +1786,7 @@ def verify_ssh_github(passphrase: str = "", timeout: int = 15) -> tuple[bool, st
         env["SSH_ASKPASS_REQUIRE"] = "force"     # OpenSSH 8.4+
         env.setdefault("DISPLAY", ":0")          # older OpenSSH still needs this
 
-    cmd = ["ssh", "-T",
+    cmd = [ssh_tool("ssh"), "-T",
            "-o", "StrictHostKeyChecking=accept-new",
            "-o", "IdentitiesOnly=yes",
            "-i", str(SSH_KEY_PATH),
@@ -1433,10 +1820,12 @@ def ssh_key_has_passphrase(key_path: Path) -> bool:
     """True if the key file is encrypted (passphrase required to use)."""
     try:
         r = subprocess.run(
-            ["ssh-keygen", "-y", "-f", str(key_path), "-P", ""],
+            [ssh_tool("ssh-keygen"), "-y", "-f", str(key_path), "-P", ""],
             capture_output=True, text=True, timeout=5,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except FileNotFoundError:
+        return is_native()  # native: no ssh-keygen = cannot use the key; never report "unencrypted"
+    except subprocess.TimeoutExpired:
         return False
     return r.returncode != 0
 
@@ -1450,7 +1839,7 @@ def ssh_key_in_agent(key_path: Path) -> bool:
         return False
     try:
         r = subprocess.run(
-            ["ssh-add", "-L"], capture_output=True, text=True, timeout=5,
+            [ssh_tool("ssh-add"), "-L"], capture_output=True, text=True, timeout=5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -1458,15 +1847,20 @@ def ssh_key_in_agent(key_path: Path) -> bool:
 
 
 def ssh_agent_running() -> bool:
-    """True if SSH_AUTH_SOCK points at a usable agent."""
-    if not os.environ.get("SSH_AUTH_SOCK"):
-        return False
+    """True if SSH_AUTH_SOCK points at a usable agent (Windows: if the OpenSSH ssh-agent service answers)."""
+    win = current_platform() == "windows"
+    if not win and not os.environ.get("SSH_AUTH_SOCK"):
+        return False  # Windows has no SSH_AUTH_SOCK: its agent is a named pipe
     try:
         r = subprocess.run(
-            ["ssh-add", "-l"], capture_output=True, text=True, timeout=5,
+            [ssh_tool("ssh-add"), "-l"], capture_output=True, text=True, timeout=5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+    if win:  # the service is disabled by default; the error text differs between builds
+        low = (r.stdout + r.stderr).lower()
+        if "error connecting" in low or "could not open a connection" in low:
+            return False
     # Exit codes: 0 = keys loaded, 1 = no keys, 2 = no agent.
     return r.returncode != 2
 
@@ -1475,14 +1869,17 @@ def ensure_ssh_agent() -> bool:
     """Start an ssh-agent if none is running and import SSH_AUTH_SOCK /
     SSH_AGENT_PID into os.environ so subsequent ssh-add / git push
     can use it. No-op if an agent is already reachable. Returns True
-    on success."""
+    on success. Windows: only detects the OpenSSH ssh-agent service (starting it needs admin)."""
     if ssh_agent_running():
         return True
-    if not shutil.which("ssh-agent"):
+    if current_platform() == "windows":
+        return False
+    agent = ssh_tool("ssh-agent")
+    if not (shutil.which(agent) or (os.path.isabs(agent) and os.path.exists(agent))):
         return False
     try:
         r = subprocess.run(
-            ["ssh-agent", "-s"], capture_output=True, text=True, timeout=5,
+            [agent, "-s"], capture_output=True, text=True, timeout=5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -1502,6 +1899,30 @@ def ssh_add_with_passphrase(key_path: Path, passphrase: str) -> tuple[bool, str]
     """Add the key to ssh-agent using SSH_ASKPASS to feed `passphrase`."""
     if not key_path.exists():
         return False, f"key not found: {key_path}"
+    if is_native():
+        if not openssh_available():
+            return False, OPENSSH_MISSING_MSG
+        if passphrase:
+            why = askpass_unsupported_reason(ssh_version_now())
+            if why:
+                return False, why
+        askpass = make_askpass()  # static helper; the passphrase is in the child's environment only
+        try:
+            env = askpass_env(askpass, passphrase)
+            cmd = ssh_add_args(str(key_path))
+            rc, out = run_capture(cmd, 5, env)  # 5 s: a wrong passphrase must not freeze the UI; kills the tree
+            if rc not in (None, 0) and "--apple-use-keychain" in cmd and any(s in out.lower() for s in ("apple-use-keychain", "illegal option", "unknown option")):
+                rc, out = run_capture([cmd[0], str(key_path)], 5, env)  # old macOS: no such flag
+            if rc is None:
+                return False, "ssh-add did not finish: wrong passphrase?"
+            return rc == 0, out
+        except OSError as err:
+            return False, str(err)
+        finally:
+            try:
+                os.unlink(askpass)
+            except OSError:
+                pass
     fd, askpass = tempfile.mkstemp(prefix="maude-askpass-", suffix=".sh")
     try:
         with os.fdopen(fd, "w") as f:
@@ -1528,26 +1949,48 @@ def ssh_add_with_passphrase(key_path: Path, passphrase: str) -> tuple[bool, str]
 
 def gh_is_authed() -> bool:
     """True if `gh auth status` reports a logged-in user."""
-    if not shutil.which("gh"):
+    gh = gh_exe()
+    if not gh:
         return False
     try:
         r = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10,
+            [gh, "auth", "status"], capture_output=True, text=True, timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
     return r.returncode == 0
 
 
+def classify_gh_key_failure(kind: str, out: str) -> tuple[bool, str]:
+    """(ok, message) for a failed `gh <kind> add`. GPG keys: unchanged ("already"/"duplicate" = ok).
+    SSH keys: gh itself prints "already exists on your account" with exit 0, so a failure is never ok; GitHub's "key is already in use" means
+    ANOTHER account holds the key, which is not a success."""
+    low = out.lower()
+    if kind == "gpg-key":
+        if "already" in low or "duplicate" in low:
+            return True, "already on GitHub"
+        return False, out or "upload failed"
+    if "in use" in low:
+        return False, ("This SSH key is already registered on another GitHub account (a key can belong "
+                       "to one account only). Generate a new key or remove it there first.")
+    return False, out or "upload failed"
+
+
 def gh_upload_key(kind: str, armored: str, title: str) -> tuple[bool, str]:
     """Upload an SSH or GPG public key via gh CLI.
 
-    `kind` is "ssh-key" or "gpg-key". Returns (ok, message). If the key
-    is already on the account, that's treated as success.
+    `kind` is "ssh-key", "gpg-key" or "ssh-signing-key" (an SSH key
+    registered for commit signing; needs the admin:ssh_signing_key scope).
+    Returns (ok, message). If the key is already on the account, that's
+    treated as success.
     """
-    if not shutil.which("gh"):
+    gh = gh_exe()
+    if not gh:
         return False, "gh is not installed"
-    cmd = ["gh", kind, "add", "-", "--title", title]
+    if kind == "ssh-signing-key":
+        cmd = [gh, "ssh-key", "add", "-", "--type", "signing", "--title", title]
+    else:
+        cmd = [gh, kind, "add", "-", "--title", title]
     try:
         r = subprocess.run(
             cmd, input=armored, text=True, capture_output=True, timeout=20,
@@ -1557,9 +2000,7 @@ def gh_upload_key(kind: str, armored: str, title: str) -> tuple[bool, str]:
     out = (r.stdout + r.stderr).strip()
     if r.returncode == 0:
         return True, out or "uploaded"
-    if "already" in out.lower() or "duplicate" in out.lower():
-        return True, "already on GitHub"
-    return False, out or "upload failed"
+    return classify_gh_key_failure(kind, out)
 
 
 def existing_gpg_key(email: str) -> str | None:
@@ -2600,9 +3041,11 @@ class SSHKeyUnlockScreen(ModalScreen[None]):
         with Container(id="unlock-box"):
             yield Label("Unlock SSH key", id="unlock-title")
             yield Label(
-                "Your ~/.ssh/id_ed25519 is passphrase-protected. Enter the\n"
+                f"Your ~/.ssh/{active_ssh_key().name if is_native() else 'id_ed25519'} is passphrase-protected. Enter the\n"
                 "passphrase to load it into ssh-agent so git push, gh, etc.\n"
-                "work without prompting later.",
+                "work without prompting later."
+                + ("\nIt is also stored in the macOS keychain." if IS_MAC else "")
+                + ("\nThe Windows ssh-agent keeps the key loaded, even after a restart, until you run ssh-add -d." if IS_WIN else ""),
                 id="unlock-help",
             )
             yield Input(placeholder="passphrase", id="unlock-pass", password=True)
@@ -2636,7 +3079,7 @@ class SSHKeyUnlockScreen(ModalScreen[None]):
         )
 
     def _unlock_worker(self, passphrase: str) -> None:
-        ok, msg = ssh_add_with_passphrase(SSH_KEY_PATH, passphrase)
+        ok, msg = ssh_add_with_passphrase(active_ssh_key() if is_native() else SSH_KEY_PATH, passphrase)
         # Hop back to the UI thread to update widgets / dismiss.
         self.app.call_from_thread(self._unlock_done, ok, msg)
 
@@ -2727,10 +3170,21 @@ class GitSetupWizard(ModalScreen[bool]):
         "Step 3 of 4 — Authenticate gh CLI",
         "Step 4 of 4 — Git Config & Keychain",
     )
+    # Windows/macOS: SSH commit signing instead of GPG, no keychain package/.bashrc block.
+    NATIVE_STEP_TITLES = (
+        STEP_TITLES[0], STEP_TITLES[1], STEP_TITLES[2],
+        "Step 4 of 4 — Git Config & Signing",
+    )
+
+    def _title(self, step: int) -> str:
+        return (self.NATIVE_STEP_TITLES if is_native() else self.STEP_TITLES)[step]
 
     def __init__(self) -> None:
         super().__init__()
         self.step = 0
+        self.signing_uploaded = False   # native: SSH signing key is registered on GitHub
+        self._use_refresh = False       # native, already logged in: only add the signing scope
+        self._need_scope = False        # the signing key upload failed for a missing scope
         # Carried across steps:
         self.username = ""
         self.full_name = git_config_get("user.name")
@@ -2746,7 +3200,7 @@ class GitSetupWizard(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container(id="wiz-box"):
-            yield Label(self.STEP_TITLES[0], id="wiz-title")
+            yield Label(self._title(0), id="wiz-title")
             yield Container(id="wiz-body")
             yield Log(id="wiz-log", auto_scroll=True, max_lines=200)
             with Horizontal(id="wiz-buttons"):
@@ -2757,6 +3211,24 @@ class GitSetupWizard(ModalScreen[bool]):
 
     async def on_mount(self) -> None:
         await self._render_step()
+        if IS_WIN:
+            self.call_after_refresh(self._offer_missing_tools)
+
+    def _offer_missing_tools(self) -> None:
+        """Windows: offer MinGit / GitHub CLI (per-user, no admin) when missing. The offers ask on the
+        console, so the TUI is suspended; the user asked for Git setup, so ask again even if declined."""
+        if plat_tool("git") and plat_tool("gh"):
+            return
+        try:
+            with self.app.suspend():
+                mx.reset_offers()
+                mx.offer_git()
+                mx.offer_gh()
+                if not (plat_tool("git") and plat_tool("gh")):  # let the user read why
+                    input("Press Enter to go back to Maude. ")
+        except Exception as err:  # never take the wizard down
+            self._log(f"Could not run the installer offer: {err}")
+        self.app.call_after_refresh(self._rerender_current_step)
 
     def action_cancel(self) -> None:
         if not self._dismissed:
@@ -2785,7 +3257,7 @@ class GitSetupWizard(ModalScreen[bool]):
         # actually detaches the old widgets when awaited. Without the
         # await, mounting fresh widgets with the same id would collide
         # with the still-mounted old ones (DuplicateIds at runtime).
-        self.query_one("#wiz-title", Label).update(self.STEP_TITLES[self.step])
+        self.query_one("#wiz-title", Label).update(self._title(self.step))
         body = self.query_one("#wiz-body", Container)
         await body.remove_children()
         if self.step == 0:
@@ -2858,6 +3330,9 @@ class GitSetupWizard(ModalScreen[bool]):
     def _render_ssh(self, body: Container) -> None:
         existing = existing_ssh_key()
         self.ssh_key_path = existing
+        if is_native() and not openssh_available():
+            body.mount(Label(Text(OPENSSH_MISSING_MSG + "\nOr click Skip.")))
+            return
         if existing:
             pub = read_ssh_pubkey(existing)
             body.mount(Label(Text.from_markup(
@@ -2881,11 +3356,22 @@ class GitSetupWizard(ModalScreen[bool]):
                 id="wiz-ssh-actions",
             ))
         else:
-            body.mount(Label("No SSH key found at ~/.ssh/id_ed25519."))
-            body.mount(Label(
-                "Set a passphrase (strongly recommended), confirm it,"
-            ))
-            body.mount(Label("then click Generate ed25519 key."))
+            if is_native():
+                body.mount(Label(Text(
+                    "No SSH key found at ~/.ssh/id_ed25519.\n"
+                    + ("Leave the passphrase blank for a key without one (recommended on Windows: the "
+                       "OpenSSH ssh-agent service is off by default and enabling it needs an "
+                       "administrator). With a passphrase, git asks for it unless that service runs."
+                       if IS_WIN else
+                       "A passphrase is stored in the macOS keychain, so you type it only once.")
+                    + "\nThen click Generate ed25519 key."
+                )))
+            else:
+                body.mount(Label("No SSH key found at ~/.ssh/id_ed25519."))
+                body.mount(Label(
+                    "Set a passphrase (strongly recommended), confirm it,"
+                ))
+                body.mount(Label("then click Generate ed25519 key."))
             body.mount(Label("Passphrase (leave blank for none):"))
             body.mount(Input(placeholder="passphrase", id="wiz-ssh-pass",
                              password=True))
@@ -2900,11 +3386,17 @@ class GitSetupWizard(ModalScreen[bool]):
     # Step 3: Authenticate the gh CLI
     def _render_gh_auth(self, body: Container) -> None:
         already = gh_is_authed()
-        if not shutil.which("gh"):
+        if not gh_exe():
+            if IS_WIN:
+                hint = ("Close this wizard and open it again: Maude offers to install it for you "
+                        "(no administrator needed), or get it from https://cli.github.com.")
+            elif IS_MAC:
+                hint = "Run [bold]brew install gh[/] in another terminal, then come back."
+            else:
+                hint = "Run [bold]mom install -y gh[/] in another terminal, then come back."
             body.mount(Label(Text.from_markup(
-                "[yellow]gh CLI is not installed.[/]\n\n"
-                "Run [bold]mom install -y gh[/] in another terminal, then "
-                "come back. Or click [bold]Skip[/] to skip GitHub auth."
+                "[yellow]gh CLI is not installed.[/]\n\n" + hint
+                + " Or click [bold]Skip[/] to skip GitHub auth."
             )))
             return
         if already:
@@ -2912,6 +3404,13 @@ class GitSetupWizard(ModalScreen[bool]):
                 "[green]✓ gh CLI is already authenticated.[/]\n\n"
                 "Click [bold]Next[/] to move on. Use "
                 "[bold]Re-authenticate[/] to switch accounts."
+            )))
+        elif is_native():
+            body.mount(Label(Text(
+                "We'll run `gh auth login --web`. Your browser opens by itself: "
+                "enter the one-time code shown below and authorize GitHub CLI.\n\n"
+                "Afterwards the wizard registers your SSH key on GitHub as a commit "
+                "signing key (SSH signing, no GPG), so your commits show as Verified."
             )))
         else:
             tip = Text(
@@ -2931,6 +3430,19 @@ class GitSetupWizard(ModalScreen[bool]):
 
     # Step 4: Final config + keychain
     def _render_final(self, body: Container) -> None:
+        if is_native():
+            extra = "  • Sign commits with your SSH key (gpg.format = ssh)\n"
+            if IS_MAC:
+                extra += "  • Keep the key in the macOS agent and keychain (~/.ssh/config)\n"
+            body.mount(Label(
+                "Finalise the setup:\n"
+                f"  • git config user.name = [bold]{self.full_name}[/]\n"
+                f"  • git config user.email = [bold]{self.email}[/]\n"
+                "  • init.defaultBranch = [bold]main[/]\n"
+                + extra + "\n"
+                "Click [bold]Finish[/] to apply, or [bold]Back[/] to revisit a step."
+            ))
+            return
         body.mount(Label(
             "Finalise the setup:\n"
             f"  • git config user.name = [bold]{self.full_name}[/]\n"
@@ -2955,7 +3467,7 @@ class GitSetupWizard(ModalScreen[bool]):
 
     @on(Button.Pressed, "#wiz-skip")
     async def on_skip(self) -> None:
-        self._log(f"[skipped] {self.STEP_TITLES[self.step]}")
+        self._log(f"[skipped] {self._title(self.step)}")
         await self._advance()
 
     @on(Button.Pressed, "#wiz-next")
@@ -3060,8 +3572,10 @@ class GitSetupWizard(ModalScreen[bool]):
 
     @on(Button.Pressed, "#wiz-gh-auth")
     def on_gh_auth(self) -> None:
-        if not shutil.which("gh"):
-            self._log("gh CLI is not installed (try `mom install -y gh`).")
+        if not gh_exe():
+            self._log("gh CLI is not installed (Windows: reopen this wizard to install it; "
+                      "macOS: brew install gh; sandbox: mom install -y gh)."
+                      if is_native() else "gh CLI is not installed (try `mom install -y gh`).")
             return
         # Run gh in a worker thread and stream its stdout into the Log
         # widget. Suspending the TUI doesn't work reliably here — gh's
@@ -3069,12 +3583,22 @@ class GitSetupWizard(ModalScreen[bool]):
         # so we keep the TUI up, feed Enter on stdin ourselves, and let
         # the user Ctrl+click the URL straight from the wizard log.
         self.query_one("#wiz-gh-auth", Button).disabled = True
+        # Only a missing scope is fixed with `gh auth refresh -s`; an explicit Re-authenticate is a full login
+        # (refresh cannot switch accounts).
+        self._use_refresh = is_native() and self._need_scope and gh_is_authed()
+        self._need_scope = False
         self._log("─────────────── How this works ───────────────")
-        self._log("1. gh prints a one-time code below (e.g. ABCD-1234)")
-        self._log("2. On your Windows host, open this URL (Ctrl+click):")
-        self._log("     https://github.com/login/device")
-        self._log("3. Paste the code, then click 'Authorize GitHub CLI'")
-        self._log("4. Come back here — gh detects the auth automatically")
+        if is_native():
+            self._log("1. gh prints a one-time code below (e.g. ABCD-1234)")
+            self._log("2. Your browser opens by itself (else open https://github.com/login/device)")
+            self._log("3. Enter the code, then click 'Authorize GitHub CLI'")
+            self._log("4. Come back here — gh detects the auth automatically")
+        else:
+            self._log("1. gh prints a one-time code below (e.g. ABCD-1234)")
+            self._log("2. On your Windows host, open this URL (Ctrl+click):")
+            self._log("     https://github.com/login/device")
+            self._log("3. Paste the code, then click 'Authorize GitHub CLI'")
+            self._log("4. Come back here — gh detects the auth automatically")
         self._log("─────────────────────────────────────────────")
         self.run_worker(self._gh_auth_worker, exclusive=True, thread=True)
 
@@ -3090,7 +3614,8 @@ class GitSetupWizard(ModalScreen[bool]):
         pub      = SSH_KEY_PATH.with_suffix(".pub")
         pub_tmp  = pub.with_suffix(".pub.maude-tmp")
         moved    = False
-        if pub.exists():
+        native   = is_native()  # Windows/macOS: gh is recent (--skip-ssh-key) and opens a real browser
+        if pub.exists() and not native:
             try:
                 pub.rename(pub_tmp)
                 moved = True
@@ -3110,12 +3635,14 @@ class GitSetupWizard(ModalScreen[bool]):
         try:
             try:
                 proc = subprocess.Popen(
+                    # Scope needed to upload the signing key after auth completes
+                    # (GPG key in the sandbox, SSH signing key natively).
+                    (gh_refresh_cmd(gh_exe() or "gh") if self._use_refresh else gh_login_cmd(gh_exe() or "gh"))
+                    if native else
                     ["gh", "auth", "login",
                      "--hostname", "github.com",
                      "--git-protocol", "ssh",
                      "--web",
-                     # Request the scope needed to upload a GPG signing
-                     # key after auth completes.
                      "--scopes", "write:gpg_key"],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
@@ -3142,7 +3669,7 @@ class GitSetupWizard(ModalScreen[bool]):
                     line = line.rstrip()
                     if not line:
                         continue
-                    if any(s in line for s in noise_substrings):
+                    if not native and any(s in line for s in noise_substrings):
                         continue
                     self.app.call_from_thread(self._log, line)
             rc = proc.wait()
@@ -3161,7 +3688,7 @@ class GitSetupWizard(ModalScreen[bool]):
             pass
         if gh_is_authed():
             self._log("[green]✓ gh CLI authenticated.[/]")
-            self._provision_gpg_now()
+            self._provision_signing_now()
         else:
             self._log(f"gh auth did not complete (exit code: {returncode}).")
         # Refresh the step so the button label flips to "Re-authenticate".
@@ -3170,6 +3697,34 @@ class GitSetupWizard(ModalScreen[bool]):
     def _rerender_current_step(self) -> None:
         # Schedule the async re-render from sync context.
         self.run_worker(self._render_step, exclusive=False)
+
+    def _provision_signing_now(self) -> None:
+        """Sandbox: silent GPG signing key. Windows/macOS: register the SSH key as a signing key."""
+        if is_native():
+            self._provision_ssh_signing_now()
+        else:
+            self._provision_gpg_now()
+
+    def _provision_ssh_signing_now(self) -> None:
+        """Windows/macOS: upload the SSH public key to GitHub as a signing key (no GPG)."""
+        if not self.ssh_key_path:
+            self._log("No SSH key chosen in step 2; skipping the signing key.")
+            return
+        pub = read_ssh_pubkey(self.ssh_key_path)
+        if not pub:
+            self._log(f"Could not read {self.ssh_key_path}.pub; skipping the signing key.")
+            return
+        self._log("Registering your SSH key on GitHub as a signing key…")
+        ok, msg = gh_upload_key("ssh-signing-key", pub, "Maude (TUI) signing")
+        if ok:
+            self._log("✓ " + msg)
+            self.signing_uploaded = True
+        else:
+            self._log("✗ " + msg)
+            if "scope" in msg.lower():
+                self._need_scope = True  # the next press only adds the scope (gh auth refresh)
+                self._log("Click 'Re-authenticate' above — this adds the "
+                          f"{GH_SIGNING_SCOPE} scope, which lets the upload succeed.")
 
     def _provision_gpg_now(self) -> None:
         """Silent ed25519 GPG signing key + auto-upload via gh."""
@@ -3208,8 +3763,9 @@ class GitSetupWizard(ModalScreen[bool]):
         # If authed, ensure the GPG key is generated AND uploaded. Both
         # paths are idempotent, so it's safe to call again after a
         # re-auth that granted the missing scope.
-        if gh_is_authed() and (not self.gpg_key_id or not self.gpg_uploaded):
-            self._provision_gpg_now()
+        done = self.signing_uploaded if is_native() else (self.gpg_key_id and self.gpg_uploaded)
+        if gh_is_authed() and not done:
+            self._provision_signing_now()
         await self._advance()
 
     # ── Step 4: finalise ────────────────────────────────────────────
@@ -3219,6 +3775,9 @@ class GitSetupWizard(ModalScreen[bool]):
         if self.full_name: git_config_set("user.name",          self.full_name)
         if self.email:     git_config_set("user.email",         self.email)
         git_config_set("init.defaultBranch", "main")
+        if is_native():
+            self._finish_native()
+            return
         if self.gpg_key_id:
             git_config_set("user.signingkey", self.gpg_key_id)
             git_config_set("commit.gpgsign",  "true")
@@ -3238,6 +3797,86 @@ class GitSetupWizard(ModalScreen[bool]):
         self._dismissed = True
         self.dismiss(True)
 
+    def _finish_native(self) -> None:
+        """Windows/macOS tail of step 4. The slow parts (ssh-add, the signing test) run in a worker
+        thread so the UI never freezes."""
+        for sel in ("#wiz-next", "#wiz-back", "#wiz-cancel", "#wiz-skip"):
+            try:
+                self.query_one(sel).disabled = True
+            except Exception:
+                pass
+        self._log("Checking SSH and signing…")
+        self.run_worker(self._finish_native_work, thread=True)
+
+    def _finish_native_work(self) -> None:
+        def log(m: str) -> None:
+            self.app.call_from_thread(self._log, m)
+        try:
+            self._finish_native_steps(log)
+        except Exception as err:  # never leave the wizard stuck with disabled buttons
+            log(f"  ! unexpected error: {err}")
+        self.app.call_from_thread(self._finish_native_done)
+
+    def _finish_native_done(self) -> None:
+        self._log("[green]✓ Setup complete.[/]")
+        self._dismissed = True
+        self.dismiss(True)
+
+    def _finish_native_steps(self, log) -> None:
+        git = plat_tool("git")
+        if not git:
+            log("! git is not installed, so nothing could be written to your git config. "
+                "Reopen this wizard to install it.")
+        key = Path(self.ssh_key_path) if self.ssh_key_path else None
+        pub = key.with_suffix(".pub") if key else None
+        ssh_ok = openssh_available()
+        if not ssh_ok:
+            log("! " + OPENSSH_MISSING_MSG)
+        if git:
+            pair = apply_ssh_command(git_path=git)  # MinGit only; independent of signing
+            if pair:
+                log(f"  {pair[0]} = {pair[1]}")
+        if IS_MAC and ensure_mac_ssh_config(Path.home() / ".ssh" / "config"):
+            log("  ✓ ~/.ssh/config: AddKeysToAgent + UseKeychain.")
+        if ssh_ok and key and key.exists():
+            if ensure_ssh_agent():
+                mac_load_keychain()
+                if not ssh_key_in_agent(key):
+                    enc = ssh_key_has_passphrase(key)
+                    # Encrypted: needs the passphrase from step 2. Unencrypted: not on Windows, where
+                    # the agent keeps keys across reboots (registry) and the key needs no agent.
+                    if (enc and self.ssh_passphrase) or (not enc and not IS_WIN):
+                        ok, msg = ssh_add_with_passphrase(key, self.ssh_passphrase)
+                        log("  ✓ key loaded into ssh-agent." if ok else
+                            f"  ! ssh-add: {msg.splitlines()[-1] if msg else 'failed'}")
+            elif IS_WIN:
+                log("  (the Windows ssh-agent service is not running; an unencrypted key needs no agent)")
+        if not (git and pub and pub.exists()):
+            return
+        if not self.signing_uploaded:
+            log("  (commit signing not configured: the signing key is not on GitHub yet; "
+                "run Setup Git(hub) again after re-authenticating)")
+            return
+        why = signing_conflict(str(pub))
+        if why:
+            log(f"  Your existing signing setup was left untouched: {why}.")
+            return
+        ok, msg = signing_roundtrip(str(pub))
+        if not ok:
+            log(f"  ! Commit signing was NOT enabled: {msg}.")
+            log("    Use a key without a passphrase, or run the ssh-agent with the key loaded, "
+                "then run Setup Git(hub) again. (A broken signing setup would hang every git commit.)")
+            return
+        for k, v in apply_ssh_signing(str(pub)):
+            log(f"  {k} = {v}")
+        if key and ssh_key_has_passphrase(key):  # the test passed only because an agent holds the key
+            if IS_WIN:
+                log("  Note: this key has a passphrase and signs through the ssh-agent service. If that service "
+                    "is not running after a reboot, commits will fail to sign; start the ssh-agent service, then run ssh-add, or set "
+                    "commit.gpgsign false.")
+            else:
+                log("  Note: this key has a passphrase and signs through the ssh-agent. Maude reloads it "
+                    "from the macOS keychain at start; outside Maude run ssh-add if a commit fails to sign.")
 
 class PushToGithubScreen(ModalScreen[bool]):
     """Modal that creates a GitHub repo + pushes the current project to it.
@@ -3355,27 +3994,40 @@ class PushToGithubScreen(ModalScreen[bool]):
     def _push_now(self, owner: str, repo: str,
                   url: str, visibility: str) -> tuple[bool, str]:
         cwd = str(self.project_path)
+        git, gh = git_exe(), gh_exe() or "gh"
+        if is_native() and not plat_tool("git"):
+            return False, "Git is not installed. Open Setup Git(hub): Maude offers to install it."
         # Guard against the SSH-key passphrase trap. If the user has an
         # encrypted SSH key but no agent has it loaded, both
         # `gh repo create --push` and `git push` will block forever
         # waiting for a passphrase prompt that no one can type. We
         # short-circuit with a clear error so the caller can pop the
         # unlock modal instead.
-        if (SSH_KEY_PATH.exists()
+        key = push_guard_key()
+        if is_native() and key.exists() and not openssh_available():
+            return False, OPENSSH_MISSING_MSG
+        if (key.exists()
                 and (not ssh_agent_running()
-                     or not ssh_key_in_agent(SSH_KEY_PATH))
-                and ssh_key_has_passphrase(SSH_KEY_PATH)):
+                     or not ssh_key_in_agent(key))
+                and ssh_key_has_passphrase(key)):
+            if IS_WIN and not ssh_agent_running():
+                # Nothing the unlock screen could load the key into (starting the service needs admin).
+                return False, ("your SSH key has a passphrase and the Windows ssh-agent service is "
+                               "not running. Enable that service (administrator) or create a key "
+                               "without a passphrase in Setup Git(hub).")
             return False, ("ssh key needs to be unlocked first — "
                            "exit the TUI and run `menu` again, or "
                            "click Setup Git(hub) to load the key.")
         # Force ssh into batch mode for *this* push so a misconfigured
         # state errors out fast (5–10s) instead of blocking on a
-        # passphrase prompt for 60+s.
+        # passphrase prompt for 60+s. Natively it is the platform's one OpenSSH.
         push_env = {
             **os.environ,
-            "GIT_SSH_COMMAND": "ssh -o BatchMode=yes "
-                               "-o StrictHostKeyChecking=accept-new",
+            **push_ssh_env(os.environ, git_config_effective(cwd, "core.sshCommand") if is_native() else ""),
         }
+        if is_native():  # gh runs git from PATH: make sure the one we found is there
+            push_env["PATH"] = os.path.dirname(git) + os.pathsep + push_env.get("PATH", "") \
+                if os.path.isabs(git) else push_env.get("PATH", "")
         # If the project has no README.md (any case), seed one with the
         # repo name as the H1 so GitHub has something to render.
         readme_present = any(
@@ -3390,14 +4042,14 @@ class PushToGithubScreen(ModalScreen[bool]):
         # Make sure the project has at least one commit, otherwise gh
         # repo create --push has nothing to send.
         log = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "HEAD"],
+            [git, "-C", cwd, "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=5,
         )
         if log.returncode != 0:
             # No commits yet — try to make an initial one from existing files.
-            subprocess.run(["git", "-C", cwd, "add", "-A"], capture_output=True)
+            subprocess.run([git, "-C", cwd, "add", "-A"], capture_output=True)
             commit = subprocess.run(
-                ["git", "-C", cwd, "commit", "-m", "Initial commit",
+                [git, "-C", cwd, "commit", "-m", "Initial commit",
                  "--allow-empty"],
                 capture_output=True, text=True, timeout=15,
             )
@@ -3408,22 +4060,22 @@ class PushToGithubScreen(ModalScreen[bool]):
             # Project already has commits but no README — stage and
             # commit the new file so the push includes it.
             subprocess.run(
-                ["git", "-C", cwd, "add", "README.md"],
+                [git, "-C", cwd, "add", "README.md"],
                 capture_output=True, text=True, timeout=5,
             )
             subprocess.run(
-                ["git", "-C", cwd, "commit", "-m", "Add README.md"],
+                [git, "-C", cwd, "commit", "-m", "Add README.md"],
                 capture_output=True, text=True, timeout=15,
             )
 
         # Does the remote already exist on GitHub?
         check = subprocess.run(
-            ["gh", "repo", "view", f"{owner}/{repo}"],
+            [gh, "repo", "view", f"{owner}/{repo}"],
             capture_output=True, text=True, timeout=15,
         )
         if check.returncode != 0:
             create = subprocess.run(
-                ["gh", "repo", "create", f"{owner}/{repo}",
+                [gh, "repo", "create", f"{owner}/{repo}",
                  f"--{visibility}", "--source", cwd, "--remote", "origin",
                  "--push"],
                 capture_output=True, text=True, timeout=180, env=push_env,
@@ -3436,20 +4088,20 @@ class PushToGithubScreen(ModalScreen[bool]):
         existing = git_remote_origin_url(self.project_path)
         if not existing:
             r = subprocess.run(
-                ["git", "-C", cwd, "remote", "add", "origin", url],
+                [git, "-C", cwd, "remote", "add", "origin", url],
                 capture_output=True, text=True, timeout=10,
             )
             if r.returncode != 0:
                 return False, (r.stderr or r.stdout).strip()
         elif existing != url:
             r = subprocess.run(
-                ["git", "-C", cwd, "remote", "set-url", "origin", url],
+                [git, "-C", cwd, "remote", "set-url", "origin", url],
                 capture_output=True, text=True, timeout=10,
             )
             if r.returncode != 0:
                 return False, (r.stderr or r.stdout).strip()
         push = subprocess.run(
-            ["git", "-C", cwd, "push", "-u", "origin", "HEAD"],
+            [git, "-C", cwd, "push", "-u", "origin", "HEAD"],
             capture_output=True, text=True, timeout=180, env=push_env,
         )
         if push.returncode != 0:
@@ -3523,7 +4175,7 @@ class DetachFromGithubScreen(ModalScreen[bool]):
         cwd = str(self.project_path)
         try:
             r = subprocess.run(
-                ["git", "-C", cwd, "remote", "remove", "origin"],
+                [git_exe(), "-C", cwd, "remote", "remove", "origin"],
                 capture_output=True, text=True, timeout=10,
             )
         except (subprocess.TimeoutExpired, FileNotFoundError) as err:
@@ -4521,10 +5173,13 @@ class MaudeApp(App):
         radioset.refresh()
 
     def _maybe_prompt_ssh_unlock(self) -> None:
-        if IS_WIN or IS_MAC:  # not yet supported natively (SSH/Git setup package)
+        key = active_ssh_key() if is_native() else SSH_KEY_PATH  # native: id_rsa counts too
+        if not key.exists():
             return
-        if not SSH_KEY_PATH.exists():
-            return
+        if is_native() and not openssh_available():
+            return  # Windows without the OpenSSH Client feature: nothing can load or use the key
+        # Windows/macOS: ssh_tool() picks the one OpenSSH stack. No reachable agent (Windows: the
+        # ssh-agent service is off by default) -> nothing to unlock into; skip cleanly.
         # Start an agent if one isn't already exposed in the env. On a
         # fresh terminal `keychain` may not have run yet (the .bashrc
         # block executes before `maude tui`, but the wizard's keychain
@@ -4533,11 +5188,14 @@ class MaudeApp(App):
         # push from blocking on a passphrase prompt.
         if not ensure_ssh_agent():
             return
-        if ssh_key_in_agent(SSH_KEY_PATH):
+        mac_load_keychain()  # macOS: after a restart the agent is empty until the keychain is loaded
+        if ssh_key_in_agent(key):
             return  # already loaded
-        if not ssh_key_has_passphrase(SSH_KEY_PATH):
-            # Unencrypted key — load silently with empty passphrase.
-            ssh_add_with_passphrase(SSH_KEY_PATH, "")
+        if not ssh_key_has_passphrase(key):
+            # Unencrypted key — load silently with empty passphrase. Not on Windows: its agent
+            # keeps keys across reboots (registry) and an unencrypted key needs no agent.
+            if not IS_WIN:
+                ssh_add_with_passphrase(key, "")
             return
         self.push_screen(SSHKeyUnlockScreen())
 
