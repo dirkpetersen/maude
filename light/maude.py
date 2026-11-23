@@ -134,6 +134,62 @@ def get_maude_version() -> str:
     return "dev"
 
 
+def valid_update(data: bytes, filename: str) -> bool:
+    """Sanity-check a downloaded maude.py before it replaces the running copy.
+    Static, pure checks only (size, shebang, markers, syntax); the real import
+    check is import_check_update()."""
+    try:
+        if len(data) < 10_000:
+            return False
+        # NOTE: the shebang, the `def maybe_self_update` marker and the
+        # `__main__` guard below are also what already-installed older copies
+        # (and light/maude's _validate_maude_py) look for -- do not rename or
+        # remove them without keeping the old markers.
+        if not data.startswith(b"#!/usr/bin/env python3"):
+            return False
+        if b"def maybe_self_update" not in data:
+            return False
+        # Anchored at line start so this very line does not satisfy the check.
+        if not re.search(rb'(?m)^if __name__ == "__main__":', data):
+            return False
+        compile(data, filename, "exec")
+        return True
+    except Exception:
+        return False
+
+
+_IMPORT_CHECK_CODE = (
+    "import importlib.machinery, importlib.util, sys\n"
+    "sys.dont_write_bytecode = True\n"
+    "p = sys.argv[1]\n"
+    "ldr = importlib.machinery.SourceFileLoader('maude_update_check', p)\n"
+    "spec = importlib.util.spec_from_file_location('maude_update_check', p, loader=ldr)\n"
+    "mod = importlib.util.module_from_spec(spec)\n"
+    "ldr.exec_module(mod)\n"
+)
+
+
+def import_check_update(path: str, timeout: int = 30) -> str:
+    """Import the downloaded file as a non-main module in a subprocess (runs its
+    module-level code, so bad imports / missing dependencies / NameErrors show
+    up, but the TUI never starts). Returns "" on success, else a short reason.
+    Not isolated (-I) on purpose: user-site packages such as textual must be visible."""
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", _IMPORT_CHECK_CODE, path],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return f"import check timed out after {timeout}s"
+    except Exception as err:
+        return f"import check could not run ({err})"
+    if r.returncode != 0:
+        lines = (r.stderr or "").strip().splitlines()
+        return lines[-1] if lines else f"import check exited {r.returncode}"
+    return ""
+
+
 def maybe_self_update() -> None:
     """Refresh maude.py from GitHub once per day, at or after noon local time.
     The new version takes effect on the next launch."""
@@ -154,9 +210,24 @@ def maybe_self_update() -> None:
     try:
         with urllib.request.urlopen(bust_url, timeout=10) as resp:
             new_bytes = resp.read()
+        if not valid_update(new_bytes, str(target)):
+            print("maude: downloaded update failed validation; keeping current version",
+                  file=sys.stderr)
+            return
         tmp = target.with_name(target.name + ".new")
-        tmp.write_bytes(new_bytes)
-        tmp.replace(target)
+        try:
+            tmp.write_bytes(new_bytes)
+            why = import_check_update(str(tmp))
+            if why:
+                print("maude: downloaded update failed validation; keeping current version"
+                      f" ({why})", file=sys.stderr)
+                return
+            tmp.replace(target)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         UPDATE_STAMP.write_text(today)
     except Exception as err:
         print(f"maude: update check failed ({err}); using cached version",
