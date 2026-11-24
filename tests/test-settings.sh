@@ -32,7 +32,8 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "_one_line", "read_secret", "write_secret", "remove_secret", "active_anthropic_key",
         "with_active_anthropic_key", "apply_anthropic_key", "OPENCODE_PROVIDER", "OPENCODE_NPM", "OPENCODE_KEY_REF",
         "opencode_config_path", "opencode_url_error", "_opencode_load", "_opencode_store", "read_opencode_custom",
-        "merge_opencode_config", "remove_opencode_custom", "claude_env_from", "plat_claude_env", "plat_tool_env",
+        "merge_opencode_config", "remove_opencode_custom", "SANDBOX_MODEL_VARS", "anthropic_key_effective", "KEY_AGENTS",
+        "OPENCODE_PREV_MODEL_SETTING", "claude_env_from", "plat_claude_env", "plat_tool_env",
         "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
 
 def load(platform, login=False):
@@ -88,7 +89,11 @@ for plat, tag in (("win32", "win"), ("darwin", "mac")):
     ns2 = load(plat, login=True)  # a native Claude login does not beat the active key
     e2 = ns2["plat_claude_env"]()
     check(f"{tag}.active.beats_login", e2.get("ANTHROPIC_API_KEY") == "sk-ant-k1", e2)
-    check(f"{tag}.active.toolenv", ns["plat_tool_env"]().get("ANTHROPIC_API_KEY") == "sk-ant-k1")
+    check(f"{tag}.active.toolenv", ns["plat_tool_env"]("OpenCode").get("ANTHROPIC_API_KEY") == "sk-ant-k1" and ns["plat_tool_env"]("Crush").get("ANTHROPIC_API_KEY") == "sk-ant-k1")
+    check(f"{tag}.active.toolenv_only_key_agents", all("ANTHROPIC_API_KEY" not in ns["plat_tool_env"](a) for a in ("Kiro CLI", "GitHub Copilot CLI", "Codex", None)))
+    ns["merge_clauderc"]({"OPENAI_API_KEY": "o"})   # pasted exports: unchanged behaviour for every agent
+    check(f"{tag}.toolenv.pasted_exports_kept", ns["plat_tool_env"]("Kiro CLI").get("OPENAI_API_KEY") == "o")
+    ns["remove_clauderc_keys"](["OPENAI_API_KEY"])
     os.environ["ANTHROPIC_BASE_URL"] = "https://proxy.example"  # ambient base URL is removed for claude only
     check(f"{tag}.active.unsets_base_url", ns["plat_claude_env"]().get("ANTHROPIC_BASE_URL", "x") is None, ns["plat_claude_env"]())
     del os.environ["ANTHROPIC_BASE_URL"]
@@ -97,7 +102,7 @@ for plat, tag in (("win32", "win"), ("darwin", "mac")):
     e = ns["plat_claude_env"]()
     check(f"{tag}.inactive.env", e.get("ANTHROPIC_API_KEY") != "sk-ant-k1" and e.get("CLAUDE_CODE_USE_FOUNDRY") == "1", e)
     check(f"{tag}.inactive.clauderc_flags_unchanged", ns["read_clauderc"]().get("CLAUDE_CODE_USE_FOUNDRY") == "1")
-    check(f"{tag}.inactive.not_in_toolenv", "ANTHROPIC_API_KEY" not in ns["plat_tool_env"]())
+    check(f"{tag}.inactive.not_in_toolenv", "ANTHROPIC_API_KEY" not in ns["plat_tool_env"]("OpenCode"))
     # a clauderc rewrite / parking (Default to AWS Bedrock) cannot strand the key: it is not in clauderc
     ns["apply_anthropic_key"]("", True)
     ns["park_clauderc"](True)
@@ -132,17 +137,37 @@ r = ns["read_clauderc"]()
 check("lin.active.exports", r.get("ANTHROPIC_API_KEY") == "sk-ant-s1" and r.get("ANTHROPIC_BASE_URL") == "https://api.anthropic.com", r)
 check("lin.active.flags_untouched", r.get("CLAUDE_CODE_USE_FOUNDRY") == "1" and "CLAUDE_CODE_USE_BEDROCK" not in r, r)
 check("lin.active.exported_lines", "export ANTHROPIC_API_KEY='sk-ant-s1'" in rc.read_text() and mode(rc) == "0o600", mode(rc))
-check("lin.active.env_empty", ns["plat_claude_env"]() == {} and ns["plat_tool_env"]() == {})
+check("lin.active.env_empty", ns["plat_claude_env"]() == {} and ns["plat_tool_env"]("OpenCode") == {})
+check("lin.active.model_ids", all(r.get(k) == v for k, v in ns["SANDBOX_MODEL_VARS"].items()) and r["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5-5", r)
+check("lin.active.effective", ns["anthropic_key_effective"]() is True)
+shutil.copy(rc, home / "sandbox-clauderc.copy")  # the bash part below sources it through the wrapper's model block
 ns["apply_anthropic_key"]("", False)
 r = ns["read_clauderc"]()
 check("lin.inactive", "ANTHROPIC_API_KEY" not in r and "ANTHROPIC_BASE_URL" not in r and r.get("CLAUDE_CODE_USE_FOUNDRY") == "1" and akey.read_text() == "sk-ant-s1", r)
+check("lin.inactive.model_ids_removed", not any(k in r for k in ns["SANDBOX_MODEL_VARS"]), r)
+check("lin.inactive.not_effective", ns["anthropic_key_effective"]() is False)
+ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-pasted"})
+check("lin.pasted_key_alone_not_effective", ns["anthropic_key_effective"]() is False)
+ns["remove_clauderc_keys"](["ANTHROPIC_API_KEY"])
+ns["merge_clauderc"]({"ANTHROPIC_DEFAULT_OPUS_MODEL": "my-opus"})   # the user's own ids are kept on activate and on deactivate
+ns["apply_anthropic_key"]("", True)
+check("lin.own_model_id_kept", ns["read_clauderc"]()["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "my-opus" and ns["read_clauderc"]()["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-5-5")
+ns["apply_anthropic_key"]("", False)
+r = ns["read_clauderc"]()
+check("lin.own_model_id_kept_on_uncheck", r.get("ANTHROPIC_DEFAULT_OPUS_MODEL") == "my-opus" and "ANTHROPIC_DEFAULT_SONNET_MODEL" not in r, r)
+ns["remove_clauderc_keys"](["ANTHROPIC_DEFAULT_OPUS_MODEL"])
 try:
     ns["apply_anthropic_key"]("not-a-sk-ant-key", True); check("lin.rejects_non_sk_ant", False, "no error")
 except ValueError:
     check("lin.rejects_non_sk_ant", "ANTHROPIC_API_KEY" not in ns["read_clauderc"]())
-ns["merge_clauderc"]({"ANTHROPIC_BASE_URL": "https://my.proxy/v1"})  # a user's own base URL is kept
-ns["apply_anthropic_key"]("sk-ant-s2", True); ns["apply_anthropic_key"]("", False)
-check("lin.custom_base_url_kept", ns["read_clauderc"]().get("ANTHROPIC_BASE_URL") == "https://my.proxy/v1", ns["read_clauderc"]())
+ns["merge_clauderc"]({"ANTHROPIC_BASE_URL": "https://my.proxy/v1"})  # a user's own endpoint: refused, nothing combined
+try:
+    ns["apply_anthropic_key"]("sk-ant-s2", True); check("lin.custom_base_url_refused", False, "no error")
+except ValueError as e:
+    r = ns["read_clauderc"]()
+    check("lin.custom_base_url_refused", "custom ANTHROPIC_BASE_URL" in str(e) and r.get("ANTHROPIC_BASE_URL") == "https://my.proxy/v1" and "ANTHROPIC_API_KEY" not in r and not any(k in r for k in ns["SANDBOX_MODEL_VARS"]), r)
+ns["apply_anthropic_key"]("", False)
+check("lin.custom_base_url_kept_on_uncheck", ns["read_clauderc"]().get("ANTHROPIC_BASE_URL") == "https://my.proxy/v1", ns["read_clauderc"]())
 reset()
 
 # ── parking with both clauderc files present: nothing is deleted unmerged ──
@@ -201,7 +226,11 @@ check("oc.no_secret_in_json", "oc-secret-value" not in cfg.read_text() and "{fil
 # removal: provider + model + key file; other providers stay
 check("oc.remove.changed", ns["remove_opencode_custom"]() is True)
 j = json.loads(cfg.read_text())
-check("oc.remove.result", "maude-custom" not in j["provider"] and "model" not in j and "zai-coding-plan" in j["provider"] and not okey.exists(), j)
+check("oc.remove.result", "maude-custom" not in j["provider"] and "zai-coding-plan" in j["provider"] and not okey.exists(), j)
+check("oc.remove.restores_previous_model", j.get("model") == "zai-coding-plan/glm-5.2" and "opencode_prev_model" not in ns["load_settings"](), (j, ns["load_settings"]()))
+cfg.write_text(json.dumps({"provider": {}}))   # no previous model: the model key goes away again
+ns["merge_opencode_config"]("https://h.example/v1", "mx", False); ns["remove_opencode_custom"]()
+check("oc.remove.no_previous_model", "model" not in json.loads(cfg.read_text()), cfg.read_text())
 check("oc.remove.again", ns["remove_opencode_custom"]() is False)
 # a model that is not ours stays
 cfg.write_text(json.dumps({"model": "other/x", "provider": {"maude-custom": {}}}))
@@ -231,6 +260,8 @@ for f in list(real.parent.iterdir()):
     f.unlink()
 real.parent.rmdir()
 
+# secrets are written atomically: no temp file is left behind
+check("secret.no_tmp_left", not [q for q in (home / ".maude").iterdir() if q.name.startswith(".secret-")])
 # ── OpenCode URL validation ──
 e = ns["opencode_url_error"]
 for url, ok in (("https://h.example/v1", True), ("https://h.example:8443/v1", True), ("http://localhost:11434/v1", True),
@@ -247,5 +278,33 @@ while IFS= read -r line; do
     [[ "$line" == *=* ]] || continue
     assert_eq "${line%%=*}" "ok" "${line#*=}"
 done <<< "$out"
+# The wrapper's model block (dok scripts/claude-wrapper.sh lines 934-945 and the model keyword case; trimmed copy). Its
+# ANTHROPIC_BASE_URL branch sets neither USING_NATIVE nor USING_FOUNDRY, so without the plain ids in clauderc the
+# Bedrock ids would be sent to api.anthropic.com.
+wrapper_model() {  # $1 = clauderc to source ("" = none), $2 = model word
+    (
+        set -a; unset ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL
+        [[ -n "$1" ]] && . "$1"
+        set +a
+        if [[ "${USING_FOUNDRY:-0}" == "1" || "${USING_NATIVE:-0}" == "1" ]]; then
+          export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-5-5}"
+        else
+          export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-global.anthropic.claude-haiku-5-5}"
+          export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-global.anthropic.claude-sonnet-5-5}"
+          export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-global.anthropic.claude-opus-5-5}"
+          export ANTHROPIC_DEFAULT_FABLE_MODEL="${ANTHROPIC_DEFAULT_FABLE_MODEL:-global.anthropic.claude-fable-5-1}"
+        fi
+        case "$2" in
+          fable) echo "$ANTHROPIC_DEFAULT_FABLE_MODEL" ;; opus) echo "$ANTHROPIC_DEFAULT_OPUS_MODEL" ;;
+          sonnet) echo "$ANTHROPIC_DEFAULT_SONNET_MODEL" ;; *) echo "$ANTHROPIC_DEFAULT_HAIKU_MODEL" ;;
+        esac
+    )
+}
+sandbox_rc="$d/home/sandbox-clauderc.copy"
+assert_eq "wrapper model block: without Maude's ids the Bedrock id is sent (the bug)" "global.anthropic.claude-opus-5-5" "$(wrapper_model "" opus)"
+assert_eq "wrapper model block: opus -> plain Anthropic id"   "claude-opus-5-5"   "$(wrapper_model "$sandbox_rc" opus)"
+assert_eq "wrapper model block: sonnet -> plain Anthropic id" "claude-sonnet-5-5" "$(wrapper_model "$sandbox_rc" sonnet)"
+assert_eq "wrapper model block: haiku -> plain Anthropic id"  "claude-haiku-5-5"  "$(wrapper_model "$sandbox_rc" haiku)"
+assert_eq "wrapper model block: fable -> plain Anthropic id"  "claude-fable-5-2"  "$(wrapper_model "$sandbox_rc" fable)"
 assert_contains "ran every section" "url.https://h.example/'v1=ok" "$out"
 suite_summary

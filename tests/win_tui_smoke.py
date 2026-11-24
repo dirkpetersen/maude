@@ -869,10 +869,18 @@ try:
             scr.query_one("#creds-oc-key").value = "oc-secret"
             for bad in ("ftp://nope", "http://h.example/v1", "https://u:p@h.example/v1", "https://h.example/{env:X}"):
                 scr.query_one("#creds-oc-url").value = bad        # invalid: stays open with an error, saves nothing
-                scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+                scr.query_one("#creds-status").update("")
+                scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                await wait_until(pilot, lambda: str(scr.query_one("#creds-status").render()) != "")
                 assert isinstance(app.screen, maude.CredsEntryScreen) and str(scr.query_one("#creds-status").render()), bad
                 assert not okey_file.exists() and "maude-custom" not in oc_cfg.read_text(), bad
             scr.query_one("#creds-oc-url").value = "https://llm.example/v1"
+            scr.query_one("#creds-oc-model").value = "bad#model"   # a # in the model name is rejected
+            scr.query_one("#creds-status").update("")
+            scr.query_one("#btn-creds-save").press(); await pilot.pause()
+            await wait_until(pilot, lambda: str(scr.query_one("#creds-status").render()) != "")
+            assert isinstance(app.screen, maude.CredsEntryScreen) and not okey_file.exists() and "maude-custom" not in oc_cfg.read_text()
+            scr.query_one("#creds-oc-model").value = "qwen3-coder"
             scr.query_one("#creds-native-only", Checkbox).value = True
             await save_and_close(pilot, scr)
             await wait_until(pilot, lambda: len(disabled(app)) == len(maude.AGENTS) - 2)
@@ -889,7 +897,8 @@ try:
             scr.query_one("#creds-oc-url").value = "https://llm.example/v1"
             scr.query_one("#creds-oc-model").value = "m"
             scr.query_one("#creds-oc-key").value = "oc-secret2"
-            scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            scr.query_one("#btn-creds-save").press(); await pilot.pause()
+            await wait_until(pilot, lambda: "comments" in str(scr.query_one("#creds-status").render()))
             assert isinstance(app.screen, maude.CredsEntryScreen) and "comments" in str(scr.query_one("#creds-status").render())
             assert not okey_file.exists() and oc_cfg.read_text().startswith("{ // my notes")
             scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
@@ -905,7 +914,8 @@ try:
             scr.query_one("#btn-oc-remove").press(); await pilot.pause(); await pilot.pause()
             await wait_until(pilot, lambda: not okey_file.exists())
             assert not okey_file.exists() and scr.query_one("#creds-oc-url").value == ""
-            assert "maude-custom" not in oc_cfg.read_text() and '"model"' not in oc_cfg.read_text()
+            rm = _json.loads(oc_cfg.read_text())
+            assert "maude-custom" not in rm["provider"] and rm["model"] == "zai-coding-plan/glm-5.2", rm  # the previous model is back
             scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
             await wait_until(pilot, lambda: len(app.screen_stack) == 1)
         # Put the custom provider back for the final checks below
@@ -937,6 +947,7 @@ try:
                 assert len(scr.query_one("#creds-status").region) >= 0 and scr.query_one("#creds-status").region.right <= size[0]
                 scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
                 await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+    import json as _json
     saved_env = dict(os.environ)
     try:
         asyncio.run(check_settings_screen())

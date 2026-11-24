@@ -94,7 +94,7 @@ if [[ -t 1 ]] && [[ -z "$MAUDE_WELCOMED" ]]; then
     if [[ ! -f "$HOME/.aws/credentials" ]] && [[ ! -f "$HOME/.azure/clauderc" ]]; then
         printf "  ${Y}LLM service credentials not yet set up.${N}\n"
         printf "  ${Y}Open the TUI ('${B}maude tui${Y}' or '${B}menu${Y}') and click ${B}Settings${Y}.${N}\n"
-        printf "  ${Y}You can pick: paste exports / AWS Bedrock / Azure Foundry.${N}\n"
+        printf "  ${Y}You can pick: Paste / Anthropic / Bedrock / Foundry / OpenCode.${N}\n"
         printf "\n"
     fi
 fi

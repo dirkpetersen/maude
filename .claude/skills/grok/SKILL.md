@@ -39,7 +39,7 @@ grok -m grok-aws -p "reply with the single word: ok" --output-format plain 2>&1;
 requires a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`). Classic `~/.aws/credentials`
 (SigV4) cannot reach it — in that case fall back to `grok-direct` if `XAI_API_KEY` is
 present, otherwise STOP and tell the user which credential is missing (Maude TUI →
-**Settings → Paste exports**: `XAI_API_KEY=...` from console.x.ai). If a key IS
+**Settings → Paste**: `XAI_API_KEY=...` from console.x.ai). If a key IS
 present but the call still errors, report the actual error — do NOT retry blindly.
 
 ## Mode → model reference

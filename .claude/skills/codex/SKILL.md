@@ -36,7 +36,7 @@ codex exec --profile maude-aws --skip-git-repo-check "reply with the single word
 ```
 
 If the required key is missing, STOP and tell the user to add it via the Maude TUI:
-**Settings → Paste exports** (`OPENAI_API_KEY=...`, `AZURE_OPENAI_API_KEY=...`, or
+**Settings → Paste** (`OPENAI_API_KEY=...`, `AZURE_OPENAI_API_KEY=...`, or
 AWS credentials). If a key IS present but the call still errors, report the actual
 error — do NOT retry blindly on broken auth.
 
