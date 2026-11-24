@@ -8,6 +8,13 @@ on:
       - "zensical.toml"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag (vX.Y.Z) the maude.exe download links should point at"
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: read
   pages: write
@@ -27,6 +34,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Point maude.exe links at the newest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-}"
+          if [[ -z "$tag" ]]; then
+            tag="$(gh release view --repo "${{ github.repository }}" --json tagName -q .tagName 2>/dev/null || true)"
+          fi
+          python3 scripts/docs-set-release.py "$tag" docs
       - run: pip install zensical
       - run: zensical build --clean
       - uses: actions/upload-pages-artifact@v4

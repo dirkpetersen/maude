@@ -252,3 +252,15 @@ jobs:
             "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256" \
             dist/maude.exe \
             dist/maude.exe.sha256
+
+  # Redeploy the docs site so the maude.exe links point at this release.
+  # A release made with GITHUB_TOKEN does not trigger other workflows, hence workflow_call.
+  update-docs:
+    needs: create-release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs.yml
+    with:
+      tag: ${{ github.ref_name }}
