@@ -324,7 +324,7 @@ def agy_package(manifest) -> tuple[str, str] | None:
     if not isinstance(manifest, dict):
         return None
     url, sha = manifest.get("url"), manifest.get("sha512")
-    if (isinstance(url, str) and _AGY_URL_RE.fullmatch(url) and ".." not in url
+    if (isinstance(url, str) and _AGY_URL_RE.fullmatch(url) and ".." not in url and "//" not in url[8:]
             and isinstance(sha, str) and _SHA512_RE.fullmatch(sha)):
         return url, sha.lower()
     return None

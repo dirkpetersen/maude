@@ -51,7 +51,7 @@ out="" url=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o) out="$2"; shift 2 ;;
-        --max-time|--proto|--proto-redir|--speed-limit|--speed-time) echo "FLAG $1 $2" >> "$FAKE_LOG"; shift 2 ;;
+        --max-time|--proto|--proto-redir|--speed-limit|--speed-time|--connect-timeout) echo "FLAG $1 $2" >> "$FAKE_LOG"; shift 2 ;;
         --path-as-is) echo "FLAG --path-as-is" >> "$FAKE_LOG"; shift ;;
         -*) shift ;;
         *) url="$1"; shift ;;
@@ -111,7 +111,8 @@ assert_contains "agy: https-only, no path normalisation, stall-based timeout" "F
 assert_contains "agy: --proto =https" "FLAG --proto =https" "$(cat "$d/log")"
 assert_contains "agy: --proto-redir =https" "FLAG --proto-redir =https" "$(cat "$d/log")"
 assert_contains "agy: --path-as-is" "FLAG --path-as-is" "$(cat "$d/log")"
-assert_eq "agy: no total max-time on the archive" "1" "$(grep -c 'FLAG --max-time' "$d/log")"
+assert_contains "agy: generous total cap on the archive" "FLAG --max-time 3600" "$(cat "$d/log")"
+assert_contains "agy: connect timeout" "FLAG --connect-timeout 30" "$(cat "$d/log")"
 rm -f "$h/.local/bin/agy"
 run "$h" good offline update_antigravity
 assert_eq "agy: offline -> failed, not an error trace" "cli: failed" "$RUN_OUT"

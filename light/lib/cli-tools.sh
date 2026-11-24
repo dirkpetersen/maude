@@ -68,7 +68,7 @@ PY
 ) || true
     fi
     if [[ -n "${url:-}" && -n "${sha:-}" ]] \
-       && curl -fsSL --path-as-is --proto '=https' --proto-redir '=https' --speed-limit 10000 --speed-time 60 "$url" -o "$d/agy.tar.gz" \
+       && curl -fsSL --path-as-is --proto '=https' --proto-redir '=https' --speed-limit 10000 --speed-time 60 --connect-timeout 30 --max-time 3600 "$url" -o "$d/agy.tar.gz" \
        && [[ "$(sha512sum "$d/agy.tar.gz" | cut -d' ' -f1)" == "$sha" ]] \
        && tar -xzf "$d/agy.tar.gz" -C "$d" antigravity 2>/dev/null \
        && mkdir -p "$HOME/.local/bin" \
