@@ -1127,16 +1127,29 @@ def projects_dir(env=os.environ) -> str:
 child_env = None  # maude.py (Windows) sets this to its _child_env: callable -> env dict | None
 
 
+def _anthropic_key_active(up: str) -> bool:
+    """Settings > Anthropic "Use this API key" is on: settings.json has anthropic_key_active true and the key file
+    ~/.maude/anthropic-key exists. Stdlib only (this runs before maude.py is loaded)."""
+    try:
+        with open(os.path.join(up, ".maude", "settings.json"), "rb") as fh:
+            flag = json.loads(fh.read().decode("utf-8-sig")).get("anthropic_key_active") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+    return flag and os.path.isfile(os.path.join(up, ".maude", "anthropic-key"))
+
+
 def _creds_env() -> dict | None:
     """Environment for Claude Code with the saved credentials (~/.maude/clauderc), or None to
     inherit. Reached without the TUI (Explorer menu / --windows): maude.py is then loaded only when
-    a clauderc (or the parked clauderc.inactive of "Default to AWS Bedrock") exists, so the plain
-    start stays fast and an ~/.aws/config alone changes nothing. A load failure prints one line."""
+    a clauderc (or the parked clauderc.inactive of "Default to AWS Bedrock") exists, or the Anthropic
+    API key of Settings is active, so the plain start stays fast and an ~/.aws/config alone changes
+    nothing. A load failure prints one line."""
     f = child_env
     if f is None:
         up = os.environ.get("USERPROFILE", "")
         if not (up and (os.path.isfile(os.path.join(up, ".maude", "clauderc"))
-                        or os.path.isfile(os.path.join(up, ".maude", "clauderc.inactive")))):
+                        or os.path.isfile(os.path.join(up, ".maude", "clauderc.inactive"))
+                        or _anthropic_key_active(up))):
             return None
         try:
             sys.modules.setdefault("maude_exe", sys.modules[__name__])

@@ -33,7 +33,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "with_active_anthropic_key", "apply_anthropic_key", "OPENCODE_PROVIDER", "OPENCODE_NPM", "OPENCODE_KEY_REF",
         "opencode_config_path", "opencode_url_error", "_opencode_load", "_opencode_store", "read_opencode_custom",
         "merge_opencode_config", "remove_opencode_custom", "SANDBOX_MODEL_VARS", "anthropic_key_effective", "KEY_AGENTS",
-        "OPENCODE_PREV_MODEL_SETTING", "claude_env_from", "plat_claude_env", "plat_tool_env",
+        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "ANTHROPIC_OWNED_SETTING", "PLAIN_MODEL_RE", "_owned", "key_block_keys", "claude_env_from", "plat_claude_env", "plat_tool_env",
         "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
 
 def load(platform, login=False):
@@ -149,12 +149,12 @@ check("lin.inactive.not_effective", ns["anthropic_key_effective"]() is False)
 ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-pasted"})
 check("lin.pasted_key_alone_not_effective", ns["anthropic_key_effective"]() is False)
 ns["remove_clauderc_keys"](["ANTHROPIC_API_KEY"])
-ns["merge_clauderc"]({"ANTHROPIC_DEFAULT_OPUS_MODEL": "my-opus"})   # the user's own ids are kept on activate and on deactivate
+ns["merge_clauderc"]({"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-1"})   # the user's own ids are kept on activate and on deactivate
 ns["apply_anthropic_key"]("", True)
-check("lin.own_model_id_kept", ns["read_clauderc"]()["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "my-opus" and ns["read_clauderc"]()["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-5-5")
+check("lin.own_model_id_kept", ns["read_clauderc"]()["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-1" and ns["read_clauderc"]()["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-5-5")
 ns["apply_anthropic_key"]("", False)
 r = ns["read_clauderc"]()
-check("lin.own_model_id_kept_on_uncheck", r.get("ANTHROPIC_DEFAULT_OPUS_MODEL") == "my-opus" and "ANTHROPIC_DEFAULT_SONNET_MODEL" not in r, r)
+check("lin.own_model_id_kept_on_uncheck", r.get("ANTHROPIC_DEFAULT_OPUS_MODEL") == "claude-opus-4-1" and "ANTHROPIC_DEFAULT_SONNET_MODEL" not in r, r)
 ns["remove_clauderc_keys"](["ANTHROPIC_DEFAULT_OPUS_MODEL"])
 try:
     ns["apply_anthropic_key"]("not-a-sk-ant-key", True); check("lin.rejects_non_sk_ant", False, "no error")
@@ -169,6 +169,108 @@ except ValueError as e:
 ns["apply_anthropic_key"]("", False)
 check("lin.custom_base_url_kept_on_uncheck", ns["read_clauderc"]().get("ANTHROPIC_BASE_URL") == "https://my.proxy/v1", ns["read_clauderc"]())
 reset()
+
+# ── sandbox: Maude's key block is never parked; ownership of what Maude wrote ──
+ns = load("linux")
+rc, inactive = ns["clauderc_path"](), ns["clauderc_inactive_path"]()
+ns["merge_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2"})
+rc.rename(inactive)                                   # Bedrock is the default: parked
+ns["apply_anthropic_key"]("sk-ant-m1", True)          # activating re-creates clauderc with the key block
+ns["merge_clauderc"]({"ANTHROPIC_FOUNDRY_API_KEY": "fk", "CLAUDE_CODE_USE_FOUNDRY": "1"})
+ns["park_clauderc"](True)                              # a Save with the Bedrock-default box unflipped
+a, p = ns["read_clauderc"](), ns["read_clauderc"](inactive)
+check("park.key_block.stays_active", a.get("ANTHROPIC_API_KEY") == "sk-ant-m1" and a.get("ANTHROPIC_BASE_URL") == "https://api.anthropic.com"
+      and all(k in a for k in ns["SANDBOX_MODEL_VARS"]) and "ANTHROPIC_FOUNDRY_API_KEY" not in a and "CLAUDE_CODE_USE_FOUNDRY" not in a, a)
+check("park.key_block.rest_parked", p.get("ANTHROPIC_FOUNDRY_API_KEY") == "fk" and p.get("CLAUDE_CODE_USE_BEDROCK") == "1" and "ANTHROPIC_API_KEY" not in p, p)
+check("park.key_block.flag_still_on", ns["load_settings"]().get("anthropic_key_active") is True and ns["anthropic_key_effective"]() is True)
+ns["park_clauderc"](True)                              # idempotent
+check("park.key_block.idempotent", ns["read_clauderc"]() == a and ns["read_clauderc"](inactive) == p)
+ns["park_clauderc"](False)                             # Bedrock-default unticked: the rest comes back, the block stays
+a2 = ns["read_clauderc"]()
+check("park.key_block.restore", a2.get("ANTHROPIC_API_KEY") == "sk-ant-m1" and a2.get("ANTHROPIC_FOUNDRY_API_KEY") == "fk" and not inactive.exists(), a2)
+ns["apply_anthropic_key"]("", False)
+check("park.key_block.uncheck_removes_only_block", ns["read_clauderc"]() == {"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2", "ANTHROPIC_FOUNDRY_API_KEY": "fk", "CLAUDE_CODE_USE_FOUNDRY": "1"}, ns["read_clauderc"]())
+reset()
+# without an active key a sandbox park moves everything, as before
+ns = load("linux")
+ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-pasted", "X": "1"}); ns["park_clauderc"](True)
+check("park.no_key_flag_parks_everything", not rc.exists() and ns["read_clauderc"](inactive) == {"ANTHROPIC_API_KEY": "sk-ant-pasted", "X": "1"})
+reset()
+# model ids: what Maude wrote is recorded; a changed SANDBOX_MODEL_VARS cannot strand old ids
+ns = load("linux")
+ns["apply_anthropic_key"]("sk-ant-i1", True)
+old_opus = ns["SANDBOX_MODEL_VARS"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]
+ns["SANDBOX_MODEL_VARS"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "claude-opus-9-9"   # a later Maude release changes an id
+ns["apply_anthropic_key"]("", True)                    # re-activation refreshes Maude's own value
+check("ids.refreshed", ns["read_clauderc"]()["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-9-9", ns["read_clauderc"]())
+ns["SANDBOX_MODEL_VARS"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "claude-opus-10"
+ns["apply_anthropic_key"]("", False)                   # uncheck after another change: removed because it equals what Maude wrote
+check("ids.no_stranded_after_change", not any(k in ns["read_clauderc"]() for k in ns["SANDBOX_MODEL_VARS"]), ns["read_clauderc"]())
+ns["SANDBOX_MODEL_VARS"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = old_opus
+reset()
+# the gate: ids / Maude's base URL alone are no credentials
+ns = load("linux")
+ns["merge_clauderc"]({**ns["SANDBOX_MODEL_VARS"], "ANTHROPIC_BASE_URL": "https://api.anthropic.com"})
+check("gate.only_ids_not_configured", ns["credentials_configured"]() is False)
+ns["merge_clauderc"]({"ANTHROPIC_FOUNDRY_API_KEY": "fk"})
+check("gate.ids_plus_credential_configured", ns["credentials_configured"]() is True)
+reset()
+ns = load("linux")
+ns["merge_clauderc"]({"ANTHROPIC_BASE_URL": "https://my.proxy/v1"})
+check("gate.custom_base_url_configured", ns["credentials_configured"]() is True)
+reset()
+# L1: a wrong id (Bedrock style) is replaced and restored on uncheck; the user's own plain claude-* id stays
+ns = load("linux")
+ns["merge_clauderc"]({"ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-5-5", "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-1"})
+ns["apply_anthropic_key"]("sk-ant-l1", True)
+r = ns["read_clauderc"]()
+check("ids.wrong_replaced", r["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5-5" and r["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-1", r)
+ns["apply_anthropic_key"]("", False)
+r = ns["read_clauderc"]()
+check("ids.wrong_restored_on_uncheck", r == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-5-5", "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-1"}, r)
+reset()
+# L2: the user's own ANTHROPIC_API_KEY is never removed; an unchecked save of a typed key only stores it
+ns = load("linux")
+ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-mine"})
+ns["apply_anthropic_key"]("sk-ant-typed", False)
+check("key.typed_unchecked_keeps_users_key", ns["read_clauderc"]() == {"ANTHROPIC_API_KEY": "sk-ant-mine"} and akey.read_text() == "sk-ant-typed", ns["read_clauderc"]())
+reset()
+ns = load("win32")
+ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-mine"})
+ns["apply_anthropic_key"]("sk-ant-typed2", False)
+check("key.native.typed_unchecked_keeps_users_key", ns["read_clauderc"]() == {"ANTHROPIC_API_KEY": "sk-ant-mine"} and akey.read_text() == "sk-ant-typed2", ns["read_clauderc"]())
+reset()
+# replace_retry: Windows retries a transient PermissionError, 5 tries; elsewhere one try; other errors propagate
+ns = load("win32"); real_replace, calls = os.replace, []
+def flaky(n):
+    def f(s, d):
+        calls.append(1)
+        if len(calls) <= n:
+            raise PermissionError("locked")
+        return real_replace(s, d)
+    return f
+src_f, dst_f = home / "rr-src", home / "rr-dst"
+src_f.write_text("x"); os.replace = flaky(3)
+try:
+    ns["replace_retry"](src_f, dst_f)
+finally:
+    os.replace = real_replace
+check("replace_retry.win_retries", dst_f.read_text() == "x" and len(calls) == 4, len(calls))
+calls.clear(); src_f.write_text("y"); os.replace = flaky(99)
+try:
+    ns["replace_retry"](src_f, dst_f); check("replace_retry.win_gives_up", False, "no error")
+except PermissionError:
+    check("replace_retry.win_gives_up", len(calls) == 5, len(calls))
+finally:
+    os.replace = real_replace
+ns = load("linux"); calls.clear(); os.replace = flaky(99)
+try:
+    ns["replace_retry"](src_f, dst_f); check("replace_retry.linux_single_try", False, "no error")
+except PermissionError:
+    check("replace_retry.linux_single_try", len(calls) == 1, len(calls))
+finally:
+    os.replace = real_replace
+src_f.unlink(); dst_f.unlink()
 
 # ── parking with both clauderc files present: nothing is deleted unmerged ──
 ns = load("win32")
@@ -278,7 +380,10 @@ while IFS= read -r line; do
     [[ "$line" == *=* ]] || continue
     assert_eq "${line%%=*}" "ok" "${line#*=}"
 done <<< "$out"
-# The wrapper's model block (dok scripts/claude-wrapper.sh lines 934-945 and the model keyword case; trimmed copy). Its
+# TRIMMED COPY of the wrapper's model block: dok scripts/claude-wrapper.sh "Model Configuration" lines 934-945 (the
+# USING_FOUNDRY/USING_NATIVE if/else of `${VAR:-default}` exports) and the model keyword case at lines 964-972. The
+# [1m] suffix block (954-959) is left out because it is skipped when ANTHROPIC_BASE_URL is set. RE-CHECK THIS COPY
+# WHENEVER THE WRAPPER CHANGES (fetch the file, diff those line ranges, and update the default ids below). Its
 # ANTHROPIC_BASE_URL branch sets neither USING_NATIVE nor USING_FOUNDRY, so without the plain ids in clauderc the
 # Bedrock ids would be sent to api.anthropic.com.
 wrapper_model() {  # $1 = clauderc to source ("" = none), $2 = model word

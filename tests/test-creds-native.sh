@@ -29,7 +29,8 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES",
         "active_anthropic_key", "with_active_anthropic_key", "anthropic_key_file", "read_secret", "_one_line",
         "ANTHROPIC_ACTIVE_SETTING", "load_settings", "_parse_settings", "_decode_state", "SETTINGS_FILE",
-        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS", "KEY_AGENTS"}
+        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS", "KEY_AGENTS", "SANDBOX_MODEL_VARS", "ANTHROPIC_BASE",
+        "replace_retry"}
 
 def load(platform):
     ns = {"os": os, "re": re, "json": json, "shutil": shutil, "subprocess": subprocess, "time": time,
@@ -552,6 +553,18 @@ os.makedirs(home + "/.aws")
 open(home + "/.aws/config", "w").write("[profile bedrock]\nregion = x\n")
 out("exe.aws_only", f"{mx._creds_env()} {'maude' in sys.modules}")  # ~/.aws/config alone: nothing, maude.py not imported
 os.makedirs(home + "/.maude")
+open(home + "/.maude/anthropic-key", "w").write("sk-ant-x")
+open(home + "/.maude/settings.json", "w").write('{"anthropic_key_active": false}')
+out("exe.key_inactive", f"{mx._creds_env()} {'maude' in sys.modules}")  # key file but flag off: nothing, maude.py not imported
+open(home + "/.maude/settings.json", "w").write('{"anthropic_key_active": true}')
+sys.modules["maude"] = None  # make `import maude` fail
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    r = mx._creds_env()
+out("exe.key_active", f"{r}|{err.getvalue().strip()}")  # key active, no clauderc: maude.py IS loaded (the load fails here)
+del sys.modules["maude"]
+os.unlink(home + "/.maude/anthropic-key")
+out("exe.key_active_nofile", f"{mx._creds_env()} {'maude' in sys.modules}")  # flag on but no key file: nothing
 open(home + "/.maude/clauderc", "w").write("export AWS_X='1'\n")
 sys.modules["maude"] = None  # make `import maude` fail
 err = io.StringIO()
@@ -583,6 +596,9 @@ mkdir "$d/exehome"
 exe_res=$(env -i PATH="$PATH" python3 "$d/exe.py" "${SCRIPT_DIR}/../light" "$d/exehome" 2>&1) || { echo "$exe_res"; FAIL=$((FAIL+1)); echo "  FAIL: exe.py crashed"; }
 eval_val() { printf '%s\n' "$exe_res" | grep -m1 "^$1=" | cut -d= -f2-; }
 assert_eq "exe: ~/.aws/config alone loads nothing and never imports maude.py" "None False" "$(eval_val exe.aws_only)"
+assert_eq "exe: key file with the flag off loads nothing" "None False" "$(eval_val exe.key_inactive)"
+assert_contains "exe: an active Anthropic key alone makes the Explorer route load maude.py" "None|Maude: could not load the saved credentials" "$(eval_val exe.key_active)"
+assert_eq "exe: flag on but no key file loads nothing" "None False" "$(eval_val exe.key_active_nofile)"
 assert_contains "exe: a failed load prints one warning and starts without" "None|Maude: could not load the saved credentials" "$(eval_val exe.importfail)"
 assert_eq "exe: the TUI hook is used when set" "{'A': '1'}" "$(eval_val exe.hook)"
 assert_contains "exe: a failing hook warns too" "None|Maude: could not load the saved credentials (bad)" "$(eval_val exe.hookfail)"

@@ -87,6 +87,20 @@ def is_native() -> bool:
     return current_platform() != "linux-sandbox"
 
 
+def replace_retry(src, dst) -> None:
+    """os.replace that, on Windows only, retries a transient PermissionError (an antivirus or indexer holding the
+    file for a moment): 5 tries, 50 ms apart. Any other error, and the last PermissionError, propagate."""
+    tries = 5 if IS_WIN else 1
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.05)
+
+
 def feature_on(name: str) -> bool:
     return FEATURES[name][current_platform()]
 
@@ -907,7 +921,11 @@ def credentials_configured() -> bool:
     # clauderc (sandbox: ~/.azure/clauderc, Windows/macOS: ~/.maude/clauderc)
     rc = clauderc_path()
     if rc.exists() and rc.stat().st_size > 0:
-        return True
+        vals = read_clauderc(rc)
+        only_maude = bool(vals) and all(k in SANDBOX_MODEL_VARS or (k == "ANTHROPIC_BASE_URL" and v == ANTHROPIC_BASE)
+                                        for k, v in vals.items())
+        if not only_maude:  # model ids / Maude's base URL alone (an unchecked key left them) are no credentials
+            return True
     return bool(active_anthropic_key())  # Settings > Anthropic: the key is kept in ~/.maude/anthropic-key
 
 
@@ -1669,7 +1687,7 @@ def save_settings(d: dict) -> bool:
         maude_dir()
         try:
             if _parse_settings(SETTINGS_FILE.read_bytes()) is None:
-                os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".bak"))
+                replace_retry(SETTINGS_FILE, SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".bak"))
         except OSError:
             pass
         fd, tmp = tempfile.mkstemp(dir=str(STATE_DIR), prefix=".settings-", suffix=".tmp")  # created 0600
@@ -1677,7 +1695,7 @@ def save_settings(d: dict) -> bool:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(d, f, indent=2, sort_keys=True)
                 f.write("\n")
-            os.replace(tmp, SETTINGS_FILE)
+            replace_retry(tmp, SETTINGS_FILE)
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -1901,7 +1919,7 @@ def save_agent_model(agent: str, model: str) -> None:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(d, f, indent=2, sort_keys=True)
-            os.replace(tmp, AGENT_MODELS_FILE)
+            replace_retry(tmp, AGENT_MODELS_FILE)
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -3129,19 +3147,28 @@ def park_clauderc(park: bool) -> None:
     """Move clauderc to clauderc.inactive (park=True: Bedrock is the default) or back (park=False: Foundry is).
     When BOTH files exist (a save re-created the active one while the other was parked) nothing is ever deleted
     unmerged: the values of both are combined (the active file wins on a collision) into the destination and only
-    then the source is removed. An undecodable file makes it refuse (OSError)."""
+    then the source is removed. An undecodable file makes it refuse (OSError).
+    Sandbox, Anthropic key active: Maude's key block (see key_block_keys: the key, Maude's base URL and model ids)
+    is never parked; it stays in the active clauderc and only the rest moves."""
     active, inactive = clauderc_path(), clauderc_inactive_path()
     src, dst = (active, inactive) if park else (inactive, active)
     if not src.exists():
         return
-    if not dst.exists():
-        src.rename(dst)
+    a = _parse_rc_strict(src)
+    keep = {k: a[k] for k in key_block_keys(a)} if park else {}
+    if not keep:
+        if not dst.exists():
+            src.rename(dst)
+            return
+        b = _parse_rc_strict(dst)
+        write_clauderc({**b, **a} if park else {**a, **b}, dst)  # the active file's values win either way
+        src.unlink()
         return
-    a, b = _parse_rc_strict(src), _parse_rc_strict(dst)
-    merged = {**b, **a} if park else {**a, **b}  # the active file's values win either way
-    write_clauderc(merged, dst)
-    src.unlink()
-
+    rest = {k: v for k, v in a.items() if k not in keep}
+    if rest or dst.exists():
+        b = _parse_rc_strict(dst) if dst.exists() else {}
+        write_clauderc({**b, **rest}, dst)
+    write_clauderc(keep, src)  # the active file keeps only the key block
 
 def remove_clauderc_keys(keys) -> None:
     """Delete `keys` from clauderc_path() (other exports stay). A clauderc left empty is removed, so it no
@@ -3213,7 +3240,7 @@ def write_secret(path: Path, value: str) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(_one_line(value).encode("utf-8"))
-        os.replace(tmp, path)
+        replace_retry(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -3252,17 +3279,46 @@ def with_active_anthropic_key(env: dict, key: str, ambient) -> dict:
     return out
 
 
+ANTHROPIC_OWNED_SETTING = "anthropic_owned"  # settings.json (sandbox): what Maude wrote into clauderc, to remove only that
+PLAIN_MODEL_RE = re.compile(r"claude-[A-Za-z0-9._-]+(\[1m\])?")  # an id that api.anthropic.com understands
+
+
+def _owned(settings: dict) -> dict:
+    v = settings.get(ANTHROPIC_OWNED_SETTING)
+    return v if isinstance(v, dict) else {}
+
+
+def key_block_keys(rc: dict) -> set:
+    """Sandbox, "Use this API key" on: the clauderc variables that make up Maude's key block (the key, Maude's base
+    URL, the model ids it wrote and that still have its value). Never parked by park_clauderc. Else empty."""
+    if current_platform() != "linux-sandbox":
+        return set()
+    s = load_settings()
+    if s.get(ANTHROPIC_ACTIVE_SETTING) is not True:
+        return set()
+    owned = _owned(s)
+    ids = owned.get("ids") if isinstance(owned.get("ids"), dict) else {}
+    keys = {k for k in ("ANTHROPIC_API_KEY",) if k in rc}
+    if rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE:
+        keys.add("ANTHROPIC_BASE_URL")
+    keys |= {var for var, val in ids.items() if rc.get(var) == val}
+    return keys
+
+
 def apply_anthropic_key(new_key: str, active: bool) -> None:
     """Settings > Anthropic. Stores the key in ~/.maude/anthropic-key (0600) and sets the flag in settings.json.
     new_key "" = keep the key exported in clauderc, else the stored one. ValueError (message for the user) when
     activating with no/unsuitable key; OSError when a file cannot be written.
-    Windows/macOS: nothing goes into clauderc (plat_claude_env injects the key and wins over a login, Bedrock and
-    Foundry); a key found exported in clauderc is moved into the key file.
+    Windows/macOS: nothing is added to clauderc (plat_claude_env injects the key and wins over a login, Bedrock and
+    Foundry); a clauderc ANTHROPIC_API_KEY equal to the key is moved into the key file.
     Sandbox: the ~/bin/claude wrapper only reads clauderc. Its ANTHROPIC_BASE_URL branch (checked first, before the
     login, Foundry and Bedrock) passes a key starting with sk-ant- through unchanged and itself sets
     CLAUDE_CODE_USE_BEDROCK/FOUNDRY to 0, so active = `export ANTHROPIC_API_KEY` + `export ANTHROPIC_BASE_URL=
-    https://api.anthropic.com` plus the plain model ids (SANDBOX_MODEL_VARS) in clauderc; inactive removes only
-    what equals Maude's values. A custom ANTHROPIC_BASE_URL: refused (ValueError). CLAUDE_CODE_USE_* is never touched."""
+    https://api.anthropic.com` plus plain model ids (SANDBOX_MODEL_VARS) in clauderc. A model id the user set that is
+    a plain claude-* id stays; any other existing id is replaced and its old value kept in settings.json (restored on
+    uncheck); Maude's own earlier values are refreshed. What Maude wrote is recorded (ANTHROPIC_OWNED_SETTING) and
+    unchecking removes exactly that, never a key, URL or id Maude did not write. A custom ANTHROPIC_BASE_URL is
+    refused (ValueError). CLAUDE_CODE_USE_* is never touched."""
     sandbox = current_platform() == "linux-sandbox"
     rc = read_clauderc()
     key = _one_line(new_key) or rc.get("ANTHROPIC_API_KEY", "") or read_secret(anthropic_key_file())
@@ -3279,22 +3335,52 @@ def apply_anthropic_key(new_key: str, active: bool) -> None:
     write_secret(anthropic_key_file(), key)  # the key is parked first: never lost between the writes below
     settings = load_settings()
     settings[ANTHROPIC_ACTIVE_SETTING] = bool(active)
+    owned = _owned(settings)
+    old_ids = owned.get("ids") if isinstance(owned.get("ids"), dict) else {}
+    replaced = dict(owned.get("replaced")) if isinstance(owned.get("replaced"), dict) else {}
+    drop: list = []
+    vals: dict = {}
+    if sandbox and active:
+        vals = {"ANTHROPIC_API_KEY": key}
+        base_ours = bool(owned.get("base"))
+        if rc.get("ANTHROPIC_BASE_URL") != ANTHROPIC_BASE:
+            vals["ANTHROPIC_BASE_URL"] = ANTHROPIC_BASE
+            base_ours = True
+        written: dict = {}
+        for var, plain in SANDBOX_MODEL_VARS.items():
+            cur = rc.get(var)
+            if not cur or cur == old_ids.get(var):  # unset, or Maude's own earlier value: (re)write the current id
+                vals[var] = plain
+                written[var] = plain
+            elif PLAIN_MODEL_RE.fullmatch(cur):
+                continue  # the user's own plain claude-* id stays
+            else:  # an id api.anthropic.com does not know (global.anthropic.*, a deployment name): replace, remember
+                replaced.setdefault(var, cur)
+                vals[var] = plain
+                written[var] = plain
+        settings[ANTHROPIC_OWNED_SETTING] = {"key": True, "base": base_ours, "ids": written, "replaced": replaced}
+    else:
+        if rc.get("ANTHROPIC_API_KEY") == key or (sandbox and owned.get("key")):
+            drop.append("ANTHROPIC_API_KEY")  # the user's own different key is never removed
+        if sandbox:
+            if owned.get("base") and rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE:
+                drop.append("ANTHROPIC_BASE_URL")
+            for var, wv in old_ids.items():
+                if rc.get(var) == wv:
+                    drop.append(var)
+                    if var in replaced:
+                        vals[var] = replaced[var]
+            settings.pop(ANTHROPIC_OWNED_SETTING, None)
     if not save_settings(settings):
         raise OSError("could not write ~/.maude/settings.json")
     if sandbox and active:
-        vals = {"ANTHROPIC_API_KEY": key, "ANTHROPIC_BASE_URL": ANTHROPIC_BASE}
-        vals.update({k: v for k, v in SANDBOX_MODEL_VARS.items() if not rc.get(k)})  # the user's own ids stay
         merge_clauderc(vals)
     else:
-        drop = ["ANTHROPIC_API_KEY"]
-        if sandbox:  # remove only what Maude wrote: its base URL and its model ids
-            if rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE:
-                drop.append("ANTHROPIC_BASE_URL")
-            drop += [k for k, v in SANDBOX_MODEL_VARS.items() if rc.get(k) == v]
         remove_clauderc_keys(drop)
+        if vals:
+            merge_clauderc(vals)
     if os.environ.get("ANTHROPIC_API_KEY") == key:
         os.environ.pop("ANTHROPIC_API_KEY", None)
-
 
 # ── Settings > OpenCode: a custom OpenAI-compatible provider in ~/.config/opencode/opencode.json ───────
 # Format (opencode.ai/docs/providers "Custom provider", /docs/config): `provider.<id>.npm` =
@@ -3366,7 +3452,7 @@ def _opencode_store(path: Path, raw: bytes, obj: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(obj, f, indent=2)
             f.write("\n")
-        os.replace(tmp, path)
+        replace_retry(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

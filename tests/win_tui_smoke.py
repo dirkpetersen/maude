@@ -796,7 +796,8 @@ try:
     async def save_and_close(pilot, scr):
         scr.query_one("#btn-creds-save").press(); await pilot.pause()
         await wait_until(pilot, lambda: len(pilot.app.screen_stack) == 1)
-        assert len(pilot.app.screen_stack) == 1, pilot.app.screen_stack
+        assert len(pilot.app.screen_stack) == 1, (pilot.app.screen_stack, "mode=" + scr.mode, "status=" + str(scr.query_one("#creds-status").render()),
+                                                    "focus=" + str(scr.focused), "rc=" + (rc_file.read_text() if rc_file.exists() else "-"))
 
     async def check_settings_screen():
         disabled = lambda a: [str(b.label) for b in a.query_one("#agent-select").query(RadioButton) if b.disabled]
@@ -963,6 +964,54 @@ try:
     assert (oc_cfg.parent / "opencode.json.maude-bak").is_file()
     assert (home / ".maude" / "opencode-key").read_text() == "oc-secret" and maude.load_settings()["native_only_approved"] is True
     (home / ".maude" / "opencode-key").unlink(); (home / ".maude" / "anthropic-key").unlink()
+    # "Default to AWS Bedrock": only a flip of the box during this Save parks clauderc and switches the key off
+    inactive_file = home / ".maude" / "clauderc.inactive"
+    async def check_default_bedrock():
+        akey_file = home / ".maude" / "anthropic-key"
+        (home / ".aws").mkdir(exist_ok=True)
+        (home / ".aws" / "credentials").write_text("[bedrock]\naws_access_key_id = A\n")
+        maude.merge_clauderc({"ANTHROPIC_FOUNDRY_API_KEY": "fk", "CLAUDE_CODE_USE_FOUNDRY": "1"})
+        maude.write_secret(akey_file, "sk-ant-b1")
+        s = maude.load_settings(); s["anthropic_key_active"] = True; s["native_only_approved"] = True; maude.save_settings(s)
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:   # 1) box shown, not flipped: a plain Save keeps the key
+            scr = await open_settings(pilot)
+            cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+            await wait_until(pilot, lambda: cb.display and scr._default_bedrock_initial == cb.value)
+            assert cb.display and cb.value is False and scr._default_bedrock_initial is False, (cb.display, cb.value)
+            await save_and_close(pilot, scr)
+        assert maude.load_settings()["anthropic_key_active"] is True and rc_file.exists() and not inactive_file.exists()
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:   # 2) flipped to Bedrock: key off, clauderc parked, key kept
+            scr = await open_settings(pilot)
+            cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+            await wait_until(pilot, lambda: cb.display and scr._default_bedrock_initial == cb.value)
+            cb.value = True
+            await save_and_close(pilot, scr)
+        assert maude.load_settings()["anthropic_key_active"] is False and akey_file.read_text() == "sk-ant-b1"
+        assert inactive_file.exists() and not rc_file.exists() and maude.plat_claude_env().get("ANTHROPIC_API_KEY") != "sk-ant-b1"
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:   # 3) shown as Bedrock; activate the key (box untouched)
+            scr = await open_settings(pilot)
+            cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+            await wait_until(pilot, lambda: cb.display and scr._default_bedrock_initial == cb.value)
+            assert cb.display and cb.value is True and scr._default_bedrock_initial is True, (cb.display, cb.value)
+            await press_mode(pilot, scr, "anthropic")
+            scr.query_one("#creds-anthropic-use", Checkbox).value = True
+            await save_and_close(pilot, scr)
+        assert maude.load_settings()["anthropic_key_active"] is True and inactive_file.exists()
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:   # 4) a Paste Save with the box still unflipped keeps the key
+            scr = await open_settings(pilot)
+            cb4 = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+            await wait_until(pilot, lambda: cb4.display and cb4.value is True and scr._default_bedrock_initial is True)
+            await save_and_close(pilot, scr)
+        assert maude.load_settings()["anthropic_key_active"] is True and inactive_file.exists() and not rc_file.exists()
+    saved_env = dict(os.environ)
+    try:
+        asyncio.run(check_default_bedrock())
+    finally:
+        os.environ.clear(); os.environ.update(saved_env)
+        for f in (home / ".aws" / "credentials", rc_file, inactive_file, home / ".maude" / "anthropic-key"):
+            if f.exists():
+                f.unlink()
+        s = maude.load_settings(); s.pop("anthropic_key_active", None); maude.save_settings(s)
     # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
     # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
     old_pt, old_auth = maude.plat_tool, maude.gh_is_authed

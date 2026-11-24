@@ -29,7 +29,7 @@ WANT = {
     "load_models_config", "agent_models", "resolve_model", "maybe_update_models", "load_settings", "save_settings",
     "agent_allowed", "restrict_agent", "read_agent_models", "save_agent_model", "maude_dir",
     "_decode_state", "_migrate_state", "_read_state", "_write_state", "read_model_effort", "_save_model_effort",
-    "read_model", "read_effort", "save_model", "save_effort",
+    "read_model", "read_effort", "save_model", "save_effort", "replace_retry",
 }
 src = open(sys.argv[1], encoding="utf-8").read()
 ns = {"os": os, "re": re, "json": json, "time": time, "tempfile": tempfile, "shutil": shutil,
