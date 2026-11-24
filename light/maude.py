@@ -68,7 +68,7 @@ FEATURES = {
     "web":       {"linux-sandbox": True, "windows": False, "macos": False},
     "togithub":  {"linux-sandbox": True, "windows": True,  "macos": True},
     "github":    {"linux-sandbox": True, "windows": True,  "macos": True},   # Setup Git(hub)
-    "creds":     {"linux-sandbox": True, "windows": True,  "macos": True},   # Set Creds -> ~/.maude/clauderc
+    "creds":     {"linux-sandbox": True, "windows": True,  "macos": True},   # Settings -> ~/.maude/clauderc
     "update":    {"linux-sandbox": True, "windows": True,  "macos": True},
     "autostart": {"linux-sandbox": True, "windows": False, "macos": False},
 }
@@ -425,6 +425,8 @@ def clauderc_inactive_path() -> Path:
 
 _BEDROCK_PROFILE_RE = re.compile(r"^\[(profile\s+)?bedrock\]", re.MULTILINE)
 _DUMMY_API_KEY = "sk-ant-dummy"
+# The OpenCode custom-provider key (Settings > OpenCode). A Maude-specific name: OPENCODE_API_KEY belongs to OpenCode Zen.
+OPENCODE_API_ENV = "MAUDE_OPENCODE_API_KEY"
 
 
 def claude_env_from(rc: dict, environ, logged_in: bool, aws_config: str, parked_bedrock: bool = False) -> dict:
@@ -436,7 +438,7 @@ def claude_env_from(rc: dict, environ, logged_in: bool, aws_config: str, parked_
     native login, Foundry, Bedrock). Applies ONLY to a Maude-saved state: with no clauderc (and nothing
     parked) the result is {} and the child inherits the environment unchanged; ambient files alone
     (~/.aws/config, a login whose Keychain token cannot be read) never select a backend. Bedrock counts
-    only when the user saved it through Set Creds (CLAUDE_CODE_USE_BEDROCK=1 in the clauderc, or parked).
+    only when the user saved it through Settings (CLAUDE_CODE_USE_BEDROCK=1 in the clauderc, or parked).
     A value of None means "remove this variable". Model ids are not set: the wrapper pins ids that
     change with every release, Claude Code's own defaults apply."""
     if not rc and not parked_bedrock:
@@ -515,8 +517,12 @@ def plat_claude_env() -> dict:
 
 def plat_tool_env() -> dict:
     """Extra environment for the non-Claude tools (Kiro, OpenCode, Crush): the raw clauderc exports
-    only, no wrapper rewrites (no dummy key, no login stripping)."""
-    return {} if current_platform() == "linux-sandbox" else read_clauderc()
+    only, no wrapper rewrites (no dummy key, no login stripping). Sandbox: nothing, except the OpenCode
+    custom-provider key (the opencode.json written by Settings refers to it as {env:MAUDE_OPENCODE_API_KEY})."""
+    rc = read_clauderc()
+    if current_platform() == "linux-sandbox":
+        return {OPENCODE_API_ENV: rc[OPENCODE_API_ENV]} if rc.get(OPENCODE_API_ENV) else {}
+    return rc
 
 
 def find_powershell() -> str:
@@ -895,7 +901,8 @@ def credentials_configured() -> bool:
     # clauderc (sandbox: ~/.azure/clauderc, Windows/macOS: ~/.maude/clauderc)
     rc = clauderc_path()
     if rc.exists() and rc.stat().st_size > 0:
-        return True
+        # A file holding only the OpenCode key (Settings > OpenCode) is no Claude credential.
+        return set(read_clauderc(rc)) != {OPENCODE_API_ENV}
     return False
 
 
@@ -3105,6 +3112,168 @@ def merge_clauderc(values: dict[str, str]) -> None:
     existing.update(values)
     write_clauderc(existing)
 
+
+def remove_clauderc_keys(keys) -> None:
+    """Delete `keys` from clauderc_path() (other exports stay). A clauderc left empty is removed, so it no
+    longer counts as configured credentials. An undecodable file is left untouched (OSError)."""
+    path = clauderc_path()
+    if not path.exists():
+        return
+    try:
+        existing = parse_clauderc(_decode_text_strict(path.read_bytes()))
+    except ValueError:
+        raise OSError(f"{path} is not valid UTF-8/UTF-16 text; it was left untouched") from None
+    if not any(k in existing for k in keys):
+        return
+    for k in keys:
+        existing.pop(k, None)
+    if existing:
+        write_clauderc(existing)
+    else:
+        path.unlink()
+
+
+# ── Settings > Anthropic: the API key can be kept without being exported ────────
+# Active   = `export ANTHROPIC_API_KEY=...` in clauderc (the ~/bin/claude wrapper and plat_claude_env use it).
+# Inactive = the key lives only in ~/.maude/settings.json (mode 0600) and is NOT in clauderc, so a Claude login
+#            or Bedrock/Foundry wins. Settings.json survives every clauderc rewrite (merge_clauderc, parking).
+ANTHROPIC_KEY_SETTING = "anthropic_api_key"
+ANTHROPIC_DISPLACED_SETTING = "anthropic_displaced"  # Bedrock/Foundry flags switched off while the key was active
+_CLOUD_FLAGS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY")
+
+
+def stored_anthropic_key(settings: dict | None = None) -> str:
+    v = (load_settings() if settings is None else settings).get(ANTHROPIC_KEY_SETTING, "")
+    return v if isinstance(v, str) else ""
+
+
+def apply_anthropic_key(new_key: str, active: bool) -> None:
+    """Make the Anthropic API key active (exported from clauderc) or inactive (kept in settings.json only).
+    new_key "" = keep the stored/exported one. ValueError (message for the user) when activating with no key;
+    OSError when a file cannot be written. Activating also switches Bedrock/Foundry off in clauderc (they would
+    otherwise win over a plain key) and remembers which, so deactivating switches them back on."""
+    rc = read_clauderc()
+    key = new_key.strip() or rc.get("ANTHROPIC_API_KEY", "") or stored_anthropic_key()
+    if not key:
+        if active:
+            raise ValueError("Enter an ANTHROPIC_API_KEY first.")
+        return
+    settings = load_settings()
+    displaced = [k for k in settings.get(ANTHROPIC_DISPLACED_SETTING, []) if k in _CLOUD_FLAGS] \
+        if isinstance(settings.get(ANTHROPIC_DISPLACED_SETTING), list) else []
+    changed = settings.get(ANTHROPIC_KEY_SETTING) != key
+    settings[ANTHROPIC_KEY_SETTING] = key  # the key is parked first: it is never lost between the two writes
+    if active:
+        vals = {"ANTHROPIC_API_KEY": key}
+        for k in _CLOUD_FLAGS:
+            if rc.get(k) == "1":
+                vals[k] = "0"
+                if k not in displaced:
+                    displaced.append(k)
+        settings[ANTHROPIC_DISPLACED_SETTING] = displaced
+        if not save_settings(settings):
+            raise OSError("could not write ~/.maude/settings.json")
+        merge_clauderc(vals)
+        os.environ["ANTHROPIC_API_KEY"] = key
+        for k in _CLOUD_FLAGS:
+            if vals.get(k) == "0":
+                os.environ.pop(k, None)
+    else:
+        vals = {k: "1" for k in displaced if rc.get(k) == "0"}
+        settings[ANTHROPIC_DISPLACED_SETTING] = []
+        if (changed or displaced) and not save_settings(settings):
+            raise OSError("could not write ~/.maude/settings.json")
+        remove_clauderc_keys(["ANTHROPIC_API_KEY"])
+        if vals:
+            merge_clauderc(vals)
+        if os.environ.get("ANTHROPIC_API_KEY") == key:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+# ── Settings > OpenCode: a custom OpenAI-compatible provider in ~/.config/opencode/opencode.json ───────
+# Format (opencode.ai/docs/providers "Custom provider", /docs/config): `provider.<id>.npm` =
+# "@ai-sdk/openai-compatible", `options.baseURL`, `options.apiKey` ("{env:VAR}" is expanded by OpenCode),
+# `models.<model-id>`; the top-level `model` ("<provider>/<model>") is what `opencode` starts on when no --model
+# is given, i.e. the picker's Model: auto.
+OPENCODE_PROVIDER = "maude-custom"
+OPENCODE_NPM = "@ai-sdk/openai-compatible"
+
+
+def opencode_config_path() -> Path:
+    return Path.home() / ".config" / "opencode" / "opencode.json"
+
+
+def read_opencode_custom() -> tuple[str, str]:
+    """(base URL, model id) of the maude-custom provider in the user's opencode.json, "" when absent or unreadable."""
+    try:
+        obj = json.loads(_decode_text_strict(opencode_config_path().read_bytes()))
+    except (OSError, ValueError):
+        return "", ""
+    if not isinstance(obj, dict):
+        return "", ""
+    prov = obj.get("provider")
+    entry = prov.get(OPENCODE_PROVIDER) if isinstance(prov, dict) else None
+    opts = entry.get("options") if isinstance(entry, dict) else None
+    url = opts.get("baseURL") if isinstance(opts, dict) else ""
+    model = obj.get("model")
+    pre = OPENCODE_PROVIDER + "/"
+    return (url if isinstance(url, str) else ""), (model[len(pre):] if isinstance(model, str) and model.startswith(pre) else "")
+
+
+def merge_opencode_config(url: str, model: str, with_key: bool) -> None:
+    """Add/refresh the maude-custom provider in opencode.json without touching anything else (other providers,
+    other keys). A one-time `.maude-bak` copy (0600) is taken before the first change. File with comments or
+    that is not a JSON object: OSError, left untouched. The key is never written here, only the reference
+    {env:MAUDE_OPENCODE_API_KEY} (with_key). Drops the `//` "managed by maude" marker: from now on the file is the
+    user's and `maude update` no longer regenerates it. Sets the top-level `model`."""
+    path = opencode_config_path()
+    obj: dict = {}
+    raw = b""
+    if path.exists():
+        raw = path.read_bytes()
+        try:
+            obj = json.loads(_decode_text_strict(raw))
+        except ValueError:
+            raise OSError(f"{path} is not plain JSON (comments?); it was left untouched") from None
+        if not isinstance(obj, dict):
+            raise OSError(f"{path} is not a JSON object; it was left untouched")
+    obj.setdefault("$schema", "https://opencode.ai/config.json")
+    if isinstance(obj.get("//"), str) and "managed by maude" in obj["//"]:
+        del obj["//"]
+    prov = obj.get("provider") if isinstance(obj.get("provider"), dict) else {}
+    entry = prov.get(OPENCODE_PROVIDER) if isinstance(prov.get(OPENCODE_PROVIDER), dict) else {}
+    opts = entry.get("options") if isinstance(entry.get("options"), dict) else {}
+    opts["baseURL"] = url
+    if with_key:
+        opts["apiKey"] = "{env:" + OPENCODE_API_ENV + "}"
+    models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+    models.setdefault(model, {"name": model})
+    entry.update({"npm": OPENCODE_NPM, "name": "Custom (Maude)", "options": opts, "models": models})
+    prov[OPENCODE_PROVIDER] = entry
+    obj["provider"] = prov
+    obj["model"] = f"{OPENCODE_PROVIDER}/{model}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bak = path.with_name(path.name + ".maude-bak")
+    if raw and not bak.exists():
+        shutil.copy2(path, bak)
+        try:
+            bak.chmod(0o600)
+        except OSError:
+            pass
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".opencode-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def merge_gemini_env(values: dict[str, str], remove=None) -> None:
     """Merge `values` into ~/.gemini/.env (dotenv format), the file the
     Gemini CLI auto-loads. Preserves existing keys; `values` win on collision.
@@ -3317,17 +3486,20 @@ def have_foundry_creds() -> bool:
 
 
 class CredsEntryScreen(ModalScreen[bool]):
-    """Modal for setting LLM credentials.
+    """The Settings modal (button "Settings", formerly "Set Creds"; also the credential gate).
 
-    Three input modes selectable via tabs at the top:
+    Above the mode buttons (outside the sandbox only): the checkbox "Only allow Kiro.dev and Github Copilot
+    outside the Sandbox" (settings.json native_only_approved; Save persists it and calls
+    app.apply_agent_restrictions()). Five input modes selectable via tabs:
       • Paste exports — original `export FOO=bar` paste flow
+      • Anthropic    — "Claude Login" button (suspends the TUI and runs the unwrapped
+        ~/.local/bin/claude /login for native claude.ai OAuth; dismisses the modal as saved when a valid
+        token lands in ~/.claude/.credentials.json), the ANTHROPIC_API_KEY field and the checkbox
+        "Use this API key" (checked = exported from clauderc; unchecked = kept in settings.json only)
       • AWS Bedrock  — three named fields (access key / secret / region)
       • Azure Foundry — base URL + API key
-    Plus a fourth tab-row button that is an action, not a mode:
-      • Claude Login — suspends the TUI and runs the unwrapped
-        ~/.local/bin/claude /login for native claude.ai OAuth; dismisses
-        the modal as saved when a valid token lands in
-        ~/.claude/.credentials.json.
+      • OpenCode     — model URL, model name, api_key of an OpenAI-compatible endpoint
+        (apply merge_opencode_config)
     All modes save to clauderc_path() (merged; ~/.azure/clauderc in the
     sandbox, ~/.maude/clauderc on Windows/macOS) so existing creds
     survive across modes; AWS Bedrock additionally writes
@@ -3344,6 +3516,8 @@ class CredsEntryScreen(ModalScreen[bool]):
     MODE_PASTE   = "paste"
     MODE_BEDROCK = "bedrock"
     MODE_FOUNDRY = "foundry"
+    MODE_ANTHROPIC = "anthropic"
+    MODE_OPENCODE = "opencode"
 
     def __init__(self) -> None:
         super().__init__()
@@ -3354,15 +3528,21 @@ class CredsEntryScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container(id="creds-box"):
-            yield Label("Set LLM Credentials", id="creds-title")
+            yield Label("Settings", id="creds-title")
+            if is_native():  # no meaning in the sandbox
+                yield Checkbox("Only allow Kiro.dev and Github Copilot outside the Sandbox",
+                               id="creds-native-only",
+                               value=bool(load_settings().get("native_only_approved", True)))
             with Horizontal(id="creds-tabs"):
                 yield Button("Paste exports", id="btn-creds-mode-paste",
                              variant="primary")
+                yield Button("Anthropic",     id="btn-creds-mode-anthropic",
+                             variant="default")
                 yield Button("AWS Bedrock",   id="btn-creds-mode-bedrock",
                              variant="default")
                 yield Button("Azure Foundry", id="btn-creds-mode-foundry",
                              variant="default")
-                yield Button("Claude Login", id="btn-creds-login",
+                yield Button("OpenCode",      id="btn-creds-mode-opencode",
                              variant="default")
             with Container(id="creds-body"):
                 yield from self._compose_body()
@@ -3401,6 +3581,14 @@ class CredsEntryScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#btn-creds-mode-foundry")
     def mode_foundry(self) -> None:
         self._switch_mode(self.MODE_FOUNDRY)
+
+    @on(Button.Pressed, "#btn-creds-mode-anthropic")
+    def mode_anthropic(self) -> None:
+        self._switch_mode(self.MODE_ANTHROPIC)
+
+    @on(Button.Pressed, "#btn-creds-mode-opencode")
+    def mode_opencode(self) -> None:
+        self._switch_mode(self.MODE_OPENCODE)
 
     @on(Button.Pressed, "#btn-creds-login")
     def claude_login(self) -> None:
@@ -3469,17 +3657,21 @@ class CredsEntryScreen(ModalScreen[bool]):
 
     def _apply_mode(self, mode: str) -> None:
         for btn_id, btn_mode in (
-            ("#btn-creds-mode-paste",   self.MODE_PASTE),
-            ("#btn-creds-mode-bedrock", self.MODE_BEDROCK),
-            ("#btn-creds-mode-foundry", self.MODE_FOUNDRY),
+            ("#btn-creds-mode-paste",     self.MODE_PASTE),
+            ("#btn-creds-mode-anthropic", self.MODE_ANTHROPIC),
+            ("#btn-creds-mode-bedrock",   self.MODE_BEDROCK),
+            ("#btn-creds-mode-foundry",   self.MODE_FOUNDRY),
+            ("#btn-creds-mode-opencode",  self.MODE_OPENCODE),
         ):
             self.query_one(btn_id, Button).variant = "primary" if mode == btn_mode else "default"
         for pane_mode, pane_id in self._PANES.items():
             self.query_one(pane_id).display = (pane_mode == mode)
         self._focus_later(self._FOCUS[mode])
 
-    _PANES = {"paste": "#creds-pane-paste", "bedrock": "#creds-pane-bedrock", "foundry": "#creds-pane-foundry"}
-    _FOCUS = {"paste": "#creds-text", "bedrock": "#creds-aws-key", "foundry": "#creds-foundry-url"}
+    _PANES = {"paste": "#creds-pane-paste", "anthropic": "#creds-pane-anthropic", "bedrock": "#creds-pane-bedrock",
+              "foundry": "#creds-pane-foundry", "opencode": "#creds-pane-opencode"}
+    _FOCUS = {"paste": "#creds-text", "anthropic": "#creds-anthropic-key", "bedrock": "#creds-aws-key",
+              "foundry": "#creds-foundry-url", "opencode": "#creds-oc-url"}
 
     def _focus_later(self, selector: str) -> None:
         def go() -> None:
@@ -3502,6 +3694,17 @@ class CredsEntryScreen(ModalScreen[bool]):
                 "Saved to ~/.gemini/.env."
             )
             yield TextArea("", id="creds-text", language=None, show_line_numbers=False)
+        with Vertical(id="creds-pane-anthropic", classes="creds-pane"):
+            yield Button("Claude Login", id="btn-creds-login", variant="default")
+            yield Label("Claude subscription: sign in with your claude.ai account (no API key).")
+            yield Label("ANTHROPIC_API_KEY:")
+            has_key = bool(stored_anthropic_key() or read_clauderc().get("ANTHROPIC_API_KEY"))
+            yield Input(placeholder="saved (leave empty to keep it)" if has_key else "sk-ant-...",
+                        id="creds-anthropic-key", password=True)
+            yield Checkbox("Use this API key", id="creds-anthropic-use",
+                           value=bool(read_clauderc().get("ANTHROPIC_API_KEY")))
+            yield Label("Checked: the key is exported. Unchecked: it is kept but not used, so a Claude "
+                        "login or Bedrock/Foundry wins.")
         with Vertical(id="creds-pane-bedrock", classes="creds-pane"):
             yield Label("AWS Bedrock — region defaults to us-west-2.")
             yield Label("AWS_ACCESS_KEY_ID:")
@@ -3517,6 +3720,16 @@ class CredsEntryScreen(ModalScreen[bool]):
                         id="creds-foundry-url")
             yield Label("ANTHROPIC_FOUNDRY_API_KEY:")
             yield Input(placeholder="api key", id="creds-foundry-key", password=True)
+        with Vertical(id="creds-pane-opencode", classes="creds-pane"):
+            oc_url, oc_model = read_opencode_custom()
+            yield Label("OpenCode: any OpenAI-compatible endpoint. OpenCode's model 'auto' then uses it.")
+            yield Label("OpenCode model URL:")
+            yield Input(value=oc_url, placeholder="https://host/v1", id="creds-oc-url")
+            yield Label("Model name (as the endpoint calls it):")
+            yield Input(value=oc_model, placeholder="e.g. qwen3-coder", id="creds-oc-model")
+            yield Label("api_key (empty keeps the saved one; stored in clauderc as " + OPENCODE_API_ENV + "):")
+            yield Input(placeholder="api key", id="creds-oc-key", password=True)
+
     def _update_default_checkbox(self) -> None:
         """Show the Bedrock-vs-Foundry default toggle only when both
         credential families are present on disk (active or parked)."""
@@ -3543,19 +3756,69 @@ class CredsEntryScreen(ModalScreen[bool]):
         try:
             if self.mode == self.MODE_PASTE:
                 self._save_paste()
+            elif self.mode == self.MODE_ANTHROPIC:
+                self._save_anthropic()
             elif self.mode == self.MODE_BEDROCK:
                 self._save_bedrock()
+            elif self.mode == self.MODE_OPENCODE:
+                self._save_opencode()
             else:
                 self._save_foundry()
+            self._save_native_only()
         except _CredsValidation:
             # The handler already populated the status label.
             return
         except OSError as err:
             self._set_status(f"[bold red]Could not save: {err}[/]")
             return
-        # Apply the routing checkbox if it's visible.
-        self._apply_default_provider()
+        # Apply the routing checkbox if it's visible (it concerns Bedrock vs Foundry only; the Anthropic key
+        # and OpenCode panes have their own routing).
+        if self.mode not in (self.MODE_ANTHROPIC, self.MODE_OPENCODE):
+            self._apply_default_provider()
         self.dismiss(True)
+
+    def _save_native_only(self) -> None:
+        """Persist "Only allow Kiro.dev and Github Copilot outside the Sandbox" (outside the sandbox only) and
+        re-grey the Agent column. Runs after the active pane saved, so a failed validation saves nothing."""
+        try:
+            cb = self.query_one("#creds-native-only", Checkbox)
+        except NoMatches:
+            return
+        s = load_settings()
+        s["native_only_approved"] = bool(cb.value)
+        if not save_settings(s):
+            raise OSError("could not write ~/.maude/settings.json")
+        apply = getattr(self.app, "apply_agent_restrictions", None)
+        if callable(apply):
+            apply()
+
+    def _save_anthropic(self) -> None:
+        key = self.query_one("#creds-anthropic-key", Input).value.strip()
+        use = self.query_one("#creds-anthropic-use", Checkbox).value
+        try:
+            apply_anthropic_key(key, use)
+        except ValueError as err:
+            self._set_status(f"[bold red]{err}[/]")
+            raise _CredsValidation() from None
+
+    def _save_opencode(self) -> None:
+        url = self.query_one("#creds-oc-url", Input).value.strip()
+        model = self.query_one("#creds-oc-model", Input).value.strip()
+        key = self.query_one("#creds-oc-key", Input).value.strip()
+        if not url and not model and not key:
+            return  # nothing entered: only the checkbox above may have changed
+        if not re.fullmatch(r"https?://[^\s\"'\\]+", url):
+            self._set_status("[bold red]OpenCode model URL must start with http:// or https:// (no spaces).[/]")
+            raise _CredsValidation()
+        if not MODEL_ID_RE.fullmatch(model):
+            self._set_status("[bold red]OpenCode needs the model name the endpoint expects "
+                             "(letters, digits and . _ : / @ + # -).[/]")
+            raise _CredsValidation()
+        # The key goes to clauderc (OpenCode reads it as {env:...}); a key left empty keeps the saved one.
+        if key:
+            merge_clauderc({OPENCODE_API_ENV: key})
+            os.environ[OPENCODE_API_ENV] = key
+        merge_opencode_config(url, model, with_key=bool(key) or bool(read_clauderc().get(OPENCODE_API_ENV)))
 
     def _save_paste(self) -> None:
         text = self.query_one("#creds-text", TextArea).text
@@ -5483,7 +5746,8 @@ class MaudeApp(App):
     #creds-box {
         padding: 2 3;
         width: 90;
-        height: 38;
+        height: 42;
+        max-height: 100%;
         border: heavy #b87878;
         background: #242424;
     }
@@ -5513,8 +5777,16 @@ class MaudeApp(App):
         height: auto;
     }
 
-    #creds-pane-bedrock, #creds-pane-foundry {
+    #creds-pane-anthropic, #creds-pane-bedrock, #creds-pane-foundry, #creds-pane-opencode {
         display: none;  /* paste is the initial mode; _switch_mode toggles these */
+    }
+
+    #creds-native-only {
+        margin-bottom: 1;
+    }
+
+    #creds-pane-anthropic #btn-creds-login {
+        margin-bottom: 1;
     }
 
     #creds-body Label {
@@ -5848,7 +6120,7 @@ class MaudeApp(App):
             yield Button("Web UI",          id="btn-web")
             yield Button("To Github",       id="btn-togithub")
             yield Button("Setup Git(hub)",  id="btn-github")
-            yield Button("Set Creds",       id="btn-creds")
+            yield Button("Settings",        id="btn-creds")
             yield Button("Update Maude",   id="btn-update")
             yield Button("PowerShell" if IS_WIN else "Command Line", id="btn-cli")
         yield Footer()

@@ -260,7 +260,7 @@ load_lib refresh-md.sh   || true   # refresh_claude_md falls through if not load
 load_lib update-skills.sh || true
 load_lib kanna.sh || true
 
-# Pin rationale: 8.2.3 crashes the Set Creds modal as it opens with
+# Pin rationale: 8.2.3 crashes the Settings modal as it opens with
 # KeyError 'text-area--gutter' (textual#6528); >=8.2.4 fixes that. Rapid clicks
 # on the mode buttons could still trigger it (or NoMatches) on later 8.x until
 # CredsEntryScreen kept its three mode panes always mounted (toggled by
@@ -1029,7 +1029,7 @@ launch_web() {
         echo "  ~/.aws/credentials             AWS Bedrock" >&2
         echo "  ~/.azure/clauderc              Azure / Foundry exports" >&2
         echo "" >&2
-        echo "Tip: launch the TUI ('maude tui') and use 'Set Credentials'." >&2
+        echo "Tip: launch the TUI ('maude tui') and use 'Settings'." >&2
         echo "" >&2
         exit 1
     fi

@@ -37,7 +37,7 @@ gemini --skip-trust -m gemini-pro-latest -p "reply with the single word: ok" -o 
 ```
 
 If the probe prints `NO CREDS` (the env file truly has no key), STOP and tell the user to
-add one via the Maude TUI: **Set Creds → Paste exports** with
+add one via the Maude TUI: **Settings → Paste exports** with
 `GEMINI_API_KEY=<key from aistudio.google.com/apikey>`. If a key IS present but the call
 still errors, report the actual error — do NOT retry blindly on a broken auth.
 
@@ -172,7 +172,7 @@ in Claude Code's non-interactive Bash shells you must source it yourself (see
 - `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` — Vertex AI (needs OAuth/service account; **plain API keys don't work on Vertex**)
 - `GOOGLE_GENAI_USE_GCA=true` — OAuth / Code Assist
 
-Set these via **Maude TUI → Set Creds → Paste exports**. Pasting a bare `GEMINI_API_KEY` or `GOOGLE_API_KEY` is all you need for AI Studio.
+Set these via **Maude TUI → Settings → Paste exports**. Pasting a bare `GEMINI_API_KEY` or `GOOGLE_API_KEY` is all you need for AI Studio.
 
 ## Validation
 

@@ -222,13 +222,13 @@ assert_eq "linux flags"    "False,False,True,False" "$(get lin.flags)"
 assert_eq "not frozen when run as a script" "False" "$(get lin.frozen)"
 
 # ── feature map ────────────────────────────────────────────────────────
-all_hidden="#autostart,#btn-web"  # Set Creds, Update Maude, To Github, Setup Git(hub) are on
+all_hidden="#autostart,#btn-web"  # Settings, Update Maude, To Github, Setup Git(hub) are on
 assert_eq "feature names" "autostart,creds,github,togithub,update,web" "$(get features.names)"
 assert_eq "every feature has all three platforms" "True" "$(get features.shape)"
 assert_eq "every feature has a widget"            "True" "$(get features.widgets)"
 assert_eq "linux: nothing hidden"                 ""     "$(get lin.hidden)"
 assert_eq "linux: all features on"                "True" "$(get linux.all.on)"
-assert_eq "windows hides the buttons not ported yet (Set Creds, To Github, Setup Git(hub) are on)" "$all_hidden" "$(get win.hidden)"
+assert_eq "windows hides the buttons not ported yet (Settings, To Github, Setup Git(hub) are on)" "$all_hidden" "$(get win.hidden)"
 assert_eq "macOS hides the same buttons as Windows" "$(get win.hidden)" "$(get mac.hidden)"
 assert_eq "web and autostart off on Windows and macOS" "True" "$(get web.autostart.off)"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-creds-native.sh - Set Creds on Windows/macOS (light/maude.py): one clauderc path per
+# tests/test-creds-native.sh - Settings on Windows/macOS (light/maude.py): one clauderc path per
 # platform, plat_claude_env parsing (+ .inactive), the credential gate matrix, Linux unchanged.
 # Pulls only the needed names out of maude.py (no textual needed). Uses temp HOMEs only.
 set -o errexit -o nounset -o pipefail
@@ -26,7 +26,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "creds_gate_decision", "creds_gate_blocks", "AWS_CREDS_PATH", "AWS_CONFIG_PATH", "FEATURES",
         "hidden_widgets", "feature_on", "FEATURE_WIDGETS", "_unquote_rc_value", "_sh_quote", "_write_private",
         "_decode_text_strict", "plat_tool_env", "creds_gate_precheck", "_LOGIN_OK", "_INI_HEADER_RE",
-        "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES"}
+        "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES", "OPENCODE_API_ENV"}
 
 def load(platform):
     ns = {"os": os, "re": re, "json": json, "shutil": shutil, "subprocess": subprocess, "time": time,
@@ -110,7 +110,7 @@ for plat, tag in (("darwin", "mac"), ("win32", "win")):
     rc.rename(inactive)
     out(f"{tag}.env.parked", ns["plat_claude_env"]())
     out(f"{tag}.env.parked.aws.noflag", ns["plat_claude_env"]())
-    # Bedrock saved via Set Creds (flag in the clauderc) and parked as the default -> Bedrock
+    # Bedrock saved via Settings (flag in the clauderc) and parked as the default -> Bedrock
     inactive.write_text('export CLAUDE_CODE_USE_BEDROCK="1"\nexport ANTHROPIC_FOUNDRY_API_KEY="fk"\n')
     (home / ".aws" / "config").unlink()
     out(f"{tag}.env.parked.noprofile", ns["plat_claude_env"]())
@@ -475,7 +475,7 @@ assert_eq "status: no loggedIn key -> None" "None" "$(val status.nokey)"
 assert_eq "status: missing binary -> None" "None" "$(val status.missing)"
 assert_eq "status: timeout -> None" "None" "$(val status.timeout)"
 
-# hidden widgets: Set Creds, Update Maude, To Github and Setup Git(hub) are on everywhere now
+# hidden widgets: Settings, Update Maude, To Github and Setup Git(hub) are on everywhere now
 assert_eq "win hidden set" "#autostart,#btn-web" "$(val win.hidden)"
 assert_eq "mac hidden set" "#autostart,#btn-web" "$(val mac.hidden)"
 assert_eq "linux hides nothing" "" "$(val lin.hidden)"

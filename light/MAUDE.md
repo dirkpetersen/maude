@@ -38,4 +38,4 @@ no adequate version is available via mom.
 
 You may use the `gemini` CLI (via the `gemini` skill) for a second opinion or
 large-context analysis, but only after a probe confirms its credentials actually
-work — if the probe fails, tell the user to add a key via Set Creds rather than retrying.
+work — if the probe fails, tell the user to add a key via Settings rather than retrying.

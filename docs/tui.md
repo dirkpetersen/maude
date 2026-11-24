@@ -71,7 +71,7 @@ In `maude.exe` (Windows) and on macOS, the setting `native_only_approved` in `~/
 | + New | Creates a project. Spaces become hyphens. Git is set up for you. |
 | Web UI | Starts or stops the [kanna](https://github.com/jakemor/kanna) web UI at `http://127.0.0.1:3210`. |
 | Setup Git | A 4-step wizard. See below. Also available as `maude github`. |
-| Set Credentials | Opens a window where you paste `export` lines for Anthropic, Foundry, AWS or Azure. Maude saves them to `~/.azure/clauderc` (mode 0600). |
+| Settings | Opens the Settings window (formerly "Set Creds"). Outside the sandbox it starts with the checkbox "Only allow Kiro.dev and Github Copilot outside the Sandbox" (on by default; Save applies it at once). Five tabs: **Paste exports** (paste `export` lines for Anthropic, Foundry, AWS or Azure), **Anthropic** (Claude Login button, an `ANTHROPIC_API_KEY` field and "Use this API key": checked = the key is used, unchecked = it is kept but not used), **AWS Bedrock**, **Azure Foundry** and **OpenCode** (model URL, model name and api_key of an OpenAI-compatible endpoint; OpenCode with Model `auto` then uses it). Credentials are saved to `~/.azure/clauderc` (mode 0600); the OpenCode endpoint goes to `~/.config/opencode/opencode.json`, other settings to `~/.maude/settings.json`. |
 | Command Line | Closes the TUI and returns to the shell. |
 
 ## Keys
@@ -85,7 +85,7 @@ In `maude.exe` (Windows) and on macOS, the setting `native_only_approved` in `~/
 
 ## Credentials
 
-If no LLM credentials are set, the TUI shows the credentials window at start. Maude checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials` and `~/.azure/clauderc`. The Web UI button opens the same window when credentials are missing.
+If no LLM credentials are set, the TUI shows the Settings window at start. Maude checks `ANTHROPIC_API_KEY`, `ANTHROPIC_FOUNDRY_API_KEY`, `~/.aws/credentials` and `~/.azure/clauderc`. The Web UI button opens the same window when credentials are missing.
 
 ## Setup Git
 

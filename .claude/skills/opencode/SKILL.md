@@ -12,7 +12,7 @@ from the environment at runtime via `{env:VAR}` placeholders.
 
 ## Step 0: credentials + mode detection (always run first)
 
-Credentials live in `~/.azure/clauderc` (written by the Maude TUI → Set Creds). Source
+Credentials live in `~/.azure/clauderc` (written by the Maude TUI → Settings). Source
 it in the same command as every `opencode` call — Bash tool shells are fresh and
 non-interactive:
 
@@ -32,7 +32,7 @@ opencode run "reply with the single word: ok" -m zai-coding-plan/glm-5.2 2>&1; e
 ```
 
 If the required key is missing, STOP and tell the user to add it via the Maude TUI:
-**Set Creds → Paste exports** (`ZHIPU_API_KEY=...` from z.ai/manage-apikey, or AWS
+**Settings → Paste exports** (`ZHIPU_API_KEY=...` from z.ai/manage-apikey, or AWS
 credentials for Bedrock). If a key IS present but the call still errors, report the
 actual error — do NOT retry blindly.
 

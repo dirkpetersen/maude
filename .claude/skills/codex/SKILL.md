@@ -12,7 +12,7 @@ matching the sandbox's credential mode (detected in Step 0).
 ## Step 0: credentials + mode detection (always run first)
 
 Credentials for all Maude reviewer CLIs live in `~/.azure/clauderc` (written by the
-Maude TUI → Set Creds). Claude Code's Bash tool spawns fresh non-interactive shells, so
+Maude TUI → Settings). Claude Code's Bash tool spawns fresh non-interactive shells, so
 you MUST source it in the same command as every `codex` call:
 
 ```bash
@@ -36,7 +36,7 @@ codex exec --profile maude-aws --skip-git-repo-check "reply with the single word
 ```
 
 If the required key is missing, STOP and tell the user to add it via the Maude TUI:
-**Set Creds → Paste exports** (`OPENAI_API_KEY=...`, `AZURE_OPENAI_API_KEY=...`, or
+**Settings → Paste exports** (`OPENAI_API_KEY=...`, `AZURE_OPENAI_API_KEY=...`, or
 AWS credentials). If a key IS present but the call still errors, report the actual
 error — do NOT retry blindly on broken auth.
 

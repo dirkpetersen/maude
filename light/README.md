@@ -180,7 +180,7 @@ Projects are sorted newest-first by last-modified time. Press **Enter** or click
 | + New | Create a new project (spaces become hyphens; git is initialized automatically) |
 | Web UI / Stop Web UI | Start or forcefully stop the [kanna](https://github.com/jakemor/kanna) web interface at `http://127.0.0.1:3210`. The kanna process inherits Maude's auth via `CLAUDE_EXECUTABLE=~/bin/claude`. |
 | Setup Git(hub) | 4-step wizard for GitHub identity, SSH key, GPG key + commit signing, and final git/keychain config. Also runnable as `maude github`. |
-| Set Credentials | Open a modal to paste Anthropic / Foundry / AWS / Azure `export` lines; saved to `~/.azure/clauderc` (mode 0600). |
+| Settings | Open the Settings modal (formerly "Set Creds"): the "Only allow Kiro.dev and Github Copilot outside the Sandbox" checkbox (outside the sandbox only), then tabs Paste exports / Anthropic (Claude Login, `ANTHROPIC_API_KEY`, "Use this API key") / AWS Bedrock / Azure Foundry / OpenCode (OpenAI-compatible URL, model, api_key). Credentials are saved to `~/.azure/clauderc` (mode 0600), the OpenCode endpoint to `~/.config/opencode/opencode.json`. |
 | Command Line | Exit the TUI and return to the shell prompt |
 
 **Keyboard shortcuts**
@@ -340,7 +340,7 @@ Delete it (or untick the **Autostart** sidebar checkbox) to re-enable auto-launc
 
 Click the **Web UI** button again to confirm it's idle. The TUI runs a 1.5s post-launch check and surfaces the kanna log tail in a notification if it died — most causes:
 
-- No LLM credentials configured. Click **Set Creds** and paste `export ANTHROPIC_API_KEY=…` (or AWS / Foundry / Azure equivalents).
+- No LLM credentials configured. Click **Settings** and paste `export ANTHROPIC_API_KEY=…` (or AWS / Foundry / Azure equivalents).
 - Port 3210 still held by a previous run. The TUI runs `fuser -k 3210/tcp` before each launch as a backstop, but a wedged kanna from outside the TUI may need `fuser -k 3210/tcp` manually.
 - Wrapper at `~/bin/claude` missing. The TUI sets `CLAUDE_EXECUTABLE` to that path so kanna inherits Maude's auth; if the wrapper is gone, kanna falls back to plain `claude` on PATH and may fail to authenticate.
 

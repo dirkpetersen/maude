@@ -23,7 +23,7 @@ set -e
 
 # ── Install textual (Maude TUI dependency) ───────────────────────────
 echo "Installing textual..."
-# 8.2.3 crashes the Set Creds modal as it opens with KeyError
+# 8.2.3 crashes the Settings modal as it opens with KeyError
 # 'text-area--gutter' (textual#6528); >=8.2.4 fixes that. Rapid clicks on the
 # mode buttons could still trigger the same KeyError (or NoMatches) on later
 # 8.x until CredsEntryScreen kept its three mode panes always mounted (toggled

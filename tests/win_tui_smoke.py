@@ -127,7 +127,7 @@ try:
             assert maude.IS_WIN and not maude.ConfirmDeleteScreen("x").outside
             assert maude.current_platform() == "windows"
             hidden = maude.hidden_widgets()  # from the FEATURES map: everything off on Windows for now
-            assert set(hidden) == {"#btn-web", "#autostart"}, hidden  # Set Creds, Update Maude, To Github, Setup Git(hub) are on
+            assert set(hidden) == {"#btn-web", "#autostart"}, hidden  # Settings, Update Maude, To Github, Setup Git(hub) are on
             for i in hidden:
                 assert not app.query_one(i).display, i
             for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#btn-update", "#btn-github", "#btn-togithub", "#fresh-context", "#perplexity"):
@@ -579,7 +579,7 @@ try:
     maude.open_project(proj, "auto", fresh=False, effort="low")  # auto: no --model flag at all
     assert calls == [(["C:/c.exe", "--effort", "low", "--continue"], str(proj))], calls
     calls.clear()
-    # Set Creds on Windows: the button opens the screen, Save writes <home>/.maude/clauderc (never ~/.azure),
+    # Settings on Windows: the button opens the screen, Save writes <home>/.maude/clauderc (never ~/.azure),
     # and the saved env reaches Claude Code and the other tools.
     rc_file = home / ".maude" / "clauderc"
     assert maude.clauderc_path() == rc_file
@@ -694,7 +694,7 @@ try:
     rc_file.unlink()
     assert maude._child_env() is None
     mx._run, mx.ensure_tool = old_run, old_ensure
-    # Rapid mode switching on the Set Creds screen (no pauses): no crash, exactly one pane visible.
+    # Rapid mode switching on the Settings screen (no pauses): no crash, exactly one pane visible.
     async def check_rapid():
         async with maude.MaudeApp().run_test(size=(140, 45)) as pilot:
             app = pilot.app
@@ -763,6 +763,122 @@ try:
     assert "ANTHROPIC_FOUNDRY_BASE_URL='https://v.example/anthropic'" in hp, hp
     assert "hidden-pane" not in hp and "HIDDENPANE" not in hp, hp  # the Paste and Bedrock panes were not the active mode
     assert not (home / ".aws" / "credentials").exists() or "HIDDENPANE" not in (home / ".aws" / "credentials").read_text()
+    rc_file.unlink()
+    # Settings screen (formerly Settings): label, native-only checkbox (persisted + re-greys the Agent column),
+    # Anthropic pane (key active/inactive), OpenCode pane, and nothing from hidden panes is saved.
+    from textual.widgets import RadioButton, Checkbox, Button
+    oc_cfg = home / ".config" / "opencode" / "opencode.json"
+    oc_cfg.parent.mkdir(parents=True)
+    oc_cfg.write_text('{"model": "zai-coding-plan/glm-5.2", "theme": "t", "//": "managed by maude - x", '
+                      '"provider": {"zai-coding-plan": {"options": {"apiKey": "{env:ZHIPU_API_KEY}"}}}}')
+    settings_file = home / ".maude" / "settings.json"
+
+    async def open_settings(pilot):
+        app = pilot.app
+        await wait_table(pilot)
+        btn = app.query_one("#btn-creds")
+        assert str(btn.label) == "Settings", btn.label
+        btn.press(); await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
+        assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
+        await pilot.pause()
+        await wait_query(pilot, lambda: app.screen, "#btn-creds-save")
+        return app.screen
+
+    async def press_mode(pilot, scr, mode):
+        (await wait_query(pilot, lambda: scr, "#btn-creds-mode-" + mode)).press(); await pilot.pause()
+        await wait_until(pilot, lambda: scr.query_one("#creds-pane-" + mode).display)
+        for m in ("paste", "anthropic", "bedrock", "foundry", "opencode"):
+            assert scr.query_one("#creds-pane-" + m).display == (m == mode), (m, mode)
+
+    async def save_and_close(pilot, scr):
+        scr.query_one("#btn-creds-save").press(); await pilot.pause()
+        await wait_until(pilot, lambda: len(pilot.app.screen_stack) == 1)
+        assert len(pilot.app.screen_stack) == 1, pilot.app.screen_stack
+
+    async def check_settings_screen():
+        disabled = lambda a: [str(b.label) for b in a.query_one("#agent-select").query(RadioButton) if b.disabled]
+        maude.save_settings({"native_only_approved": True})
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
+            scr = await open_settings(pilot)
+            assert str((await wait_query(pilot, lambda: scr, "#creds-title")).render()) == "Settings"
+            cb = await wait_query(pilot, lambda: scr, "#creds-native-only")  # visible above the mode buttons, whatever pane
+            assert cb.value is True and "Only allow Kiro.dev and Github Copilot outside the Sandbox" in str(cb.label), cb.label
+            assert scr.query_one("#creds-native-only").region.y < scr.query_one("#creds-tabs").region.y
+            assert len(disabled(app)) == len(maude.AGENTS) - 2, disabled(app)
+            # Anthropic pane: Claude Login button inside it, masked key field, "Use this API key" unchecked
+            await press_mode(pilot, scr, "anthropic")
+            assert str(scr.query_one("#btn-creds-login", Button).label) == "Claude Login"
+            assert scr.query_one("#creds-anthropic-key").password is True
+            assert scr.query_one("#creds-anthropic-use", Checkbox).value is False
+            assert scr.query_one("#creds-oc-key").password is True
+            # text typed in panes that are not the active mode is never saved
+            (await wait_query(pilot, lambda: scr, "#creds-oc-url")).value = "https://hidden.example/v1"
+            scr.query_one("#creds-oc-model").value = "hidden-model"
+            scr.query_one("#creds-oc-key").value = "oc-hidden-key"
+            scr.query_one("#creds-text").text = "export ANTHROPIC_API_KEY=sk-ant-hidden-paste\n"
+            scr.query_one("#creds-anthropic-key").value = "sk-ant-test1"
+            scr.query_one("#creds-anthropic-use", Checkbox).value = True
+            cb.value = False                                   # native-only off
+            await save_and_close(pilot, scr)
+            await wait_until(pilot, lambda: disabled(app) == [])
+            assert disabled(app) == [], disabled(app)          # apply_agent_restrictions() ran: everything enabled
+        sj = settings_file.read_text()
+        assert maude.load_settings()["native_only_approved"] is False and "sk-ant-test1" in sj, sj
+        assert rc_file.read_text() == "export ANTHROPIC_API_KEY='sk-ant-test1'\n", rc_file.read_text()
+        assert not any(s in sj + rc_file.read_text() + oc_cfg.read_text()
+                       for s in ("hidden-paste", "oc-hidden-key", "hidden.example", "hidden-model")), "hidden panes were saved"
+        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-test1"
+        # Second run: state is shown; deactivating keeps the key in settings.json and exports nothing
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
+            scr = await open_settings(pilot)
+            assert scr.query_one("#creds-native-only", Checkbox).value is False
+            await press_mode(pilot, scr, "anthropic")
+            use = scr.query_one("#creds-anthropic-use", Checkbox)
+            assert use.value is True and scr.query_one("#creds-anthropic-key").value == ""  # the key is never shown
+            use.value = False
+            await save_and_close(pilot, scr)
+        assert not rc_file.exists(), "inactive key must not be exported"
+        assert maude.load_settings()["anthropic_api_key"] == "sk-ant-test1"
+        assert maude.plat_claude_env() == {} and maude._child_env() is None
+        # Activating again with an empty field reuses the stored key; OpenCode pane merges non-destructively
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
+            scr = await open_settings(pilot)
+            await press_mode(pilot, scr, "anthropic")
+            scr.query_one("#creds-anthropic-use", Checkbox).value = True
+            await save_and_close(pilot, scr)
+            assert rc_file.read_text() == "export ANTHROPIC_API_KEY='sk-ant-test1'\n"
+            assert maude.plat_claude_env() == {"ANTHROPIC_API_KEY": "sk-ant-test1"}
+            scr = await open_settings(pilot)
+            await press_mode(pilot, scr, "opencode")
+            scr.query_one("#creds-oc-url").value = "ftp://nope"   # invalid: stays open with an error, saves nothing
+            scr.query_one("#creds-oc-model").value = "qwen3-coder"
+            scr.query_one("#creds-oc-key").value = "oc-secret"
+            scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            assert isinstance(app.screen, maude.CredsEntryScreen) and "http" in str(scr.query_one("#creds-status").render())
+            assert "oc-secret" not in rc_file.read_text()
+            scr.query_one("#creds-oc-url").value = "https://llm.example/v1"
+            scr.query_one("#creds-native-only", Checkbox).value = True
+            await save_and_close(pilot, scr)
+            await wait_until(pilot, lambda: len(disabled(app)) == len(maude.AGENTS) - 2)
+            assert len(disabled(app)) == len(maude.AGENTS) - 2, disabled(app)  # checked again: greyed out again
+    saved_env = dict(os.environ)
+    try:
+        asyncio.run(check_settings_screen())
+    finally:
+        os.environ.clear(); os.environ.update(saved_env)
+    import json as _json
+    oc = _json.loads(oc_cfg.read_text())
+    assert oc["theme"] == "t" and "//" not in oc and oc["model"] == "maude-custom/qwen3-coder", oc
+    assert oc["provider"]["zai-coding-plan"]["options"]["apiKey"] == "{env:ZHIPU_API_KEY}", oc
+    mc = oc["provider"]["maude-custom"]
+    assert mc["npm"] == "@ai-sdk/openai-compatible" and mc["options"] == {"baseURL": "https://llm.example/v1", "apiKey": "{env:MAUDE_OPENCODE_API_KEY}"}, mc
+    assert "qwen3-coder" in mc["models"] and "oc-secret" not in oc_cfg.read_text()
+    assert (oc_cfg.parent / "opencode.json.maude-bak").is_file()
+    assert "MAUDE_OPENCODE_API_KEY='oc-secret'" in rc_file.read_text() and maude.load_settings()["native_only_approved"] is True
     rc_file.unlink()
     # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
     # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
