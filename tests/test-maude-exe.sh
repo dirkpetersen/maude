@@ -386,6 +386,21 @@ shutil.rmtree(td)
 PY
 }
 assert_eq "agy install ok: only agy.exe in the folder" "0 ['agy.exe'] 0 b'agy-exe-bytes' Downloading Antigravity CLI (about 240 MB)..." "$(ag_flow agy ok)"
+assert_eq "agy install sweeps old .agy-new-* leftovers, keeps fresh ones" "0 ['.agy-new-fresh.exe', 'agy.exe']" "$(python3 -I - "${SCRIPT_DIR}/../light" <<'PY'
+import sys, io, os, json, hashlib, tempfile, time, shutil
+sys.path.insert(0, sys.argv[1]); import maude_exe as m
+td = tempfile.mkdtemp(); dest = os.path.join(td, "d"); os.makedirs(dest)
+old, fresh = os.path.join(dest, ".agy-new-old.exe"), os.path.join(dest, ".agy-new-fresh.exe")
+for p in (old, fresh): open(p, "w").close()
+os.utime(old, (time.time() - 7200,) * 2)
+exe = b"x"
+routes = {m.AGY_MANIFEST_BASE + "windows_amd64.json": json.dumps({"url": "https://storage.googleapis.com/antigravity-public/a.exe", "sha512": hashlib.sha512(exe).hexdigest()}).encode(),
+          "https://storage.googleapis.com/antigravity-public/a.exe": exe}
+rc = m.install_antigravity({"PROCESSOR_ARCHITECTURE": "AMD64"}, lambda s: None, lambda r, timeout=None: io.BytesIO(routes[r.full_url]), dest)
+print(rc, sorted(os.listdir(dest)))
+shutil.rmtree(td)
+PY
+)"
 assert_eq "agy install arm64 reads the arm64 manifest" "0 ['agy.exe'] 0 b'agy-exe-bytes' Downloading Antigravity CLI (about 240 MB)..." "$(ag_flow agy arm64)"
 out=$(ag_flow agy badsha)
 assert_eq "agy checksum mismatch: nothing left behind" "1 [] 0 None" "$(echo "$out" | cut -d' ' -f1-4 | sed "s/ b'[^']*'//")"

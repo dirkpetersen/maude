@@ -204,7 +204,7 @@ TOOL_INSTALL = {
                              "SHA-256 and install it for this user (msiexec /qn, no admin)"),
     "OpenCode": ("opencode", "bun install -g --trust opencode-ai"),
     "Crush": ("crush", "bun install -g --trust @charmland/crush"),
-    # Codex and Grok: the vendors' own per-user PowerShell installers (no admin; each checks what it downloads).
+    # Codex and Grok: the vendors' own per-user PowerShell installers (no admin). Codex's script checks the release SHA-256; the x.ai script does not checksum grok.exe (HTTPS only).
     "Codex": ("codex", "$env:CODEX_NON_INTERACTIVE='true'; irm https://chatgpt.com/codex/install.ps1 | iex"),
     "Grok": ("grok", "irm https://x.ai/cli/install.ps1 | iex"),
     # Antigravity and Copilot CLI: install_antigravity()/install_copilot() do it in Python (see NATIVE_INSTALL).
@@ -233,19 +233,19 @@ def _http_get(url: str, urlopen=urllib.request.urlopen, limit: int = 8 << 20, ti
     return data
 
 
-def download_verified(url: str, dest: str, sha256: str, urlopen=urllib.request.urlopen, timeout: int = 60) -> None:
+def download_verified(url: str, dest: str, digest: str, urlopen=urllib.request.urlopen, timeout: int = 60) -> None:
     """Stream url to dest and check its digest: SHA-256 (64 hex digits) or, when the vendor publishes
     only that, SHA-512 (128 hex digits). On a mismatch dest is removed and ValueError raised."""
-    h = hashlib.sha512() if len(sha256) == 128 else hashlib.sha256()
+    h = hashlib.sha512() if len(digest) == 128 else hashlib.sha256()
     req = urllib.request.Request(url, headers={"User-Agent": "maude.exe"})
     with urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
         while chunk := r.read(1 << 20):
             h.update(chunk)
             f.write(chunk)
-    if h.hexdigest() != sha256.lower():
+    if h.hexdigest() != digest.lower():
         with contextlib.suppress(OSError):
             os.remove(dest)
-        raise ValueError(f"checksum mismatch for {url} (expected {sha256.lower()}, got {h.hexdigest()})")
+        raise ValueError(f"checksum mismatch for {url} (expected {digest.lower()}, got {h.hexdigest()})")
 
 
 _SHA_RE = re.compile(r"[0-9a-fA-F]{64}")
@@ -330,6 +330,19 @@ def agy_package(manifest) -> tuple[str, str] | None:
     return None
 
 
+def _sweep_stale(folder: str, prefix: str, suffix: str, max_age: int = 3600) -> None:
+    """Delete leftover staging files (prefix*suffix) older than max_age seconds, e.g. from a killed install. Never raises."""
+    try:
+        now = time.time()
+        for n in os.listdir(folder):
+            p = os.path.join(folder, n)
+            if n.startswith(prefix) and n.endswith(suffix) and os.path.isfile(p) and now - os.path.getmtime(p) > max_age:
+                with contextlib.suppress(OSError):
+                    os.remove(p)
+    except OSError:
+        pass
+
+
 def install_antigravity(env=os.environ, say=print, urlopen=urllib.request.urlopen, dest=None) -> int:
     """Install the Antigravity CLI (agy.exe) per user: the vendor's manifest, SHA-512 checked download, no admin.
     The vendor script also runs `agy install` (shell setup); Maude skips that and manages PATH itself."""
@@ -351,6 +364,7 @@ def install_antigravity(env=os.environ, say=print, urlopen=urllib.request.urlope
         download_verified(pkg[0], staged, pkg[1], urlopen, timeout=300)
         os.replace(staged, os.path.join(dest, "agy.exe"))
         staged = None
+        _sweep_stale(dest, ".agy-new-", ".exe")
         return 0
     except KeyboardInterrupt:
         say("Antigravity install cancelled.")
@@ -419,7 +433,6 @@ def install_copilot(env=os.environ, say=print, urlopen=urllib.request.urlopen, t
 
 # tool label -> Python installer taking say=, returning an exit code (called as native[label](say=say))
 NATIVE_INSTALL = {"Kiro CLI": install_kiro, "Antigravity": install_antigravity, "Copilot CLI": install_copilot}
-
 
 
 def user_dirs(env) -> list[str]:

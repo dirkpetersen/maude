@@ -314,7 +314,7 @@ def mac_install_plan(tool: str, have_brew: bool) -> tuple[list[str] | None, str,
                 "This opens a macOS dialog (Apple Command Line Tools, about 1 GB): click Install there, "
                 "wait until it finishes, then come back here.")
     if tool in _MAC_BREW_CASKS:
-        cask, url = _MAC_BREW_CASKS[tool]
+        cask = _MAC_BREW_CASKS[tool][0]
         if have_brew:
             return ["brew", "install", "--cask", cask], f"brew install --cask {cask}", ""
         cmd = _MAC_CURL_FALLBACK[tool]

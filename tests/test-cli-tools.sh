@@ -32,6 +32,8 @@ manifest() { printf '{\n  "version": "1",\n  "url": "%s",\n  "sha512": "%s"\n}\n
 manifest "$AGY_URL" "$_sha" > "$d/serve/good.json"
 manifest "$AGY_URL" "$_zero" > "$d/serve/badsha.json"
 manifest "https://evil.example/agy.tar.gz" "$_sha" > "$d/serve/foreign.json"
+manifest "https://storage.googleapis.com/antigravity-public/../other-bucket/x.tar.gz" "$_sha" > "$d/serve/dotdot.json"
+manifest "https://storage.googleapis.com/antigravity-public//x.tar.gz" "$_sha" > "$d/serve/dslash.json"
 manifest "http://storage.googleapis.com/antigravity-public/x/a.tar.gz" "$_sha" > "$d/serve/http.json"
 # a stand-in for the Copilot vendor script: records its environment, installs $PREFIX/bin/copilot
 cat > "$d/serve/copilot-install.sh" <<'EOS'
@@ -49,7 +51,8 @@ out="" url=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o) out="$2"; shift 2 ;;
-        --max-time) shift 2 ;;
+        --max-time|--proto|--proto-redir|--speed-limit|--speed-time) echo "FLAG $1 $2" >> "$FAKE_LOG"; shift 2 ;;
+        --path-as-is) echo "FLAG --path-as-is" >> "$FAKE_LOG"; shift ;;
         -*) shift ;;
         *) url="$1"; shift ;;
     esac
@@ -82,7 +85,7 @@ assert_eq "agy: exit 0" "0" "$RUN_RC"
 assert_executable "agy: ~/.local/bin/agy" "$h/.local/bin/agy"
 assert_eq "agy: binary content from the archive" "agy-binary" "$(cat "$h/.local/bin/agy")"
 assert_contains "agy: manifest of this CPU" "/manifests/linux_${_arch}.json" "$(cat "$d/log")"
-assert_eq "agy: every URL is https" "0" "$(grep -vc '^https://' "$d/log")"
+assert_eq "agy: every URL is https" "0" "$(grep -v '^FLAG' "$d/log" | grep -vc '^https://')"
 run "$h" good ok update_antigravity
 assert_eq "agy: second run is a no-op" "cli: installed (updates itself)" "$RUN_OUT"
 assert_eq "agy: no network on the no-op run" "0" "$(wc -l < "$d/log" | tr -d ' ')"
@@ -98,6 +101,18 @@ assert_eq "agy: manifest pointing off storage.googleapis.com -> failed" "cli: fa
 assert_eq "agy: the foreign URL is never requested" "0" "$(grep -c evil.example "$d/log")"
 run "$h" http ok update_antigravity
 assert_eq "agy: http archive url refused" "cli: failed" "$RUN_OUT"
+run "$h" dotdot ok update_antigravity
+assert_eq "agy: /../ in the archive url refused" "cli: failed" "$RUN_OUT"
+assert_eq "agy: the dot-dot url is never requested" "0" "$(grep -c other-bucket "$d/log")"
+run "$h" dslash ok update_antigravity
+assert_eq "agy: // in the archive url refused" "cli: failed" "$RUN_OUT"
+run "$h" good ok update_antigravity
+assert_contains "agy: https-only, no path normalisation, stall-based timeout" "FLAG --speed-limit 10000" "$(cat "$d/log")"
+assert_contains "agy: --proto =https" "FLAG --proto =https" "$(cat "$d/log")"
+assert_contains "agy: --proto-redir =https" "FLAG --proto-redir =https" "$(cat "$d/log")"
+assert_contains "agy: --path-as-is" "FLAG --path-as-is" "$(cat "$d/log")"
+assert_eq "agy: no total max-time on the archive" "1" "$(grep -c 'FLAG --max-time' "$d/log")"
+rm -f "$h/.local/bin/agy"
 run "$h" good offline update_antigravity
 assert_eq "agy: offline -> failed, not an error trace" "cli: failed" "$RUN_OUT"
 
@@ -110,6 +125,8 @@ assert_contains "copilot: official script URL" "https://gh.io/copilot-install" "
 assert_contains "copilot: PREFIX is ~/.local" "PREFIX=$h/.local" "$(cat "$d/log")"
 assert_contains "copilot: ~/.local/bin on PATH for the run (no shell-profile prompt)" "PATHHAS=yes" "$(cat "$d/log")"
 assert_contains "copilot: script gets no terminal on stdin" "STDIN=notty" "$(cat "$d/log")"
+assert_contains "copilot: curl is https-only and path-as-is" "FLAG --path-as-is" "$(cat "$d/log")"
+assert_contains "copilot: --proto-redir =https" "FLAG --proto-redir =https" "$(cat "$d/log")"
 run "$h" good ok update_copilot
 assert_eq "copilot: second run is a no-op" "cli: installed (update with 'copilot update')" "$RUN_OUT"
 h="$d/h5"; mkdir -p "$h"

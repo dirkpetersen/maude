@@ -56,19 +56,19 @@ update_antigravity() {
     local d rc=1
     d=$(mktemp -d) || { echo "cli: failed (no temp dir)"; return 1; }
     local url sha
-    if curl -fsSL --max-time 60 "$base/manifests/linux_${arch}.json" -o "$d/manifest.json"; then
+    if curl -fsSL --path-as-is --proto '=https' --proto-redir '=https' --max-time 60 "$base/manifests/linux_${arch}.json" -o "$d/manifest.json"; then
         # prints "<url> <sha512>" only if both look right: an https storage.googleapis.com archive and 128 hex digits
         read -r url sha < <(python3 -I - "$d/manifest.json" <<'PY' 2>/dev/null
 import json, re, sys
 m = json.load(open(sys.argv[1]))
 u, s = m.get("url", ""), m.get("sha512", "")
-if re.fullmatch(r"https://storage\.googleapis\.com/antigravity-public/[A-Za-z0-9._/-]+\.tar\.gz", u) and re.fullmatch(r"[0-9a-fA-F]{128}", s):
+if ".." not in u and "//" not in u[8:] and re.fullmatch(r"https://storage\.googleapis\.com/antigravity-public/[A-Za-z0-9._/-]+\.tar\.gz", u) and re.fullmatch(r"[0-9a-fA-F]{128}", s):
     print(u, s.lower())
 PY
 ) || true
     fi
     if [[ -n "${url:-}" && -n "${sha:-}" ]] \
-       && curl -fsSL --max-time 300 "$url" -o "$d/agy.tar.gz" \
+       && curl -fsSL --path-as-is --proto '=https' --proto-redir '=https' --speed-limit 10000 --speed-time 60 "$url" -o "$d/agy.tar.gz" \
        && [[ "$(sha512sum "$d/agy.tar.gz" | cut -d' ' -f1)" == "$sha" ]] \
        && tar -xzf "$d/agy.tar.gz" -C "$d" antigravity 2>/dev/null \
        && mkdir -p "$HOME/.local/bin" \
@@ -91,7 +91,7 @@ update_copilot() {
     local d rc=1
     d=$(mktemp -d) || { echo "cli: failed (no temp dir)"; return 1; }
     mkdir -p "$HOME/.local/bin"
-    if curl -fsSL --max-time 60 https://gh.io/copilot-install -o "$d/install.sh" \
+    if curl -fsSL --path-as-is --proto '=https' --proto-redir '=https' --max-time 60 https://gh.io/copilot-install -o "$d/install.sh" \
        && PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" timeout 300 bash "$d/install.sh" </dev/null >/dev/null 2>&1 \
        && [[ -x "$bin" ]]; then
         rc=0
