@@ -573,15 +573,28 @@ UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
 UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 
 MODEL_AUTO    = "auto"          # built-in first model of every agent: pass no model flag at all
-DEFAULT_MODEL = MODEL_AUTO
+# Default model when nothing is saved: Claude Code opus (what it always was; "auto" there means the
+# ~/bin/claude wrapper's own default, which is haiku), every other agent auto.
+DEFAULT_MODEL = "opus"
+CLAUDE_ALIASES = ("fable", "opus", "sonnet", "haiku")  # what the sandbox claude wrapper takes as model word
 STATE_DIR     = Path.home() / ".maude"
-MODEL_FILE    = STATE_DIR / "maude-model"   # "<model>[,<effort>]", e.g. "auto", "opus,high" or "gpt-6.2-sol"
+# ~/.maude/maude-model is CLAUDE CODE ONLY: "<claude model>[,<effort>]" ("opus", "opus,high"; "" or no file = opus;
+# an EMPTY model field, "," or ",high", is Claude Code "auto": no model word, the wrapper's own default. An old
+# maude.exe (OPEN_SH) rejects the empty field and runs opus, so it never gets "claude auto". The effort is shared by
+# all agents that have one. Other agents keep their model in agent-models.json.
+MODEL_FILE    = STATE_DIR / "maude-model"
 OLD_MODEL_FILE = Path.home() / ".maude-model"  # previous location, migrated on first read
 # The Agent column, in display order. AI_TOOLS is the old name of the same tuple.
 AGENTS        = ("Claude Code", "Codex", "Antigravity", "Grok CLI", "Kiro CLI",
                  "GitHub Copilot CLI", "OpenCode", "Crush")
 AI_TOOLS      = AGENTS
 DEFAULT_TOOL  = "Claude Code"
+# Agent -> the command it runs (the vendors' names come from AGENT_BINARIES, shared with the installers).
+AGENT_BIN = {"Claude Code": "claude", "Codex": AGENT_BINARIES["codex"], "Antigravity": AGENT_BINARIES["antigravity"],
+             "Grok CLI": AGENT_BINARIES["grok"], "Kiro CLI": "kiro-cli", "GitHub Copilot CLI": AGENT_BINARIES["copilot"],
+             "OpenCode": "opencode", "Crush": "crush"}
+# Agent -> its label in maude_exe.TOOL_INSTALL (the Windows installers), where that differs from the agent name.
+INSTALL_LABEL = {"Grok CLI": "Grok", "GitHub Copilot CLI": "Copilot CLI"}
 TOOL_FILE     = STATE_DIR / "maude-tool"      # the saved agent (file name kept for compatibility)
 OLD_TOOL_FILE = Path.home() / ".maude-tool"
 AGENT_MODELS_FILE = STATE_DIR / "agent-models.json"  # {"<agent>": "<model id>"}: the model last used per agent
@@ -590,15 +603,19 @@ NATIVE_APPROVED_AGENTS = ("Kiro CLI", "GitHub Copilot CLI")
 FALLBACK_AGENT = "Kiro CLI"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 SETTINGS_DEFAULTS = {"native_only_approved": True}
-# Reasoning effort: Claude Code `--effort <level>` (`claude --help`), Codex `-c model_reasoning_effort=<level>`,
-# Antigravity `agy --effort <level>`. "" = the agent's own default. Other agents have no such flag.
+# Reasoning effort: Claude Code `--effort <level>` (`claude --help`), Codex `-c model_reasoning_effort=<level>`
+# (max -> xhigh: Codex has no max), Antigravity `agy --effort <level>`, Kiro CLI `kiro-cli chat --effort <level>`
+# (kiro-cli 3.5.0 chat --help). "" = the agent's own default. Other agents have no such flag.
 EFFORTS       = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_EFFORT = ""
 EFFORT_LABELS = ("auto",) + EFFORTS  # "auto" = the agent's own default (passes nothing)
-EFFORT_AGENTS = ("Claude Code", "Codex", "Antigravity")
+EFFORT_AGENTS = ("Claude Code", "Codex", "Antigravity", "Kiro CLI")
 # Agents whose resume flag fails when there is nothing to resume: retry once without it.
 RESUME_FALLBACK_AGENTS = ("Codex", "Antigravity", "Grok CLI", "Kiro CLI", "GitHub Copilot CLI")
-MODEL_ID_RE   = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+#-]{0,79}$")  # nothing odd reaches a command line
+MODEL_ID_RE   = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+#-]{0,79}")  # used with fullmatch: nothing odd reaches a command line
+CLAUDE_ID_RE  = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]{0,70}")   # a full Claude model id (fullmatch)
+LABEL_MAX     = 9               # label width that fits the Model column (longer labels are cut)
+CONFIG_VERSION = 1              # "version" of maude-models.json this code understands
 MODEL_SLOTS   = 12              # radio buttons in the Model column (auto + up to 11 configured models)
 MODELS_URL    = UPDATE_URL.rsplit("/", 1)[0] + "/maude-models.json"
 MODELS_DEFAULT_FILE = STATE_DIR / "models-default.json"  # daily copy of light/maude-models.json
@@ -1260,7 +1277,27 @@ def remove_perplexity() -> None:
 
 
 def valid_model_id(model: str) -> bool:
-    return isinstance(model, str) and bool(MODEL_ID_RE.match(model))
+    """Syntactically safe model id (fullmatch: "opus\\n" is rejected)."""
+    return isinstance(model, str) and bool(MODEL_ID_RE.fullmatch(model))
+
+
+def claude_model_ok(model: str) -> bool:
+    """What Claude Code may be given as model word: an alias or a full claude-* id, so that a config entry
+    like "update" or "default" can never become a subcommand of the ~/bin/claude wrapper. "auto" is not a
+    model (it means no word at all)."""
+    return isinstance(model, str) and (model in CLAUDE_ALIASES or bool(CLAUDE_ID_RE.fullmatch(model)))
+
+
+def model_ok(agent: str, model: str) -> bool:
+    """Is `model` an acceptable id for this agent (auto always is)?"""
+    if model == MODEL_AUTO:
+        return True
+    return claude_model_ok(model) if agent == DEFAULT_TOOL else valid_model_id(model)
+
+
+def default_model(agent: str) -> str:
+    """The model of an agent when nothing is saved: opus for Claude Code, auto for the rest."""
+    return DEFAULT_MODEL if agent == DEFAULT_TOOL else MODEL_AUTO
 
 
 def effort_for(tool: str, effort: str) -> str:
@@ -1270,53 +1307,83 @@ def effort_for(tool: str, effort: str) -> str:
 
 def effort_args(effort: str, tool: str = DEFAULT_TOOL) -> list[str]:
     """The agent's own effort flag for a known level, else nothing (nothing unvalidated reaches a command
-    line). Claude Code `--effort <level>`; Codex `-c model_reasoning_effort=<level>` (TOML, bare string is
-    taken literally); Antigravity `--effort <level>`. Other agents have none."""
+    line). Claude Code, Antigravity and Kiro CLI `--effort <level>`; Codex `-c model_reasoning_effort=<level>`
+    (a bare string is taken literally by its TOML parser; Codex has no max, so max is sent as xhigh). Other
+    agents have none."""
     e = effort_for(tool, effort)
     if not e:
         return []
-    return ["-c", f"model_reasoning_effort={e}"] if tool == "Codex" else ["--effort", e]
+    if tool == "Codex":
+        return ["-c", f"model_reasoning_effort={'xhigh' if e == 'max' else e}"]
+    return ["--effort", e]
 
 
 def tool_command(tool: str, model: str, fresh: bool, effort: str = "") -> list[str]:
-    """Command line of an agent. model "auto" (or anything invalid) passes no model, so the agent starts on its
-    own default model. `fresh` starts without resuming the previous session. Flags: Claude Code `claude [model]
-    --effort --continue`; Codex `codex -m M -c .. [resume --last]`; Antigravity `agy --model M --effort E -c`;
-    Grok `grok -m M -c`; Kiro `kiro-cli chat --model M --resume`; Copilot `copilot --model M --continue`;
-    OpenCode `opencode --model P/M --continue`; Crush `crush --model P/M --continue`."""
-    m = model if (model != MODEL_AUTO and valid_model_id(model)) else ""
+    """Command line of an agent. model "auto" (or anything not acceptable for the agent) passes no model, so the
+    agent starts on its own default. `fresh` starts without resuming the previous session. The binary names come
+    from AGENT_BIN. Flags: Claude Code `claude [model] --effort --continue`; Codex `codex -m M -c .. [resume
+    --last]`; Antigravity `agy --model M --effort E -c`; Grok `grok -m M -c`; Kiro `kiro-cli chat --model M
+    --effort E --resume`; Copilot `copilot --model M --continue`; OpenCode `opencode --model P/M --continue`;
+    Crush `crush --model P/M --continue`."""
+    m = model if (model != MODEL_AUTO and model_ok(tool, model)) else ""
     eff = effort_args(effort, tool)
+    cont = [] if fresh else ["--continue"]
+    exe = AGENT_BIN[tool]
     def opt(flag: str) -> list[str]:
         return [flag, m] if m else []
     if tool == "Claude Code":
-        return ["claude", *([m] if m else []), *eff, *([] if fresh else ["--continue"])]
+        return [exe, *([m] if m else []), *eff, *cont]
     if tool == "Codex":
-        return ["codex", *opt("-m"), *eff, *([] if fresh else ["resume", "--last"])]
+        return [exe, *opt("-m"), *eff, *([] if fresh else ["resume", "--last"])]
     if tool == "Antigravity":
-        return ["agy", *opt("--model"), *eff, *([] if fresh else ["-c"])]
+        return [exe, *opt("--model"), *eff, *([] if fresh else ["-c"])]
     if tool == "Grok CLI":
-        return ["grok", *opt("-m"), *([] if fresh else ["-c"])]
+        return [exe, *opt("-m"), *([] if fresh else ["-c"])]
     if tool == "Kiro CLI":
-        return ["kiro-cli", "chat", *opt("--model"), *([] if fresh else ["--resume"])]
-    if tool == "GitHub Copilot CLI":
-        return ["copilot", *opt("--model"), *([] if fresh else ["--continue"])]
-    if tool == "OpenCode":
-        return ["opencode", *opt("--model"), *([] if fresh else ["--continue"])]
-    if tool == "Crush":
-        return ["crush", *opt("--model"), *([] if fresh else ["--continue"])]
-    raise KeyError(tool)
+        return [exe, "chat", *opt("--model"), *eff, *([] if fresh else ["--resume"])]
+    return [exe, *opt("--model"), *cont]  # GitHub Copilot CLI, OpenCode, Crush
+
+
+def agent_retry_fresh(tool: str, model: str, fresh: bool, ret: int) -> bool:
+    """After an agent exited with `ret`: start it once more without the resume flag? Only when it was started
+    with a resume flag (not fresh), failed, resume can fail for want of a session (RESUME_FALLBACK_AGENTS) and
+    NO model flag was passed (a failure with a model id is more likely the id, and must stay readable)."""
+    return bool(ret) and not fresh and tool in RESUME_FALLBACK_AGENTS and not tool_model_passed(tool, model)
+
+
+def tool_model_passed(tool: str, model: str) -> bool:
+    return model != MODEL_AUTO and model_ok(tool, model)
+
+
+def agent_exit_note(tool: str, model: str, ret: int) -> str:
+    """Text to show (and wait on) when an agent exits non-zero, so a wrong model id is not repainted over."""
+    s = f"{tool} exited with code {ret}."
+    if tool_model_passed(tool, model):
+        s += f" A model was passed ({model}): if that is the problem, try Model: auto."
+    return s + " Press Enter to go back. "
 
 
 def parse_model_pref(raw: str) -> tuple[str, str]:
-    """"<model>[,<effort>]" -> (model, effort). Any syntactically valid model id is kept (whether the agent
-    offers it is decided by resolve_model); a bad one gives "auto", an unknown effort the default."""
-    m, _, e = raw.strip().partition(",")
+    """Content of maude-model -> (Claude model, effort). Nothing saved ("") = opus. An EMPTY model field ("," or
+    ",high") = "auto" (Claude Code without a model word). A legacy "auto" also means auto. A model that Claude
+    Code may not get (not an alias or claude-* id) falls back to opus; an unknown effort to the default."""
+    raw = raw.strip()
+    m, comma, e = raw.partition(",")
     m, e = m.strip(), e.strip().lower()
-    return (m if valid_model_id(m) else DEFAULT_MODEL, e if e in EFFORTS else DEFAULT_EFFORT)
+    e = e if e in EFFORTS else DEFAULT_EFFORT
+    if not raw:
+        return DEFAULT_MODEL, DEFAULT_EFFORT
+    if comma and not m:
+        return MODEL_AUTO, e
+    return (m if (m == MODEL_AUTO or claude_model_ok(m)) else DEFAULT_MODEL), e
 
 
 def format_model_pref(model: str, effort: str) -> str:
-    return f"{model},{effort}" if effort in EFFORTS else model
+    """(Claude model, effort) -> maude-model content. auto is written as an empty model field (",high")."""
+    eff = effort if effort in EFFORTS else ""
+    if model == MODEL_AUTO:
+        return "," + eff
+    return f"{model},{eff}" if eff else model
 
 
 # ── Model lists per agent (maude-models.json) ──────────────────────────────
@@ -1339,18 +1406,8 @@ MODELS_FALLBACK_JSON = r'''{
       {"label": "6.1 terra", "id": "gpt-6.1-terra"},
       {"label": "6 luna", "id": "gpt-6-luna"}
     ]},
-    "Antigravity": {"models": [
-      {"label": "4 neon", "id": "gemini-4-neon"},
-      {"label": "4 carbon", "id": "gemini-4-carbon"},
-      {"label": "4 argon", "id": "gemini-4-argon"},
-      {"label": "4 hydro", "id": "gemini-4-hydrogen"},
-      {"label": "3.8 flash", "id": "gemini-3.8-flash"}
-    ]},
+    "Antigravity": {"models": []},
     "Grok CLI": {"models": [
-      {"label": "fable", "id": "claude-fable-5-2"},
-      {"label": "opus", "id": "claude-opus-5-5"},
-      {"label": "sonnet", "id": "claude-sonnet-5-5"},
-      {"label": "haiku", "id": "claude-haiku-5-5"},
       {"label": "grok 4.7", "id": "grok-4.7"},
       {"label": "grok 4.6", "id": "grok-4.6"},
       {"label": "grok 4.5", "id": "grok-4.5"}
@@ -1379,30 +1436,33 @@ MODELS_FALLBACK_JSON = r'''{
       {"label": "sonnet", "id": "anthropic/claude-sonnet-5-5"},
       {"label": "haiku", "id": "anthropic/claude-haiku-5-5"}
     ]},
-    "Crush": {"models": [
-      {"label": "fable", "id": "anthropic/claude-fable-5-2"},
-      {"label": "opus", "id": "anthropic/claude-opus-5-5"},
-      {"label": "sonnet", "id": "anthropic/claude-sonnet-5-5"},
-      {"label": "haiku", "id": "anthropic/claude-haiku-5-5"},
-      {"label": "6.2 sol", "id": "openai/gpt-6.2-sol"},
-      {"label": "6.2 astra", "id": "openai/gpt-6.2-astra"}
-    ]}
+    "Crush": {"models": []}
   }
 }'''
 
 
-def _model_entries(raw) -> list[tuple[str, str]]:
-    """Valid (label, id) pairs of a JSON list: label 1-12 chars, id syntactically valid, no duplicates, and
-    never "auto" (that one is built in)."""
+def _clean_label(label) -> str:
+    """A label that is safe to show: printable, no markup brackets, cut to LABEL_MAX. "" = rejected."""
+    if not isinstance(label, str):
+        return ""
+    label = label.strip()
+    if not label or not label.isprintable() or "[" in label or "]" in label:
+        return ""
+    return label[:LABEL_MAX]
+
+
+def _model_entries(raw, agent: str = "") -> list[tuple[str, str]]:
+    """Valid (label, id) pairs of a JSON list: a clean label (_clean_label), an id that the agent accepts
+    (model_ok), no duplicates, and never "auto" (that one is built in)."""
     out, seen = [], {MODEL_AUTO}
     for e in raw if isinstance(raw, list) else []:
         if not isinstance(e, dict):
             continue
-        label, mid = e.get("label"), e.get("id")
-        if not (isinstance(label, str) and isinstance(mid, str)):
+        label, mid = _clean_label(e.get("label")), e.get("id")
+        if not label or not isinstance(mid, str):
             continue
-        label, mid = label.strip(), mid.strip()
-        if not label or len(label) > 12 or not valid_model_id(mid) or mid in seen:
+        mid = mid.strip()
+        if mid in seen or not model_ok(agent, mid):
             continue
         seen.add(mid)
         out.append((label, mid))
@@ -1411,28 +1471,32 @@ def _model_entries(raw) -> list[tuple[str, str]]:
 
 def parse_models_config(obj) -> dict | None:
     """Validate one config document: {"version": 1, "agents": {"<agent>": {"models": [...], "extra": [...]}}}.
-    "models" replaces an agent's list, "extra" appends to it. Returns {agent: {"models": list, "extra": list}}
-    for the known agents that have at least one valid entry, or None when the schema is not met."""
+    "models" replaces an agent's list ([] = the agent has auto only), "extra" appends to it. Returns
+    {agent: {"models": list | None, "extra": list}} (models None = the key is absent) for the known agents, or
+    None when the schema is not met: not an object, no "agents" object, a "version" that is not CONFIG_VERSION,
+    or no known agent at all."""
     if not isinstance(obj, dict) or not isinstance(obj.get("agents"), dict):
+        return None
+    if "version" in obj and (type(obj["version"]) is not int or obj["version"] != CONFIG_VERSION):
         return None
     out = {}
     for agent, d in obj["agents"].items():
         if agent not in AGENTS or not isinstance(d, dict):
             continue
-        models, extra = _model_entries(d.get("models")), _model_entries(d.get("extra"))
-        if models or extra:
-            out[agent] = {"models": models, "extra": extra}
+        models = _model_entries(d["models"], agent) if isinstance(d.get("models"), list) else None
+        out[agent] = {"models": models, "extra": _model_entries(d.get("extra"), agent)}
     return out or None
 
 
 def validate_models_bytes(data: bytes) -> bool:
-    """A downloaded maude-models.json is acceptable: parses, schema ok, and EVERY known agent has a list
-    (so a truncated or half-edited file can never replace a good one)."""
+    """A downloaded maude-models.json is acceptable: parses, schema and version ok, and EVERY known agent has a
+    "models" list (which may be empty: auto only), so a truncated or half-edited file can never replace a good
+    one and a bad id can be removed by the daily refresh."""
     try:
         parsed = parse_models_config(json.loads(_decode_state(data)))
     except (ValueError, TypeError):
         return False
-    return bool(parsed) and all(a in parsed and parsed[a]["models"] for a in AGENTS)
+    return bool(parsed) and all(a in parsed and parsed[a]["models"] is not None for a in AGENTS)
 
 
 def _read_json(path: Path):
@@ -1445,11 +1509,11 @@ def _read_json(path: Path):
 def load_models_config() -> dict:
     """{agent: [(label, id), ...]} without the built-in auto entry: embedded fallback, then the daily
     ~/.maude/models-default.json, then the user's ~/.maude/models.json (a corrupt or invalid file is skipped)."""
-    cfg = {a: d["models"] for a, d in (parse_models_config(json.loads(MODELS_FALLBACK_JSON)) or {}).items()}
+    cfg = {a: d["models"] or [] for a, d in (parse_models_config(json.loads(MODELS_FALLBACK_JSON)) or {}).items()}
     for path in (MODELS_DEFAULT_FILE, MODELS_USER_FILE):
         parsed = parse_models_config(_read_json(path))
         for agent, d in (parsed or {}).items():
-            if d["models"]:
+            if d["models"] is not None:
                 cfg[agent] = d["models"]
             if d["extra"]:
                 have = {i for _, i in cfg.get(agent, [])}
@@ -1465,12 +1529,24 @@ def agent_models(agent: str, cfg: dict | None = None) -> list[tuple[str, str]]:
 
 def resolve_model(agent: str, model: str, remembered: str = "", cfg: dict | None = None) -> str:
     """The model to select for an agent: `remembered` (the one used last with this agent) if it is still in
-    the list, else `model` (the current one) if it is, else the first entry (auto)."""
+    the list, else `model` (the current one) if it is, else the agent's default (opus for Claude Code, auto
+    for the rest), else the first entry."""
     ids = [i for _, i in agent_models(agent, cfg)]
-    for cand in (remembered, model):
+    for cand in (remembered, model, default_model(agent)):
         if cand in ids:
             return cand
     return ids[0]
+
+
+def initial_selection(saved_tool: str, claude_model: str, remembered: dict, settings: dict | None = None,
+                      native: bool | None = None, cfg: dict | None = None) -> tuple[str, str]:
+    """(agent, model) to start with: the saved agent unless the restriction forbids it (then Kiro CLI, for this
+    session only: nothing is written), and that agent's model. Claude Code's model is `claude_model` (from
+    maude-model), every other agent's is in `remembered` (agent-models.json); anything not in the agent's
+    list becomes its default."""
+    tool = restrict_agent(saved_tool if saved_tool in AGENTS else DEFAULT_TOOL, settings, native)
+    cand = claude_model if tool == DEFAULT_TOOL else remembered.get(tool, "")
+    return tool, resolve_model(tool, cand, cfg=cfg)
 
 
 def maybe_update_models(fetch=None, now=None) -> bool:
@@ -1513,37 +1589,43 @@ def maybe_update_models(fetch=None, now=None) -> bool:
         return False
 
 
-def start_models_refresh() -> None:
+def start_models_refresh(on_done=None) -> None:
     """Fire-and-forget daily refresh of the model lists on a daemon thread (no network on the UI thread).
-    MAUDE_MODELS_REFRESH=0 turns it off (tests)."""
+    on_done() is called on that thread after a new file was written. MAUDE_MODELS_REFRESH=0 turns it off."""
     if os.environ.get("MAUDE_MODELS_REFRESH") == "0":
         return
     import threading
-    threading.Thread(target=maybe_update_models, name="maude-models", daemon=True).start()
+
+    def work() -> None:
+        if maybe_update_models() and on_done is not None:
+            try:
+                on_done()
+            except Exception:
+                pass
+    threading.Thread(target=work, name="maude-models", daemon=True).start()
 
 
 # ── Settings (~/.maude/settings.json) and the restriction outside the sandbox ───
 
-def load_settings() -> dict:
-    """~/.maude/settings.json merged over SETTINGS_DEFAULTS. A missing file gives the defaults; a corrupt one
-    (not JSON, or not an object) is moved to settings.json.bak and the defaults are used. A value of the
-    wrong type for a known key falls back to its default. Unknown keys are kept. Never raises."""
-    d = dict(SETTINGS_DEFAULTS)
-    try:
-        raw = SETTINGS_FILE.read_bytes()
-    except OSError:
-        return d
+def _parse_settings(raw: bytes) -> dict | None:
     try:
         obj = json.loads(_decode_state(raw))
-        if not isinstance(obj, dict):
-            raise ValueError("not an object")
     except (ValueError, TypeError):
-        try:
-            os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".bak"))
-        except OSError:
-            pass
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def load_settings() -> dict:
+    """~/.maude/settings.json merged over SETTINGS_DEFAULTS. A missing or corrupt file (not JSON, or not an
+    object) gives the defaults; reading never changes the file (save_settings backs a corrupt one up before it
+    writes). A value of the wrong type for a known key falls back to its default. Unknown keys are kept. Never
+    raises."""
+    d = dict(SETTINGS_DEFAULTS)
+    try:
+        obj = _parse_settings(SETTINGS_FILE.read_bytes())
+    except OSError:
         return d
-    for k, v in obj.items():
+    for k, v in (obj or {}).items():
         if k in SETTINGS_DEFAULTS and not isinstance(v, type(SETTINGS_DEFAULTS[k])):
             continue
         d[k] = v
@@ -1551,9 +1633,15 @@ def load_settings() -> dict:
 
 
 def save_settings(d: dict) -> bool:
-    """Write the settings atomically (temp file in ~/.maude, mode 0600, os.replace). True on success."""
+    """Write the settings atomically (temp file in ~/.maude, mode 0600, os.replace). A corrupt existing file is
+    first kept as settings.json.bak. True on success."""
     try:
         maude_dir()
+        try:
+            if _parse_settings(SETTINGS_FILE.read_bytes()) is None:
+                os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".bak"))
+        except OSError:
+            pass
         fd, tmp = tempfile.mkstemp(dir=str(STATE_DIR), prefix=".settings-", suffix=".tmp")  # created 0600
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1584,11 +1672,26 @@ def restrict_agent(agent: str, settings: dict | None = None, native: bool | None
     return agent if agent_allowed(agent, settings, native) else FALLBACK_AGENT
 
 
-def reconcile(model: str, tool: str, changed: str = "tool") -> tuple[str, str]:
-    """(model, agent) that can really run: the agent is switched to Kiro CLI if the restriction forbids it,
-    and the model must be in that agent's list (else auto). `changed` is kept for old callers."""
-    tool = restrict_agent(tool if tool in AGENTS else DEFAULT_TOOL)
-    return resolve_model(tool, model), tool
+def _pause(msg: str) -> None:
+    """Wait for Enter with a message (the TUI is suspended). Never raises."""
+    try:
+        input(msg)
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _after_agent(tool: str, model: str, fresh: bool, effort: str, ret: int, rerun) -> None:
+    """The agent exited with `ret`. 0: done. Otherwise start it once more without the resume flag if that is
+    what failed (agent_retry_fresh), and if it still (or for another reason) failed, stop and show the exit
+    code, so the error stays readable instead of being painted over by the TUI. rerun(cmd) runs a command
+    line and returns its exit code."""
+    if not ret:
+        return
+    if agent_retry_fresh(tool, model, fresh, ret):
+        ret = rerun(tool_command(tool, model, True, effort))
+        if not ret:
+            return
+    _pause(agent_exit_note(tool, model, ret))
 
 
 def _open_other_tool(tool: str, model: str, fresh: bool, effort: str = "") -> None:
@@ -1607,8 +1710,8 @@ def _open_other_tool(tool: str, model: str, fresh: bool, effort: str = "") -> No
         # Interop is off in the sandbox, so a browser cannot open: use the device code flow.
         subprocess.run([cmd[0], "login", "--use-device-flow"], check=False, env=env)
     ret = subprocess.run(cmd, check=False, env=env).returncode
-    if ret != 0 and tool in RESUME_FALLBACK_AGENTS and not fresh:
-        subprocess.run([cmd[0], *tool_command(tool, model, True, effort)[1:]], check=False, env=env)  # nothing to resume
+    _after_agent(tool, model, fresh, effort, ret,
+                 lambda c: subprocess.run([cmd[0], *c[1:]], check=False, env=env).returncode)
 
 
 def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: str = "") -> None:
@@ -1627,19 +1730,22 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: st
         if rc == 3:  # claude missing: run_windows printed the install hint
             input("Press Enter to go back. ")
         return
-    if tool not in getattr(mx, "TOOL_INSTALL", {}):  # no Windows installer known for this agent (yet): a hint, never a crash
-        input(f"{tool} cannot be installed by Maude on Windows yet; install it yourself and make sure "
-              f"'{tool_command(tool, MODEL_AUTO, True)[0]}' is on the PATH. Press Enter to go back. ")
-        return
-    cmd = tool_command(tool, model, fresh, effort)
-    exe = mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path)
+    label, binary = INSTALL_LABEL.get(tool, tool), AGENT_BIN[tool]
+    if label in getattr(mx, "TOOL_INSTALL", {}):  # found on the PATH or the installer folders, else offered
+        exe = mx.ensure_tool(label, mx.find_tool, refresh=mx.refresh_path)
+    else:  # no installer known for it: only a hint, when it is truly missing
+        exe = mx.find_tool(binary)
+        if not exe:
+            print(f"{tool} is not installed and Maude cannot install it on Windows; install it yourself and make "
+                  f"sure '{binary}' is on the PATH.")
     if not exe:  # ensure_tool said why (declined, failed, not found)
         input("Press Enter to go back. ")
         return
+    cmd = tool_command(tool, model, fresh, effort)
     print(mx.banner_text(str(path), HAS_SANDBOX))
     env = _child_env(tools=True)  # raw clauderc exports (None = inherit)
-    if mx._run([exe, *cmd[1:]], cwd=str(path), env=env) and tool in RESUME_FALLBACK_AGENTS and not fresh:
-        mx._run([exe, *tool_command(tool, model, True, effort)[1:]], cwd=str(path), env=env)  # nothing to resume
+    ret = mx._run([exe, *cmd[1:]], cwd=str(path), env=env)
+    _after_agent(tool, model, fresh, effort, ret, lambda c: mx._run([exe, *c[1:]], cwd=str(path), env=env))
 
 
 def open_project(project_path: Path, model: str, *, fresh: bool = False,
@@ -1662,7 +1768,7 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
     if tool != DEFAULT_TOOL:
         _open_other_tool(tool, model, fresh, effort)
         return
-    mw = [] if model == MODEL_AUTO or not valid_model_id(model) else [model]  # auto: no model argument at all
+    mw = [model] if (model != MODEL_AUTO and claude_model_ok(model)) else []  # auto: no model argument at all
     head, env = ["claude", *mw], _child_env()  # sandbox: the ~/bin/claude wrapper takes the model as a word
     if IS_MAC:  # no wrapper outside the sandbox: the real claude (--model) with Maude's env
         mac_offer("git")
@@ -1745,24 +1851,49 @@ def read_model() -> str:
 
 
 def read_agent_models() -> dict:
-    """{agent: model id} last used per agent (~/.maude/agent-models.json). Corrupt file -> {}."""
+    """{agent: model id} last used per agent EXCEPT Claude Code (its model is in maude-model), from
+    ~/.maude/agent-models.json. Corrupt file or entries -> skipped."""
     obj = _read_json(AGENT_MODELS_FILE)
-    return {k: v for k, v in obj.items() if k in AGENTS and valid_model_id(v)} if isinstance(obj, dict) else {}
+    if not isinstance(obj, dict):
+        return {}
+    return {k: v for k, v in obj.items() if k in AGENTS and k != DEFAULT_TOOL and isinstance(v, str) and model_ok(k, v)}
 
 
 def save_agent_model(agent: str, model: str) -> None:
-    """Remember the model for an agent (best effort)."""
-    if agent not in AGENTS or not valid_model_id(model):
+    """Remember the model of a non-Claude agent in agent-models.json (atomic, best effort)."""
+    if agent not in AGENTS or agent == DEFAULT_TOOL or not isinstance(model, str) or not model_ok(agent, model):
         return
     d = read_agent_models()
     d[agent] = model
     try:
         maude_dir()
-        tmp = AGENT_MODELS_FILE.with_name(AGENT_MODELS_FILE.name + ".tmp")
-        tmp.write_text(json.dumps(d, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, AGENT_MODELS_FILE)
+        fd, tmp = tempfile.mkstemp(dir=str(STATE_DIR), prefix=".agent-models-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=2, sort_keys=True)
+            os.replace(tmp, AGENT_MODELS_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except OSError:
         pass
+
+
+def recall_model(agent: str) -> str:
+    """The model last chosen for an agent ("" = none): Claude Code's from maude-model, the others' from
+    agent-models.json."""
+    return read_model() if agent == DEFAULT_TOOL else read_agent_models().get(agent, "")
+
+
+def remember_model(agent: str, model: str) -> None:
+    """Persist the user's model choice for an agent (the right file for it)."""
+    if agent == DEFAULT_TOOL:
+        save_model(model)
+    else:
+        save_agent_model(agent, model)
 
 
 def read_effort() -> str:
@@ -1770,7 +1901,8 @@ def read_effort() -> str:
 
 
 def save_model(name: str) -> None:
-    if valid_model_id(name):
+    """Save Claude Code's model (maude-model): an alias, a claude-* id or auto. Other agents: save_agent_model."""
+    if name == MODEL_AUTO or claude_model_ok(name):
         _save_model_effort(name, read_effort())
 
 
@@ -5025,7 +5157,9 @@ class MaudeApp(App):
     }
 
     #sidebar {
-        width: 48;
+        width: 49;
+        overflow-y: auto;            /* at 80x24 or 120x30 the pickers do not all fit: scroll, never clip */
+        scrollbar-size-vertical: 1;
         padding: 0 1;
         background: #242424;
         border-right: solid #b87878;
@@ -5088,7 +5222,7 @@ class MaudeApp(App):
     #divider2 {
         color: #6a5058;
         height: 1;
-        margin-top: 1;
+        margin-top: 0;
         margin-bottom: 0;
     }
 
@@ -5610,27 +5744,26 @@ class MaudeApp(App):
     def __init__(self, select: str = "", model: str = "") -> None:
         """select: Windows/macOS only. Folder (outside the share) preselected in the list, with the
         outside-the-sandbox warning shown; it is listed even if it is not in the registry.
-        model: optional model alias to preselect (ignored unless it is one of MODELS)."""
+        model: optional Claude Code model (alias, claude-* id or auto) to preselect with Claude Code (ignored when
+        Claude Code is not allowed here or the model is not acceptable for it)."""
         super().__init__()
         self._select = os.path.realpath(select) if ((IS_WIN or IS_MAC) and select) else ""
         self._extra: tuple = (self._select,) if self._select else ()
         self._bar_on = False  # the warning bar (#win-warning) is active
         self._settings = load_settings()
+        self._cfg = load_models_config()  # read once; again only when the daily refresh has written a new file
         saved_tool = read_tool()
-        self._tool = restrict_agent(saved_tool, self._settings)  # not allowed outside the sandbox -> Kiro CLI
-        saved_model, self._effort = read_model_effort()
-        cfg = load_models_config()
-        # model = a Claude Code alias from `maude.exe --model`: it selects Claude Code (if allowed) and that model
-        if model and DEFAULT_TOOL == restrict_agent(DEFAULT_TOOL, self._settings) \
-                and model in [i for _, i in agent_models(DEFAULT_TOOL, cfg)]:
-            self._tool, saved_model = DEFAULT_TOOL, model
-        elif model and model in [i for _, i in agent_models(self._tool, cfg)]:
-            saved_model = model
-        self._model = resolve_model(self._tool, saved_model, cfg=cfg)
-        if self._tool != saved_tool:
-            save_tool(self._tool)
-        if self._model != read_model():
-            save_model(self._model)
+        claude_model, self._effort = read_model_effort()
+        if model and model_ok(DEFAULT_TOOL, model) and agent_allowed(DEFAULT_TOOL, self._settings):
+            # `maude.exe --model X`: Claude Code with that model, remembered like a click
+            self._tool, self._model = DEFAULT_TOOL, resolve_model(DEFAULT_TOOL, model, cfg=self._cfg)
+            if self._model == model:
+                save_tool(self._tool)
+                save_model(self._model)
+        else:  # the restriction may put us on Kiro CLI for THIS session only: nothing is written
+            self._tool, self._model = initial_selection(saved_tool, claude_model, read_agent_models(),
+                                                        self._settings, cfg=self._cfg)
+        self._forced = self._tool != read_tool()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -5658,12 +5791,12 @@ class MaudeApp(App):
                         yield Label("Model", id="model-label")
                         # A fixed pool of buttons: relabelled (and hidden when unused) whenever the agent changes,
                         # so nothing is removed or mounted at runtime.
-                        self._model_entries = agent_models(self._tool)
+                        self._model_entries = agent_models(self._tool, self._cfg)
                         with RadioSet(id="model-select"):
                             for n in range(MODEL_SLOTS):
                                 if n < len(self._model_entries):
                                     lab, mid = self._model_entries[n]
-                                    yield RadioButton(lab, value=(mid == self._model))
+                                    yield RadioButton(Text(lab), value=(mid == self._model))
                                 else:
                                     yield RadioButton("-", disabled=True)
                     with Vertical(classes="opt-col", id="effort-col"):
@@ -5711,7 +5844,7 @@ class MaudeApp(App):
         warn = self.query_one("#win-warning", Static)
         warn.display = False
         self._fill_models()  # hides the unused buttons of the Model pool
-        start_models_refresh()  # daily model-list refresh, on a thread (takes effect on the next launch)
+        start_models_refresh(lambda: self.call_from_thread(self._reload_models))  # daily list refresh, on a thread
         self._refresh_table()
         if self._select:
             self._bar_on = True
@@ -6106,42 +6239,46 @@ class MaudeApp(App):
         if new == self._model:  # echo of a programmatic update
             return
         self._model = new
-        save_model(new)
-        save_agent_model(self._tool, new)
+        remember_model(self._tool, new)  # Claude Code: maude-model; the other agents: agent-models.json
         self.query_one("#projects-table", DataTable).focus()
+
+    def _reload_models(self) -> None:
+        """The daily refresh wrote a new models-default.json: use it (the selection stays if it is still listed)."""
+        self._cfg = load_models_config()
+        self._model = resolve_model(self._tool, self._model, cfg=self._cfg)
+        self._fill_models()
 
     def _fill_models(self) -> None:
         """Show the model list of the current agent (auto first) in the fixed pool of Model buttons and select
-        self._model (which must be in the list; else the first entry, auto)."""
-        entries = agent_models(self._tool)
+        self._model (which must be in the list; else the agent's default). Nothing is saved here."""
+        entries = agent_models(self._tool, self._cfg)
         self._model_entries = entries
         ids = [i for _, i in entries]
         if self._model not in ids:
-            self._model = ids[0]
-            save_model(self._model)
+            self._model = resolve_model(self._tool, self._model, cfg=self._cfg)
         idx = ids.index(self._model)
         rs = self.query_one("#model-select", RadioSet)
         buttons = list(rs.query(RadioButton))
         with rs.prevent(RadioButton.Changed):
             for i, b in enumerate(buttons):
                 if i < len(entries):
-                    b.label = entries[i][0]
+                    b.label = Text(entries[i][0])  # Text: a label like "[/x]" is never parsed as markup
                     b.display, b.disabled, b.value = True, False, i == idx
                 else:
-                    b.label = "-"
+                    b.label = Text("-")
                     b.display, b.disabled, b.value = False, True, False
         rs._pressed_button = buttons[idx]  # type: ignore[attr-defined]
         self._sync_cursor("#model-select", tuple(ids), self._model)
         self.query_one("#effort-select", RadioSet).disabled = self._tool not in EFFORT_AGENTS
 
-    def _switch_agent(self, new: str, press: bool = True) -> None:
-        """Select an agent: remember it, restore the model used last with it (else keep the current one if the
-        new agent has it, else auto), rebuild the Model column and enable/disable Thinking."""
+    def _switch_agent(self, new: str, press: bool = True, persist: bool = True) -> None:
+        """Select an agent and show its models. The model is the one used last with it (Claude Code: maude-model),
+        else the current one if the new agent lists it too, else its default. persist=False (the restriction
+        moved us) writes nothing, so the user's own choice comes back when the restriction is lifted."""
         self._tool = new
-        save_tool(new)
-        self._model = resolve_model(new, self._model, read_agent_models().get(new, ""))
-        save_model(self._model)
-        save_agent_model(new, self._model)
+        if persist:
+            save_tool(new)
+        self._model = resolve_model(new, self._model, recall_model(new), cfg=self._cfg)
         if press:
             self._press("#agent-select", AGENTS, new)
         self._fill_models()
@@ -6149,15 +6286,19 @@ class MaudeApp(App):
     def apply_agent_restrictions(self) -> None:
         """Public: re-read ~/.maude/settings.json (native_only_approved) and refresh the Agent column. Outside the
         sandbox with native_only_approved on, every agent except Kiro CLI and GitHub Copilot CLI is greyed out
-        (disabled, not hidden); if the selected agent is one of them the selection moves to Kiro CLI. Inside
-        the sandbox it enables everything. The Settings screen calls this after save_settings()."""
+        (disabled, not hidden); if the selected agent is one of them the selection moves to Kiro CLI for this
+        session (the saved choice is not overwritten). Turning it off enables everything and goes back to the
+        saved agent. Inside the sandbox it changes nothing. The Settings screen calls this after save_settings()."""
         self._settings = load_settings()
         for b in self.query_one("#agent-select", RadioSet).query(RadioButton):
             b.disabled = not agent_allowed(str(b.label), self._settings)
-        new = restrict_agent(self._tool, self._settings)
-        if new != self._tool:
-            self._switch_agent(new)
-            self.notify(f"Only {' and '.join(NATIVE_APPROVED_AGENTS)} may run outside the sandbox; switched to {new}")
+        saved = read_tool()
+        want = restrict_agent(saved, self._settings)  # the user's own choice, unless forbidden now
+        self._forced = want != saved
+        if want != self._tool:
+            self._switch_agent(want, persist=False)
+            if self._forced:
+                self.notify(f"Only {' and '.join(NATIVE_APPROVED_AGENTS)} may run outside the sandbox; using {want}")
 
     @on(RadioSet.Changed, "#effort-select")
     def effort_changed(self, event: RadioSet.Changed) -> None:
@@ -6177,6 +6318,7 @@ class MaudeApp(App):
         if not agent_allowed(new, self._settings):  # greyed out: cannot normally be clicked, never accept it
             self._press("#agent-select", AGENTS, self._tool)
             return
+        self._forced = False
         self._switch_agent(new, press=False)
         self.query_one("#projects-table", DataTable).focus()
 

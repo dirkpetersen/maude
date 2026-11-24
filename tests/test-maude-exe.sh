@@ -937,7 +937,7 @@ finally:
 print("|".join(out))
 PY
 )"
-assert_eq "state files: read, validation, migration" "('auto', '')|('sonnet', 'high')|('claude-opus-4-5', '')|('haiku', '')|('auto', 'max')|('fable', 'max')|('auto', '')|auto|('sonnet', 'low')|sonnet,low|False|('sonnet', 'low')|True|True|0o700|True|('auto', '')|('auto', '')|('opus', 'high')|('sonnet', 'low')|('opus', 'max')|('haiku', 'low')|False|('auto', '')" "$PREF_OUT"
+assert_eq "state files: read, validation, migration" "('opus', '')|('sonnet', 'high')|('claude-opus-4-5', '')|('haiku', '')|('opus', 'max')|('fable', 'max')|('opus', '')|opus|('sonnet', 'low')|sonnet,low|False|('sonnet', 'low')|True|True|0o700|True|('opus', '')|('opus', '')|('opus', 'high')|('sonnet', 'low')|('opus', 'max')|('haiku', 'low')|False|('opus', '')" "$PREF_OUT"
 
 # OPEN_SH: reads ~/.maude/maude-model ("<model>[,<effort>]"), old file as fallback; fake claude echoes its args
 OSH_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" 2>/dev/null <<'PY'
@@ -955,22 +955,45 @@ try:
         r = subprocess.run(["bash", "-c", m.OPEN_SH, "maude", *arg], env=env, capture_output=True, text=True)
         return r.stdout.replace("\n", ";")
     new, old = os.path.join(home, ".maude", "maude-model"), os.path.join(home, ".maude-model")
-    out = [run()]                                              # nothing -> auto (no model argument)
+    out = [run()]                                              # nothing -> opus
     open(old, "w").write("haiku\n"); out.append(run())          # old file fallback
     open(new, "w").write("sonnet,high\n"); out.append(run())    # new file with effort wins
     open(new, "w").write("fable"); out.append(run())           # model only
     open(new, "w").write("opus,turbo"); out.append(run())      # bad effort dropped
-    open(new, "w").write("x;touch pwn,max"); out.append(run()) # bad model -> auto, effort kept
+    open(new, "w").write("x;touch pwn,max"); out.append(run()) # bad model -> opus, effort kept
     out.append(run("haiku"))                                   # override model keeps the saved effort
     open(new, "wb").write(b"sonnet\r\n"); out.append(run())     # CRLF written by Windows tools
     open(new, "wb").write(b"opus,max\r\n"); out.append(run())
     out.append(str(os.path.exists(os.path.join(d, "pwn")) or os.path.exists(os.path.join(home, "pwn"))))
+    # Claude Code "auto" = an EMPTY model field; the claude model is never a wrapper subcommand
+    for raw in (",", ",high", "auto,low", "update,low", "gpt-6.2-sol", "claude-sonnet-5-5,low", "default"):
+        open(new, "w").write(raw); out.append(run())
+    open(new, "w").write("sonnet,high")
+    for arg in ("auto", "update", "claude-opus-5-5", "opus"):
+        out.append(run(arg))
+    os.remove(new); os.remove(old); out.append(run())          # no files at all -> opus
+    # An already-installed OLDER maude.exe has this OPEN_SH (6bd6a00): its regex rejects an empty model, so the
+    # empty-field encoding of "auto" runs opus there instead of "claude auto".
+    OLD = ('v="$(cat ~/.maude/maude-model 2>/dev/null || cat ~/.maude-model 2>/dev/null)"; '
+           'v="${v//[[:space:]]/}"; '
+           'm="${1:-${v%%,*}}"; e=""; [[ "$v" == *,* ]] && e="${v#*,}"; '
+           '[[ "$m" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || m=opus; '
+           'case "$e" in low|medium|high|xhigh|max) x=(--effort "$e");; *) x=();; esac; '
+           'claude "$m" "${x[@]}" --continue || claude "$m" "${x[@]}"')
+    def run_old(raw):
+        open(new, "w").write(raw)
+        r = subprocess.run(["bash", "-c", OLD, "maude"], env=env, capture_output=True, text=True)
+        return r.stdout.replace("\n", ";")
+    out.append("OLD")
+    for raw in (",", ",high", "opus", "opus,high"):
+        out.append(run_old(raw))
+    out.append("OLD-with-legacy-auto-word:" + run_old("auto,low"))  # why we never write the word
 finally:
     shutil.rmtree(d, ignore_errors=True)
 print("|".join(out))
 PY
 )"
-assert_eq "OPEN_SH reads model,effort" "claude --continue;claude ;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude --effort max --continue;claude --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False" "$OSH_OUT"
+assert_eq "OPEN_SH reads model,effort" "claude opus --continue;claude opus;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude opus --effort max --continue;claude opus --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False|claude --continue;claude ;|claude --effort high --continue;claude --effort high;|claude --effort low --continue;claude --effort low;|claude opus --effort low --continue;claude opus --effort low;|claude opus --continue;claude opus;|claude claude-sonnet-5-5 --effort low --continue;claude claude-sonnet-5-5 --effort low;|claude opus --continue;claude opus;|claude --effort high --continue;claude --effort high;|claude opus --effort high --continue;claude opus --effort high;|claude claude-opus-5-5 --effort high --continue;claude claude-opus-5-5 --effort high;|claude opus --effort high --continue;claude opus --effort high;|claude opus --continue;claude opus;|OLD|claude opus --continue;claude opus;|claude opus --effort high --continue;claude opus --effort high;|claude opus --continue;claude opus;|claude opus --effort high --continue;claude opus --effort high;|OLD-with-legacy-auto-word:claude auto --effort low --continue;claude auto --effort low;" "$OSH_OUT"
 # "Starting Maude, please wait ..." banner: shown (before any heavy import) only for the TUI modes, only on a TTY.
 bn_run() { env -u MAUDE_TIMING python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import io, os, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m

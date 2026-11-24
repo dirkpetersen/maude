@@ -25,7 +25,7 @@ assert_eq "labels fit the column (<=9)" "0" "$(python3 -I -c 'import json,sys; d
 # ── lists: auto first, Claude models next, vendor models after ────────────────
 reset
 assert_eq "no files -> embedded: Claude Code" "['auto', 'fable', 'opus', 'sonnet', 'haiku']" "$(py '[l for l,_ in agent_models("Claude Code")]')"
-for a in "Claude Code" "Kiro CLI" "GitHub Copilot CLI" "OpenCode" "Grok CLI" "Crush"; do
+for a in "Claude Code" "Kiro CLI" "GitHub Copilot CLI" "OpenCode"; do
     assert_eq "$a: auto + fable/opus/sonnet/haiku first" "['auto', 'fable', 'opus', 'sonnet', 'haiku']" "$(py "[l for l,_ in agent_models('$a')][:5]")"
 done
 for a in "Claude Code" "Codex" "Antigravity" "Grok CLI" "Kiro CLI" "GitHub Copilot CLI" "OpenCode" "Crush"; do
@@ -33,11 +33,15 @@ for a in "Claude Code" "Codex" "Antigravity" "Grok CLI" "Kiro CLI" "GitHub Copil
 done
 assert_eq "Codex: OpenAI only after auto" "True" "$(py 'all(i.startswith("gpt-") for _,i in agent_models("Codex")[1:])')"
 assert_eq "Antigravity: Gemini only after auto" "True" "$(py 'all(i.startswith("gemini-") for _,i in agent_models("Antigravity")[1:])')"
-assert_eq "Grok CLI: Claude first, then grok" "True" "$(py '[i.split("-")[0] for _,i in agent_models("Grok CLI")[1:]] == ["claude"]*4 + ["grok"]*3')"
-assert_eq "Kiro: Claude then GPT" "True" "$(py '[i.split("-")[0] for _,i in agent_models("Kiro CLI")[1:]] == ["claude"]*4 + ["gpt"]*3')"
-assert_eq "Crush: Claude then OpenAI" "True" "$(py '[i.split("/")[0] for _,i in agent_models("Crush")[1:]] == ["anthropic"]*4 + ["openai"]*2')"
+assert_eq "Grok CLI: auto + grok-* only (Claude needs BYOK config Maude does not write)" "['auto', 'grok-4.7', 'grok-4.6', 'grok-4.5']" "$(py '[i for _,i in agent_models("Grok CLI")]')"
+assert_eq "Kiro: all 7 verified ids, Claude then GPT" "['auto', 'claude-fable-5.1', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']" "$(py '[i for _,i in agent_models("Kiro CLI")]')"
+assert_eq "Antigravity is auto-only" "[('auto', 'auto')]" "$(py 'agent_models("Antigravity")')"
+assert_eq "Crush is auto-only"       "[('auto', 'auto')]" "$(py 'agent_models("Crush")')"
+assert_eq "Copilot: 4 Claude then OpenAI" "True" "$(py '[i.split("-")[0] for _,i in agent_models("GitHub Copilot CLI")[1:]] == ["claude"]*4 + ["gpt"]*3')"
+assert_eq "Claude Code ids pass the wrapper allowlist" "True" "$(py 'all(claude_model_ok(i) for _,i in agent_models("Claude Code")[1:])')"
 assert_eq "unknown agent: just auto" "[('auto', 'auto')]" "$(py 'agent_models("Nope")')"
 assert_eq "pool is big enough for every list" "True" "$(py 'all(len(agent_models(a)) <= MODEL_SLOTS for a in AGENTS)')"
+assert_eq "shipped labels are clean (printable, no brackets)" "True" "$(py 'all(l == _clean_label(l) for a in AGENTS for l,_ in agent_models(a))')"
 
 # ── merge: default file, user file (models replaces, extra appends), corrupt files ───
 mkdir -p "$d/home/.maude"
@@ -63,25 +67,65 @@ assert_eq "wrong-schema user file ignored" "True" "$(py 'load_models_config() ==
 printf '\377\376\377' > "$d/home/.maude/models.json"
 assert_eq "undecodable user file ignored" "6" "$(py 'len(agent_models("Codex"))')"
 cat > "$d/home/.maude/models.json" <<'JSON'
-{"agents":{"Codex":{"models":[{"label":"bad id","id":"a b"},{"label":"","id":"ok"},{"label":"way-too-long-label-here","id":"ok2"},{"label":"-x","id":"--evil"}]}}}
+{"agents":{"Codex":{"models":[{"label":"bad id","id":"a b"},{"label":"","id":"ok"},{"label":"-x","id":"--evil"}]}}}
 JSON
-assert_eq "entries with bad id/label dropped; empty list -> keeps embedded" "6" "$(py 'len(agent_models("Codex"))')"
+assert_eq "all entries invalid: models [] -> auto only" "[('auto', 'auto')]" "$(py 'agent_models("Codex")')"
+cat > "$d/home/.maude/models.json" <<'JSON'
+{"agents":{"Kiro CLI":{"models":[]}}}
+JSON
+assert_eq "user models [] means auto only" "[('auto', 'auto')]" "$(py 'agent_models("Kiro CLI")')"
+assert_eq "...and other agents are untouched" "(6, 5)" "$(py '(len(agent_models("Codex")), len(agent_models("Claude Code")))')"
+cat > "$d/home/.maude/models.json" <<'JSON'
+{"agents":{"Claude Code":{"models":[{"label":"upd","id":"update"},{"label":"def","id":"default"},{"label":"ok","id":"opus"},{"label":"full","id":"claude-opus-5-5"},{"label":"gpt","id":"gpt-6.2-sol"}]}}}
+JSON
+assert_eq "Claude Code: only aliases and claude-* ids (never a wrapper subcommand)" "['auto', 'opus', 'claude-opus-5-5']" "$(py '[i for _,i in agent_models("Claude Code")]')"
+cat > "$d/home/.maude/models.json" <<'JSON'
+{"agents":{"Codex":{"models":[{"label":"[/x]","id":"m1"},{"label":"a[b","id":"m2"},{"label":"tab\there","id":"m3"},{"label":"averyveryverylongname","id":"m4"},{"label":"fine","id":"m5"}]}}}
+JSON
+assert_eq "labels with brackets or control chars rejected, long ones cut to 9" "[('averyvery', 'm4'), ('fine', 'm5')]" "$(py 'agent_models("Codex")[1:]')"
+rm -f "$d/home/.maude/models.json"
+assert_eq "label cut exactly at LABEL_MAX" "averyvery" "$(py '_clean_label("averyveryverylongname")')"
+assert_eq "LABEL_MAX is 9" "9" "$(py 'LABEL_MAX')"
+assert_eq "label markup rejected" "('', '', '')" "$(py '(_clean_label("[/x]"), _clean_label("a]"), _clean_label("x\x07y"))')"
+assert_eq "label non-str rejected" "" "$(py '_clean_label(5)')"
+# version: unknown major rejected (user and download), missing is fine
+cat > "$d/home/.maude/models.json" <<'JSON'
+{"version":2,"agents":{"Codex":{"models":[{"label":"v2","id":"v2"}]}}}
+JSON
+assert_eq "unknown major version in user file ignored" "6" "$(py 'len(agent_models("Codex"))')"
+printf '{"version":"1","agents":{"Codex":{"models":[{"label":"v","id":"v"}]}}}' > "$d/home/.maude/models.json"
+assert_eq "non-int version ignored" "6" "$(py 'len(agent_models("Codex"))')"
+printf '{"agents":{"Codex":{"models":[{"label":"nov","id":"nov"}]}}}' > "$d/home/.maude/models.json"
+assert_eq "missing version is fine" "['auto', 'nov']" "$(py '[i for _,i in agent_models("Codex")]')"
+rm -f "$d/home/.maude/models.json"
+assert_eq "download: version 2 rejected" "False" "$(py 'validate_models_bytes(MODELS_FALLBACK_JSON.replace("\"version\": 1", "\"version\": 2").encode())')"
+assert_eq "download: all agents, empty lists allowed" "True" "$(py 'validate_models_bytes(MODELS_FALLBACK_JSON.encode())')"
+assert_eq "download: an agent missing -> rejected" "False" "$(py 'import json; d = json.loads(MODELS_FALLBACK_JSON); del d["agents"]["Crush"]; validate_models_bytes(json.dumps(d).encode())')"
+assert_eq "download: models key missing -> rejected" "False" "$(py 'import json; d = json.loads(MODELS_FALLBACK_JSON); del d["agents"]["Crush"]["models"]; validate_models_bytes(json.dumps(d).encode())')"
+assert_eq "download: a bad id removed by an empty list is accepted" "True" "$(py 'import json; d = json.loads(MODELS_FALLBACK_JSON); d["agents"]["Codex"]["models"] = []; validate_models_bytes(json.dumps(d).encode())')"
+assert_eq "download: not an object" "False" "$(py 'validate_models_bytes(b"[1]")')"
+mkdir -p "$d/home/.maude"
 assert_eq "huge user list capped to the pool" "True" "$(py '
 import json
 ms = [{"label": "m%d" % i, "id": "m%d" % i} for i in range(40)]
 MODELS_USER_FILE.write_text(json.dumps({"agents": {"Codex": {"models": ms}}}))
 len(agent_models("Codex")) == MODEL_SLOTS and agent_models("Codex")[0][1] == "auto"')"
+rm -f "$d/home/.maude/models.json" "$d/home/.maude/models-default.json"
 
 # ── saved-model reconciliation ────────────────────────────────────────────────
 reset
 assert_eq "saved model in list kept"       "opus"        "$(py 'resolve_model("Claude Code","opus")')"
-assert_eq "saved model not in list -> auto" "auto"       "$(py 'resolve_model("Kiro CLI","opus")')"
+assert_eq "Claude Code: unknown -> opus (H1)" "opus"      "$(py 'resolve_model("Claude Code","gone")')"
+assert_eq "Claude Code: explicit auto kept"   "auto"      "$(py 'resolve_model("Claude Code","auto")')"
+assert_eq "other agent: saved model not in list -> auto" "auto" "$(py 'resolve_model("Kiro CLI","opus")')"
 assert_eq "auto stays"                      "auto"       "$(py 'resolve_model("Codex","auto")')"
 assert_eq "remembered per-agent model wins" "gpt-6.2-sol" "$(py 'resolve_model("Codex","auto","gpt-6.2-sol")')"
 assert_eq "stale remembered -> current if valid" "auto"  "$(py 'resolve_model("Codex","auto","gone")')"
-assert_eq "both stale -> first entry"       "auto"       "$(py 'resolve_model("Codex","opus","gone")')"
+assert_eq "both stale -> the agent default"  "auto"       "$(py 'resolve_model("Codex","opus","gone")')"
 assert_eq "per-agent memory: none yet"      "{}"          "$(py 'read_agent_models()')"
 assert_eq "per-agent memory: save+read"     "{'Codex': 'gpt-6.2-sol', 'Kiro CLI': 'claude-opus-5.5'}" "$(py 'save_agent_model("Codex","gpt-6.2-sol") or save_agent_model("Kiro CLI","claude-opus-5.5") or read_agent_models()')"
+assert_eq "per-agent memory: no fixed temp name left" "0" "$(ls -A "$d/home/.maude" | grep -c 'agent-models.json.tmp' || true)"
+assert_eq "per-agent memory: not for Claude Code" "{'Codex': 'gpt-6.2-sol', 'Kiro CLI': 'claude-opus-5.5'}" "$(py 'save_agent_model("Claude Code","opus") or read_agent_models()')"
 assert_eq "per-agent memory: bad ignored"   "{'Codex': 'gpt-6.2-sol', 'Kiro CLI': 'claude-opus-5.5'}" "$(py 'save_agent_model("Nope","x") or save_agent_model("Codex","a b") or read_agent_models()')"
 printf 'garbage' > "$d/home/.maude/agent-models.json"
 assert_eq "per-agent memory: corrupt -> {}" "{}" "$(py 'read_agent_models()')"
@@ -125,15 +169,19 @@ assert_eq "state dir private"                "700" "$(stat -c %a "$d/home/.maude
 assert_eq "overwrite is atomic + keeps unknown keys" "{'native_only_approved': True, 'x': 1}" "$(py 'save_settings({"native_only_approved": True, "x": 1}) and load_settings()')"
 printf '{ broken' > "$d/home/.maude/settings.json"
 assert_eq "corrupt -> defaults"              "{'native_only_approved': True}" "$(py 'load_settings()')"
-assert_eq "corrupt file kept as .bak"        "{ broken" "$(cat "$d/home/.maude/settings.json.bak")"
-assert_eq "corrupt file moved away"          "no" "$([[ -e "$d/home/.maude/settings.json" ]] && echo yes || echo no)"
+assert_eq "load does not touch a corrupt file" "{ broken" "$(cat "$d/home/.maude/settings.json")"
+assert_eq "load made no .bak"                "no" "$([[ -e "$d/home/.maude/settings.json.bak" ]] && echo yes || echo no)"
+assert_eq "save after corruption works"      "{'native_only_approved': False}" "$(py 'save_settings({"native_only_approved": False}) and load_settings()')"
+assert_eq "save kept the corrupt file as .bak" "{ broken" "$(cat "$d/home/.maude/settings.json.bak")"
 printf '[1,2]' > "$d/home/.maude/settings.json"
-assert_eq "non-object -> defaults + backup"  "{'native_only_approved': True}" "$(py 'load_settings()')"
+assert_eq "non-object -> defaults"           "{'native_only_approved': True}" "$(py 'load_settings()')"
+assert_eq "...file untouched"                "[1,2]" "$(cat "$d/home/.maude/settings.json")"
 printf '{"native_only_approved": "no"}' > "$d/home/.maude/settings.json"
 assert_eq "wrong type -> default"            "{'native_only_approved': True}" "$(py 'load_settings()')"
 printf '\377\376\377' > "$d/home/.maude/settings.json"
 assert_eq "undecodable -> defaults"          "{'native_only_approved': True}" "$(py 'load_settings()')"
-assert_eq "save after corruption works"      "{'native_only_approved': False}" "$(py 'save_settings({"native_only_approved": False}) and load_settings()')"
+assert_eq "a valid file is not backed up"    "{'native_only_approved': False}" "$(rm -f "$d/home/.maude/settings.json.bak"; py 'save_settings({"native_only_approved": False}) and save_settings({"native_only_approved": False}) and load_settings()')"
+assert_eq "...(the corrupt bytes were the .bak of the first save)" "1" "$(ls "$d/home/.maude" | grep -c '^settings.json.bak$')"
 assert_eq "unwritable state dir: save False" "False" "$(HOME="$d/home/.maude/settings.json" python3 -I "${SCRIPT_DIR}/maude-extract.py" "$MAUDE_PY" 'save_settings({"native_only_approved": False})')"
 
 # ── restriction outside the sandbox ───────────────────────────────────────────
@@ -152,7 +200,8 @@ assert_eq "restrict: setting off keeps Codex" "Codex"       "$(py "restrict_agen
 assert_eq "default NATIVE=False (sandbox): no effect" "True" "$(py "agent_allowed('Crush', $ON)")"
 assert_eq "default NATIVE=True reads the setting"     "False" "$(py "NATIVE = True; agent_allowed('Crush', $ON)")"
 assert_eq "missing key means restricted"      "False" "$(py "agent_allowed('Crush', {}, True)")"
-assert_eq "reconcile outside sandbox: Claude -> Kiro, model reset" "('auto', 'Kiro CLI')" "$(reset; py "NATIVE = True; reconcile('opus','Claude Code')")"
-assert_eq "reconcile outside sandbox: Kiro model kept" "('claude-opus-5.5', 'Kiro CLI')" "$(py "NATIVE = True; reconcile('claude-opus-5.5','Kiro CLI')")"
+assert_eq "restricted start: Claude Code -> Kiro CLI" "('Kiro CLI', 'auto')" "$(reset; py "initial_selection('Claude Code', 'opus', {}, $ON, True)")"
+assert_eq "restricted start: Kiro model kept" "('Kiro CLI', 'claude-opus-5.5')" "$(py "initial_selection('Kiro CLI', 'opus', {'Kiro CLI': 'claude-opus-5.5'}, $ON, True)")"
+assert_eq "restriction lifted: the saved agent is back" "('Claude Code', 'opus')" "$(py "initial_selection('Claude Code', 'opus', {}, $OFF, True)")"
 
 suite_summary

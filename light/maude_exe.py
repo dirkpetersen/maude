@@ -30,12 +30,17 @@ DISTRO = "Maude"
 KEYS = (r"Software\Classes\Directory\shell\OpenInMaude",
         r"Software\Classes\Directory\Background\shell\OpenInMaude")
 # Claude Code in the sandbox: continue the last session, else start a new one.
-# $1 = model override (may be empty); else the model in ~/.maude/maude-model ("<model>[,<effort>]",
-# old ~/.maude-model as fallback); else auto (no model argument). The effort (low|medium|high|xhigh|max) becomes --effort.
+# $1 = model override (may be empty); else the model in ~/.maude/maude-model ("<claude model>[,<effort>]", old
+# ~/.maude-model as fallback). No file / empty = opus. An EMPTY model field ("," or ",high") = "auto": no model
+# word (an older maude.exe's OPEN_SH rejects an empty model and runs opus, so it never sees "claude auto").
+# Only fable|opus|sonnet|haiku or a claude-* id is ever given to claude (never e.g. "update"); anything else =
+# opus. The effort (low|medium|high|xhigh|max) becomes --effort.
 OPEN_SH = ('v="$(cat ~/.maude/maude-model 2>/dev/null || cat ~/.maude-model 2>/dev/null)"; '
            'v="${v//[[:space:]]/}"; '
-           'm="${1:-${v%%,*}}"; e=""; [[ "$v" == *,* ]] && e="${v#*,}"; '
-           '[[ "$m" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || m=auto; '
+           'm="$1"; if [[ -z "$m" ]]; then if [[ -z "$v" ]]; then m=opus; elif [[ "$v" == ,* ]]; then m=auto; '
+           'else m="${v%%,*}"; fi; fi; '
+           'e=""; [[ "$v" == *,* ]] && e="${v#*,}"; '
+           '[[ "$m" == auto || "$m" =~ ^(fable|opus|sonnet|haiku|claude-[A-Za-z0-9][A-Za-z0-9._-]{0,70})$ ]] || m=opus; '
            '[[ "$m" == auto ]] && m=() || m=("$m"); '
            'case "$e" in low|medium|high|xhigh|max) x=(--effort "$e");; *) x=();; esac; '
            'claude "${m[@]}" "${x[@]}" --continue || claude "${m[@]}" "${x[@]}"')
@@ -983,11 +988,24 @@ def read_state(userprofile: str, name: str, legacy: str) -> str:
         return ""
 
 
+def claude_model_ok(m: str) -> bool:
+    """The models Claude Code may get from the saved preference: an alias or a claude-* id."""
+    return m in ("fable", "opus", "sonnet", "haiku") or bool(re.fullmatch(r"claude-[A-Za-z0-9][A-Za-z0-9._-]{0,70}", m))
+
+
 def parse_model_pref(raw: str) -> tuple[str, str]:
-    """"<model>[,<effort>]" -> (model, effort); a bad model gives opus, a bad effort gives ""."""
-    m, _, e = raw.strip().partition(",")
+    """"<claude model>[,<effort>]" -> (model, effort), same rules as maude.py: nothing saved = opus; an EMPTY
+    model field ("," or ",high") = "auto" (no model flag); a model Claude Code may not get gives opus; a bad
+    effort gives ""."""
+    raw = raw.strip()
+    m, comma, e = raw.partition(",")
     m, e = m.strip(), e.strip().lower()
-    return (m if valid_model(m) else "auto", e if e in EFFORTS else "")
+    e = e if e in EFFORTS else ""
+    if not raw:
+        return "opus", ""
+    if comma and not m:
+        return "auto", e
+    return (m if (m == "auto" or claude_model_ok(m)) else "opus"), e
 
 
 def windows_model_effort(userprofile: str) -> tuple[str, str]:
