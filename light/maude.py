@@ -432,16 +432,26 @@ def clauderc_path(create: bool = False) -> Path:
     return (maude_dir() if create else STATE_DIR) / "clauderc"
 
 
+# Variables that make a clauderc select a backend by themselves (a live Foundry setup, a custom endpoint, a direct key).
+BACKEND_SELECTORS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def has_backend_selector(rc: dict) -> bool:
+    """True if the parsed clauderc `rc` selects a backend itself: CLAUDE_CODE_USE_FOUNDRY=1, or a non-empty
+    ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN."""
+    return rc.get("CLAUDE_CODE_USE_FOUNDRY") == "1" or any(rc.get(k) for k in BACKEND_SELECTORS)
+
+
 def bedrock_parked_state() -> bool:
     """"Default to AWS Bedrock" is on by way of the parked file. The one predicate the Settings box reader and
     plat_claude_env() share. False without clauderc.inactive. With it: parked when the active clauderc is missing,
-    empty or undecodable, and also when the active file has no CLAUDE_CODE_USE_FOUNDRY=1 (a Paste/Bedrock/Foundry
-    save re-created it while parked: Bedrock stays the default and the next Save parks it again); only an active
-    file with CLAUDE_CODE_USE_FOUNDRY=1 (e.g. a stale .inactive next to a live Foundry setup) means Foundry."""
+    empty or undecodable, or holds no backend selector (a Paste/Bedrock/Foundry save re-created it while parked,
+    e.g. only AWS_REGION: Bedrock stays the default). An active file with a backend selector (the Foundry flag,
+    ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN; e.g. a stale .inactive next to a live Foundry or
+    custom-endpoint setup) is not parked: that backend is the effective one."""
     if not clauderc_inactive_path().exists():
         return False
-    return read_clauderc().get("CLAUDE_CODE_USE_FOUNDRY") != "1"
-
+    return not has_backend_selector(read_clauderc())
 
 def clauderc_inactive_path() -> Path:
     """Where clauderc is parked while "Default to AWS Bedrock" is on (same toggle on every platform)."""
@@ -3703,6 +3713,7 @@ class CredsEntryScreen(ModalScreen[bool]):
         self._default_bedrock_initial = False
         self._parked_at_open = False  # Bedrock was the parked default when the screen opened
         self._ui_ready = False        # set once _init_ui has run (initial state is final)
+        self._active_at_open: dict = {}  # the active clauderc as it was when the screen opened
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -3936,11 +3947,13 @@ class CredsEntryScreen(ModalScreen[bool]):
         cb = self.query_one("#creds-default-bedrock", Checkbox)
         self._default_bedrock_initial = False
         self._parked_at_open = False
+        self._active_at_open = read_clauderc()
         if have_bedrock_creds() and have_foundry_creds():
             cb.display = True
             # bedrock_parked_state(): Bedrock is the default when clauderc is parked as .inactive. With both
-            # files the active one decides: only CLAUDE_CODE_USE_FOUNDRY=1 in it means Foundry (unchecked); an
-            # active file without it is what a Save re-created while parked.
+            # files the active one decides: a backend selector in it (Foundry flag, base URL, API key, auth
+            # token) means that backend (unchecked); an active file without one is what a Save re-created
+            # while parked.
             parked = bedrock_parked_state()
             self._parked_at_open = parked
             cb.value = parked or (
@@ -3976,16 +3989,15 @@ class CredsEntryScreen(ModalScreen[bool]):
         except OSError as err:
             self._set_status(f"[bold red]Could not save: {err}[/]")
             return
-        # Apply the routing checkbox if it's visible (it concerns Bedrock vs Foundry only; the Anthropic key
-        # and OpenCode panes have their own routing).
-        if self.mode not in (self.MODE_ANTHROPIC, self.MODE_OPENCODE):
-            try:
-                note = self._apply_default_provider()
-            except OSError as err:
-                self._set_status(f"[bold red]Could not switch the default provider: {err}[/]")
-                return
-            if note:
-                self.app.notify(note, timeout=8)  # the modal closes right away: the status line would not be seen
+        # Apply the routing checkbox if it's visible, from every pane (a flip of "Default to AWS Bedrock" is never
+        # dropped; a flip also switches an active Anthropic API key off).
+        try:
+            note = self._apply_default_provider()
+        except OSError as err:
+            self._set_status(f"[bold red]Could not switch the default provider: {err}[/]")
+            return
+        if note:
+            self.app.notify(note, timeout=8)  # the modal closes right away: the status line would not be seen
         self.dismiss(True)
 
     def _save_native_only(self) -> None:
@@ -4144,15 +4156,20 @@ class CredsEntryScreen(ModalScreen[bool]):
             return ""
         if cb.value == self._default_bedrock_initial:
             # Not flipped in this session: nothing changes, with one exception. Bedrock was the parked default when
-            # the screen opened and the box still says so, but the pane save (Paste/Bedrock/Foundry) re-created the
-            # active clauderc: park it again (merged, never deleted) so Bedrock stays effective. A stale
-            # .inactive next to an active Foundry file (_parked_at_open False) is left alone.
-            if cb.value and self._parked_at_open and clauderc_path().exists():
+            # the screen opened (_parked_at_open: no backend selector in the active file then) and the box still says
+            # so, but a Paste/Bedrock/Foundry save wrote the active clauderc: park it again (merged, never deleted)
+            # so Bedrock stays effective. Everything that was saved goes dormant with it (the same as before this
+            # screen existed), hence the note. A Save that changed nothing (an empty Paste) never re-parks, and a
+            # stale .inactive next to an active backend (_parked_at_open False) is left alone.
+            if (cb.value and self._parked_at_open and self.mode in (self.MODE_PASTE, self.MODE_BEDROCK, self.MODE_FOUNDRY)
+                    and clauderc_path().exists() and read_clauderc() != self._active_at_open):
                 park_clauderc(True)
                 os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
                 os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
                 if self.mode == self.MODE_FOUNDRY:  # honour the box: the Foundry creds are saved but dormant
                     return "Saved; Bedrock stays the default (untick to use Foundry)."
+                if self.mode == self.MODE_PASTE:
+                    return "Saved; Bedrock stays the default (untick to use it)."
             return ""
         if cb.value:
             # Bedrock is the default now: a plain API key must not win over it, and clauderc is parked so the

@@ -33,7 +33,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "with_active_anthropic_key", "apply_anthropic_key", "OPENCODE_PROVIDER", "OPENCODE_NPM", "OPENCODE_KEY_REF",
         "opencode_config_path", "opencode_url_error", "_opencode_load", "_opencode_store", "read_opencode_custom",
         "merge_opencode_config", "remove_opencode_custom", "KEY_AGENTS",
-        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "bedrock_parked_state", "claude_env_from", "plat_claude_env", "plat_tool_env",
+        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "bedrock_parked_state", "has_backend_selector", "BACKEND_SELECTORS", "claude_env_from", "plat_claude_env", "plat_tool_env",
         "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
 
 def load(platform, login=False):
@@ -309,6 +309,14 @@ ns["write_clauderc"]({"AWS_REGION": "eu-west-1"}, rc)
 check("parked.both_active_without_foundry_flag", ns["bedrock_parked_state"]() is True)
 ns["write_clauderc"]({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, rc)
 check("parked.both_active_foundry_means_not_parked", ns["bedrock_parked_state"]() is False)
+for what, vals in (("base_url", {"ANTHROPIC_BASE_URL": "https://my.proxy/v1", "ANTHROPIC_API_KEY": "k"}), ("api_key_only", {"ANTHROPIC_API_KEY": "sk-ant-x"}),
+                   ("auth_token_only", {"ANTHROPIC_AUTH_TOKEN": "t"})):
+    ns["write_clauderc"](vals, rc)   # an active backend selector next to a parked Bedrock: that backend is effective
+    check(f"parked.both_active_{what}_means_not_parked", ns["bedrock_parked_state"]() is False)
+ns["write_clauderc"]({"OPENAI_API_KEY": "o", "AWS_REGION": "x"}, rc)   # non-backend variables are no selector
+check("parked.both_active_non_backend_still_parked", ns["bedrock_parked_state"]() is True)
+ns["write_clauderc"]({"ANTHROPIC_BASE_URL": ""}, rc)                   # an empty value selects nothing
+check("parked.empty_selector_value_ignored", ns["bedrock_parked_state"]() is True)
 rc.unlink(); inactive.unlink()
 # plat_claude_env natively: both files, active only has AWS_REGION -> Bedrock effective, the active vars still pass
 (home / ".aws").mkdir(exist_ok=True); (home / ".aws" / "config").write_text("[profile bedrock]\nregion = us-west-2\n")
@@ -320,6 +328,10 @@ check("parked.env.both_files_bedrock", e.get("CLAUDE_CODE_USE_BEDROCK") == "1" a
 ns["write_clauderc"]({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_BASE_URL": "https://f", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, ns["clauderc_path"]())
 e = ns["plat_claude_env"]()
 check("parked.env.stale_inactive_next_to_active_foundry", e.get("ANTHROPIC_BASE_URL") == "https://f" and e.get("CLAUDE_CODE_USE_BEDROCK") == "0", e)
+# active ANTHROPIC_API_KEY only next to a parked Bedrock: the direct key is what Claude gets (as on main), not Bedrock
+ns["write_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-direct"}, ns["clauderc_path"]())
+e = ns["plat_claude_env"]()
+check("parked.env.active_api_key_only_is_direct", e.get("ANTHROPIC_API_KEY") == "sk-ant-direct" and e.get("CLAUDE_CODE_USE_BEDROCK") != "1", e)
 (home / ".aws" / "config").unlink()
 reset()
 # secrets are written atomically: no temp file is left behind
