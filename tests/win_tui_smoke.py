@@ -141,12 +141,40 @@ try:
             await wait_until(pilot, lambda: get_on() == {"#model-select": ["opus"], "#tool-select": ["Crush"]})
             on = get_on()
             assert on == {"#model-select": ["opus"], "#tool-select": ["Crush"]}, on
-            exited = []
+            # PowerShell button (Windows): suspends, runs powershell.exe -NoLogo in the selected
+            # project's folder (else home) and comes back to the TUI; it must NOT exit the app.
+            import contextlib
+            assert str(app.query_one("#btn-cli").label) == "PowerShell"
+            exited, ran = [], []
             app.exit = lambda *a, **k: exited.append(1)
-            app.query_one("#btn-cli").press()
+            app.suspend = contextlib.nullcontext
+            real_run, maude.subprocess.run = maude.subprocess.run, \
+                lambda cmd, **kw: ran.append((cmd, kw.get("cwd"))) or subprocess.CompletedProcess(cmd, 0)
+            try:
+                table.move_cursor(row=2)                      # share project (row 2 after the outside delete)
+                await wait_until(pilot, lambda: app._selected_project() == proj)
+                app.query_one("#btn-cli").press()
+                await wait_until(pilot, lambda: len(ran) == 1)
+                assert ran[0][0][0].lower().endswith("powershell.exe") and ran[0][0][1:] == ["-NoLogo"], ran
+                assert ran[0][1] == str(proj), ran
+                table.cursor_coordinate = Coordinate(1, 0)    # the rule: nothing selected
+                await wait_until(pilot, lambda: app._selected_project() is None)
+                app.query_one("#btn-cli").press()
+                await wait_until(pilot, lambda: len(ran) == 2)
+                assert ran[1][1] == os.path.expanduser("~"), ran
+                # powershell.exe missing: notify, stay in the TUI
+                def boom(cmd, **kw): raise FileNotFoundError("nope")
+                maude.subprocess.run = boom
+                app.query_one("#btn-cli").press()
+                await wait_until(pilot, lambda: any("PowerShell" in n.message for n in app._notifications))
+                assert any("Could not start PowerShell" in n.message for n in app._notifications), list(app._notifications)
+            finally:
+                maude.subprocess.run = real_run
             await pilot.pause()
-            await wait_until(pilot, lambda: exited)
-            assert exited  # Command Line returns to the PowerShell that started maude.exe
+            assert not exited and len(app.screen_stack) == 1, (exited, app.screen_stack)  # app still running
+            await wait_until(pilot, lambda: app.query_one("#projects-table").row_count >= 1)
+            assert app.query_one("#btn-cli").display
+            assert any(b.key == "q" and b.action == "quit_to_shell" and b.show for b in app.BINDINGS), "q must stay a visible Quit"
             # Update Maude: visible on Windows, runs native_update (stubbed: no network) into the log,
             # and "Reload UI" exits the app with 42 (maude_exe.run_tui relaunches the exe on that).
             seen = []

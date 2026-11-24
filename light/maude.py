@@ -5299,7 +5299,7 @@ class MaudeApp(App):
             yield Button("Setup Git(hub)",  id="btn-github")
             yield Button("Set Creds",       id="btn-creds")
             yield Button("Update Maude",   id="btn-update")
-            yield Button("Command Line",    id="btn-cli")
+            yield Button("PowerShell" if IS_WIN else "Command Line", id="btn-cli")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -5631,7 +5631,31 @@ class MaudeApp(App):
 
     @on(Button.Pressed, "#btn-cli")
     def btn_cli(self) -> None:
-        self.exit()  # back to the shell that started the TUI (bash, or PowerShell on Windows)
+        if not IS_WIN:
+            self.exit()  # back to the shell that started the TUI (bash)
+            return
+        # Windows: maude.exe may have been started from Explorer/a shortcut (no shell behind it),
+        # so open PowerShell here and come back to the TUI when it exits.
+        ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                          "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+        if not os.path.isfile(ps):
+            ps = shutil.which("powershell.exe") or shutil.which("powershell") or ""
+        sel = self._selected_project()
+        cwd = str(sel) if sel is not None else os.path.expanduser("~")
+        if not ps:
+            self.notify("Could not start PowerShell: powershell.exe not found.", severity="error")
+            return
+        try:
+            with self.suspend():
+                print("Type exit to return to Maude.", flush=True)
+                try:
+                    subprocess.run([ps, "-NoLogo"], cwd=cwd, env=_child_env(), check=False)
+                except KeyboardInterrupt:
+                    pass
+        except OSError as e:
+            self.notify(f"Could not start PowerShell: {e}", severity="error")
+            return
+        self._refresh_table()
 
     @on(DataTable.RowSelected)
     def row_selected(self, event: DataTable.RowSelected) -> None:
