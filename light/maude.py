@@ -202,6 +202,23 @@ def plat_remove_outside(folder: str) -> None:
 
 
 MAC_TOOL_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
+MAC_GIT_STUB = "/usr/bin/git"  # Apple's stub: without the Command Line Tools it only pops the install dialog
+_mac_clt_cache: list = [None]  # per process: does `xcode-select -p` succeed (None = not checked yet)
+
+
+def mac_clt_ready(run=None) -> bool:
+    """macOS: are the Command Line Tools installed (so /usr/bin/git is real git, not Apple's stub)?
+    Cached per process; mac_ensure_tool resets the cache after an install attempt. An injected `run`
+    (tests) is never cached."""
+    if run is None and _mac_clt_cache[0] is not None:
+        return _mac_clt_cache[0]
+    try:
+        ok = (run or subprocess.run)(["xcode-select", "-p"], capture_output=True).returncode == 0
+    except OSError:
+        ok = False
+    if run is None:
+        _mac_clt_cache[0] = ok
+    return ok
 
 
 def plat_tool(name: str) -> str | None:
@@ -210,13 +227,15 @@ def plat_tool(name: str) -> str | None:
     if IS_WIN:
         return mx.find_git() if name == "git" else mx.find_gh() if name == "gh" else mx.find_tool(name)
     found = shutil.which(name)
-    if found or not IS_MAC:
+    if not IS_MAC:
+        return found
+    if found and not (name == "git" and found == MAC_GIT_STUB and not mac_clt_ready()):
         return found
     home = Path.home()
     for d in (*MAC_TOOL_DIRS, str(home / ".local" / "bin"), str(home / ".bun" / "bin")):
-        found = shutil.which(name, path=d)
-        if found:
-            return found
+        cand = shutil.which(name, path=d)
+        if cand and not (name == "git" and cand == MAC_GIT_STUB and not mac_clt_ready()):
+            return cand
     return None
 
 
@@ -245,9 +264,17 @@ _MAC_BREW_TOOLS = {
     "opencode": ("opencode", "https://opencode.ai"),
     "crush": ("charmbracelet/tap/crush", "https://github.com/charmbracelet/crush"),
 }
-_MAC_CURL_INSTALL = {  # official per-user installers (they put the binary in ~/.local/bin)
-    "claude": "curl -fsSL https://claude.ai/install.sh | bash",
-    "kiro-cli": "curl -fsSL https://cli.kiro.dev/install | bash -s -- --no-modify-path",
+# Official installers, run through bash with pipefail so a failed download is an error, not an empty
+# script that "succeeds". claude puts its binary in ~/.local/bin. The Kiro script, on macOS, normally
+# copies "Kiro CLI.app" to /Applications and opens it (the app is expected to set up the command);
+# only its zip fallback installs ~/.local/bin/kiro-cli itself. The script creates no symlink.
+_MAC_CURL_INSTALL = {
+    "claude": "set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash",
+    "kiro-cli": "set -o pipefail; curl -fsSL https://cli.kiro.dev/install | bash -s -- --no-modify-path",
+}
+MAC_NOT_FOUND_HINT = {
+    "kiro-cli": "Kiro CLI installs as an app: open \"Kiro CLI.app\" (in /Applications) once to finish "
+                "setup, then open a new terminal window and try again.",
 }
 
 
@@ -278,13 +305,8 @@ def _mac_find(name: str, which=None, run=None) -> str | None:
     """plat_tool, except that Apple's /usr/bin/git stub (present without the Command Line Tools,
     it only pops the install dialog) does not count as an installed git."""
     found = (which or plat_tool)(name)
-    if name == "git" and found == "/usr/bin/git":
-        try:
-            ok = (run or subprocess.run)(["xcode-select", "-p"], capture_output=True).returncode == 0
-        except OSError:
-            ok = False
-        if not ok:
-            return None
+    if name == "git" and found == MAC_GIT_STUB and not mac_clt_ready(run):
+        return None
     return found
 
 
@@ -325,7 +347,9 @@ def mac_ensure_tool(tool: str, find=None, ask=None, run=None, say=print, quiet_h
     except OSError as err:
         say(f"Could not run the {label} installer: {err}")
         return None
-    if tool == "git" and argv[0] == "xcode-select":  # the dialog installs in the background
+    xcode = tool == "git" and argv[0] == "xcode-select"
+    _mac_clt_cache[0] = None  # an install was attempted: re-check the Command Line Tools
+    if xcode:  # the dialog installs in the background
         try:
             ask("Press Enter when the Command Line Tools installation has finished. ")
         except (EOFError, KeyboardInterrupt):
@@ -335,7 +359,12 @@ def mac_ensure_tool(tool: str, find=None, ask=None, run=None, say=print, quiet_h
         return None
     exe = find(tool)  # re-resolve: ~/.local/bin, /opt/homebrew/bin are searched by plat_tool
     if not exe:
-        say(f"{label} was installed but is not found yet. Open a new terminal window and try again.")
+        if xcode:
+            say("Git is not installed yet: the Command Line Tools are not finished (Apple's dialog may "
+                "have been cancelled or is still running). Try again when it has finished.")
+        else:
+            say(MAC_NOT_FOUND_HINT.get(tool) or
+                f"{label} was installed but is not found yet. Open a new terminal window and try again.")
     return exe
 
 
@@ -571,7 +600,7 @@ def get_maude_version() -> str:
         return mx.VERSION
     try:
         v = _sp.check_output(
-            ["git", "-C", str(Path(__file__).parent), "describe", "--tags", "--always"],
+            [git_exe(), "-C", str(Path(__file__).parent), "describe", "--tags", "--always"],
             stderr=_sp.DEVNULL, text=True, timeout=2,
         ).strip()
         if v:
@@ -1408,9 +1437,17 @@ SSH_KEY_PATH = Path.home() / ".ssh" / "id_ed25519"
 # ssh-keygen and its MSYS ssh-agent cannot talk to Windows OpenSSH, so it is not used for keys.
 # Commit signing is SSH signing (gpg.format ssh), never gpg, on Windows/macOS; the sandbox keeps gpg.
 
+MAC_NO_GIT = "/nonexistent/git"  # subprocess raises FileNotFoundError, like a missing git on Windows
+
+
 def git_exe() -> str:
     """git binary for subprocess calls: the offered/installed one natively, plain "git" in the sandbox."""
-    return (plat_tool("git") or "git") if is_native() else "git"
+    if not is_native():
+        return "git"
+    found = plat_tool("git")
+    if IS_MAC and not found:  # never the bare name: that would run Apple's stub (install dialog)
+        return MAC_NO_GIT
+    return found or "git"
 
 
 def gh_exe() -> str | None:
@@ -5789,8 +5826,8 @@ class MaudeApp(App):
         path = PROJECTS_DIR / name
         path.mkdir(parents=True, exist_ok=True)
         try:
-            subprocess.run(["git", "-C", str(path), "init", "--quiet"], check=False)
-        except FileNotFoundError:  # Git for Windows missing
+            subprocess.run([git_exe() if IS_MAC else "git", "-C", str(path), "init", "--quiet"], check=False)
+        except FileNotFoundError:  # Git for Windows / Command Line Tools missing
             self.notify("git not found: project created without git init", severity="warning")
         self._refresh_table()
         # A just-created project has no prior session, so launch fresh and

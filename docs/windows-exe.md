@@ -231,12 +231,12 @@ macOS is prepared and has never been run on a Mac. What exists: a red logo witho
 
 | Tool | Without Homebrew | With Homebrew |
 |------|------------------|---------------|
-| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` (binary in `~/.local/bin`) | same |
-| Kiro CLI | `curl -fsSL https://cli.kiro.dev/install \| bash -s -- --no-modify-path` (the script the Linux sandbox uses; not tried on a Mac) | same |
+| Claude Code | `set -o pipefail; curl -fsSL https://claude.ai/install.sh \| bash` (binary in `~/.local/bin`) | same |
+| Kiro CLI | `set -o pipefail; curl -fsSL https://cli.kiro.dev/install \| bash -s -- --no-modify-path` (on macOS the script first installs a DMG: it copies `Kiro CLI.app` to `/Applications` and opens it, and does not create `~/.local/bin/kiro-cli` itself; only its zip fallback does. If the command is not found afterwards Maude says to open Kiro CLI.app once; not tried on a Mac) | same |
 | Git | `xcode-select --install`: opens an Apple dialog (Command Line Tools, about 1 GB); Maude waits for Enter after you finished it | `brew install git` |
 | GitHub CLI, OpenCode, Crush | only a hint with the command and the vendor URL (cli.github.com, opencode.ai, github.com/charmbracelet/crush) | `brew install gh` / `brew install opencode` / `brew install charmbracelet/tap/crush` |
 
-Where it fires: Open Project (Claude Code or the selected tool; git and gh once per Maude run, silently when there is no installer), and the Setup Git(hub) wizard (git and gh, asked again even after a decline). Apple's `/usr/bin/git` stub, which only opens the install dialog, does not count as an installed git until `xcode-select -p` succeeds. Tested by `tests/test-mac-install.sh` (pure plan and runner with every side effect injected; no installer is ever run). Not verified: any of these installers on a real Mac. `from __future__ import annotations` keeps the file importable by the 3.9 system Python on macOS.
+Where it fires: Open Project (Claude Code or the selected tool; git and gh once per Maude run, silently when there is no installer), and the Setup Git(hub) wizard (git and gh, asked again even after a decline). Apple's `/usr/bin/git` stub, which only opens the install dialog, does not count as an installed git until `xcode-select -p` succeeds: `plat_tool("git")` returns None for it (result cached per process, re-checked after an install attempt), and `git_exe()` then gives a path that does not exist instead of the bare name `git`, so no code path pops Apple's dialog by accident. The curl installers run with `pipefail`, so a failed download is reported as a failed install. Tested by `tests/test-mac-install.sh` (pure plan and runner with every side effect injected; no installer is ever run). Not verified: any of these installers on a real Mac. `from __future__ import annotations` keeps the file importable by the 3.9 system Python on macOS.
 
 ## Status and next steps (v0.3.4)
 
