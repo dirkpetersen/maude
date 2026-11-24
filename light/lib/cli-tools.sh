@@ -36,6 +36,71 @@ update_crush() {
     echo "cli: failed"; return 1
 }
 
+# Antigravity CLI (Google, command `agy`). The vendor script (antigravity.google/cli/install.sh)
+# installs ~/.local/bin/agy and then runs `agy install`, which sets up the shell environment (it
+# may edit rc files, which Maude manages itself). So Maude does the part that matters: read the
+# vendor's own per-platform manifest, download the archive over HTTPS, check the manifest's SHA-512
+# and unpack the binary. Same manifest the vendor script reads. agy updates itself in the background.
+# MAUDE_AGY_MANIFEST_BASE overrides the manifest host (tests).
+update_antigravity() {
+    local bin="$HOME/.local/bin/agy"
+    if [[ -x "$bin" ]]; then echo "cli: installed (updates itself)"; return 0; fi
+    local base="${MAUDE_AGY_MANIFEST_BASE:-https://antigravity-cli-auto-updater-974169037036.us-central1.run.app}"
+    local arch
+    case "$(uname -m)" in
+        x86_64|amd64)  arch=amd64 ;;
+        aarch64|arm64) arch=arm64 ;;
+        *) echo "cli: skipped (unsupported CPU)"; return 1 ;;
+    esac
+    command -v python3 >/dev/null 2>&1 || { echo "cli: skipped (python3 not found)"; return 1; }
+    local d rc=1
+    d=$(mktemp -d) || { echo "cli: failed (no temp dir)"; return 1; }
+    local url sha
+    if curl -fsSL --max-time 60 "$base/manifests/linux_${arch}.json" -o "$d/manifest.json"; then
+        # prints "<url> <sha512>" only if both look right: an https storage.googleapis.com archive and 128 hex digits
+        read -r url sha < <(python3 -I - "$d/manifest.json" <<'PY' 2>/dev/null
+import json, re, sys
+m = json.load(open(sys.argv[1]))
+u, s = m.get("url", ""), m.get("sha512", "")
+if re.fullmatch(r"https://storage\.googleapis\.com/antigravity-public/[A-Za-z0-9._/-]+\.tar\.gz", u) and re.fullmatch(r"[0-9a-fA-F]{128}", s):
+    print(u, s.lower())
+PY
+) || true
+    fi
+    if [[ -n "${url:-}" && -n "${sha:-}" ]] \
+       && curl -fsSL --max-time 300 "$url" -o "$d/agy.tar.gz" \
+       && [[ "$(sha512sum "$d/agy.tar.gz" | cut -d' ' -f1)" == "$sha" ]] \
+       && tar -xzf "$d/agy.tar.gz" -C "$d" antigravity 2>/dev/null \
+       && mkdir -p "$HOME/.local/bin" \
+       && install -m 755 "$d/antigravity" "$bin"; then
+        rc=0
+    fi
+    rm -rf "$d"
+    if [[ $rc -eq 0 ]]; then echo "cli: installed"; else echo "cli: failed"; fi
+    return $rc
+}
+
+# GitHub Copilot CLI (command `copilot`). The vendor script (gh.io/copilot-install) downloads the
+# release tarball and checks it against the release's SHA256SUMS.txt itself; as a non-root user it
+# installs to ~/.local/bin. Download first, then run (no curl | bash). ~/.local/bin is put on PATH
+# for the run so the script does not stop to ask about editing a shell profile. The npm package
+# @github/copilot needs Node.js 22+ and is not used.
+update_copilot() {
+    local bin="$HOME/.local/bin/copilot"
+    if [[ -x "$bin" ]]; then echo "cli: installed (update with 'copilot update')"; return 0; fi
+    local d rc=1
+    d=$(mktemp -d) || { echo "cli: failed (no temp dir)"; return 1; }
+    mkdir -p "$HOME/.local/bin"
+    if curl -fsSL --max-time 60 https://gh.io/copilot-install -o "$d/install.sh" \
+       && PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" timeout 300 bash "$d/install.sh" </dev/null >/dev/null 2>&1 \
+       && [[ -x "$bin" ]]; then
+        rc=0
+    fi
+    rm -rf "$d"
+    if [[ $rc -eq 0 ]]; then echo "cli: installed"; else echo "cli: failed"; fi
+    return $rc
+}
+
 # Make ~/.kiro/skills a symlink to ~/.claude/skills so Kiro sees the same
 # skills as Claude Code. Idempotent; anything else already there is moved
 # aside (never deleted).

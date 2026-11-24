@@ -139,8 +139,8 @@ for _tool in codex opencode grok; do
 done
 unset _tool
 
-# ── Install the extra TUI "AI tool" CLIs (Kiro CLI, Crush) ───────────
-for _tool in kiro crush; do
+# ── Install the extra TUI "AI tool" CLIs (Kiro CLI, Crush, Antigravity, Copilot CLI) ───────────
+for _tool in kiro crush antigravity copilot; do
     echo "Installing ${_tool} CLI..."
     if "update_${_tool}"; then
         echo "  ${_tool} CLI installed."

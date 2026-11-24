@@ -167,6 +167,7 @@ The TUI is a full-screen Textual interface that replaces the command-line workfl
 | *Perplexity MCP* checkbox | Under *Clear History*, above *Autostart*, off by default. Ticking creates `~/.maude-perplexity`. When you open a project from the TUI, Maude then adds the Perplexity Computer connector (`perplexity-computer`, `https://www.perplexity.ai/rest/computer/mcp`) and runs `claude mcp login` so you can sign in. Unticking removes the connector right away. While the box has never been ticked, Maude never touches a connector you added yourself. It is a user-scope MCP entry in `~/.claude.json`. |
 | *Model* radio buttons | Choose which Claude model opens for your projects: `opus` (default), `fable`, `sonnet`, or `haiku`. The selection is saved to `~/.maude/maude-model` and persists across sessions. |
 | *Thinking* radio buttons | Choose the thinking level for Claude Code: `auto` (default), `low`, `medium`, `high`, `xhigh` or `max` (passed as `--effort`). Saved with the model, for example `opus,high`. |
+| *Agent installs* | `maude-bootstrap.sh` and `maude update` install these agents when missing: Codex (`codex`) and Grok (`grok`) through the reviewer libs, Antigravity (`agy`, Google manifest + SHA-512) and GitHub Copilot CLI (`copilot`, official script, no Node needed) through `lib/cli-tools.sh`, next to Kiro CLI and Crush. On Windows (`maude.exe`) and macOS Maude offers the same installs per user when you open a project with a missing agent; see `docs/windows-exe.md`. |
 | *AI tool* radio buttons | Choose the tool that opens your projects: `Claude Code` (default), `Kiro CLI`, `OpenCode` or `Crush`. Saved to `~/.maude/maude-tool`. The Claude model choice applies to Claude Code only; the other tools start on their own default model. `fable` works only in Claude Code, so picking it selects Claude Code, and picking another tool while `fable` is set switches the model to `opus`. Kiro CLI asks you to sign in with a device code on first use. |
 
 **Project list (right panel)**
@@ -414,6 +415,6 @@ Maude Light could be ported to macOS using [Lima](https://github.com/lima-vm/lim
 | `teardown-wsl-maude.ps1` | Admin (PowerShell) | Unregister distro, remove WT profile + shortcut, optionally remove template |
 | `root-bootstrap.sh` | root (inside WSL) | User creation, wsl.conf, fstab mount, mom, PATH, welcome screen |
 | `dev-mode.sh` | root (inside WSL) | Opt-in dev mode: standard WSL behavior + sudo with password; removes sandbox isolation |
-| `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, Kiro CLI, Crush, Claude Code config |
+| `maude-bootstrap.sh` | maude user (inside WSL) | dev-station, Bun, kanna-code, skills, reviewer CLIs (Codex, Grok, OpenCode, Gemini), Kiro CLI, Crush, Antigravity (`agy`), GitHub Copilot CLI (`copilot`), Claude Code config |
 | `maude` | maude user (inside WSL) | CLI launcher: creates projects, inits git, launches Claude Code; warns on suspicious repos |
 | `maude.py` | maude user (inside WSL) | Textual TUI: project launcher, model picker, Web UI toggle; self-updates daily at noon |

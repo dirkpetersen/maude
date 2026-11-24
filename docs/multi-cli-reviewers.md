@@ -19,6 +19,22 @@ maintained **right below Gemini** in both the bootstrap and update pipelines:
 | **OpenCode** (`opencode`) | anomalyco (OSS) | reviewer with **open-weight LLMs (GLM)** | GLM-5.x via Z.ai or Bedrock |
 | **Grok Build** (`grok`) | xAI | reviewer / codegen | Grok 4.x |
 
+**Also TUI agents (added later).** Codex (`codex`) and Grok (`grok`) are also selectable
+agents in the TUI, so these two libs double as their installers: `update_codex` and
+`update_grok` run at bootstrap and on every `maude update` and install the binary into
+`~/.local/bin` when it is missing (`maude update` re-runs them, which also upgrades).
+Nothing else is needed for them. The two other new agents have no reviewer skill and live in
+`lib/cli-tools.sh` as install-if-missing, like Kiro CLI and Crush:
+
+| Agent | Binary | Sandbox install (`lib/cli-tools.sh`) | Source |
+|-------|--------|--------------------------------------|--------|
+| Antigravity | `agy` | `update_antigravity`: Google's per-platform manifest, https `storage.googleapis.com` archive only, SHA-512 checked, `antigravity` extracted to `~/.local/bin/agy`. The vendor script is not run because its final `agy install` step sets up shell environment files that Maude manages itself. `agy` updates itself afterwards | antigravity.google/cli/install.sh |
+| GitHub Copilot CLI | `copilot` | `update_copilot`: downloads `https://gh.io/copilot-install` to a temp dir, runs it with `PREFIX=~/.local` (the script verifies the release `SHA256SUMS.txt`). No Node.js needed (the npm package `@github/copilot` requires Node 22+) | docs.github.com "Install Copilot CLI" |
+
+Both are wired into `maude-bootstrap.sh` and `maude update` next to Kiro CLI and Crush and
+are covered by `tests/test-cli-tools.sh` (fake `curl`, scratch HOME). Windows and macOS
+installers for all four are in `windows-exe.md`.
+
 Requirements:
 
 1. **Fully functional at initial deployment** (`maude-bootstrap.sh`) **and after every

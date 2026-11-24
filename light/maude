@@ -650,7 +650,7 @@ update_all() {
         JPID[gemini]=$!
     fi
     local _rtool
-    for _rtool in codex opencode grok kiro crush; do
+    for _rtool in codex opencode grok kiro crush antigravity copilot; do
         if declare -F "update_${_rtool}" >/dev/null; then
             _alloc_job "$_rtool"
             ( "update_${_rtool}" ) > "${JOUT[$_rtool]}" 2> "${JERR[$_rtool]}" &
@@ -840,9 +840,9 @@ update_all() {
     # These already ran (in parallel with everything above) — this loop
     # only reads back the captured output.
     local _rtool _rline
-    for _rtool in codex opencode grok kiro crush; do
+    for _rtool in codex opencode grok kiro crush antigravity copilot; do
         case "$_rtool" in
-            kiro|crush) echo -e "${BOLD}Installing ${_rtool} CLI if missing...${NC}" ;;
+            kiro|crush|antigravity|copilot) echo -e "${BOLD}Installing ${_rtool} CLI if missing...${NC}" ;;
             *)          echo -e "${BOLD}Updating ${_rtool} CLI + skill...${NC}" ;;
         esac
         if [[ -n "${JPID[$_rtool]:-}" ]]; then
@@ -861,7 +861,7 @@ update_all() {
             fi
             [[ "${JRC[$_rtool]:-1}" -ne 0 ]] && rc=1
         else
-            case "$_rtool" in kiro|crush) _lf=cli-tools ;; *) _lf=$_rtool ;; esac
+            case "$_rtool" in kiro|crush|antigravity|copilot) _lf=cli-tools ;; *) _lf=$_rtool ;; esac
             echo -e "${YELLOW}  ${_lf}.sh library not loaded — skipping${NC}"
             rc=1
         fi

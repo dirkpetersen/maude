@@ -257,13 +257,25 @@ def plat_real_claude() -> str:
 
 # Binary name -> the name shown to the user.
 MAC_TOOL_LABELS = {"claude": "Claude Code", "git": "Git", "gh": "GitHub CLI",
-                   "kiro-cli": "Kiro CLI", "opencode": "OpenCode", "crush": "Crush"}
+                   "kiro-cli": "Kiro CLI", "opencode": "OpenCode", "crush": "Crush",
+                   "codex": "Codex", "agy": "Antigravity", "grok": "Grok", "copilot": "Copilot CLI"}
+# Agent key -> the command (binary) each agent installs, for the TUI picker to launch. Same table in
+# maude_exe.py (AGENT_BINARIES); tests/test-maude-exe.sh checks the two stay equal.
+AGENT_BINARIES = {"codex": "codex", "antigravity": "agy", "grok": "grok", "copilot": "copilot"}
 MAC_BREW_URL = "https://brew.sh"
 # gh / opencode / crush: (brew formula, manual-install URL)
 _MAC_BREW_TOOLS = {
     "gh": ("gh", "https://cli.github.com"),
     "opencode": ("opencode", "https://opencode.ai"),
     "crush": ("charmbracelet/tap/crush", "https://github.com/charmbracelet/crush"),
+}
+# codex / agy / copilot: Homebrew casks (formulae.brew.sh/cask/codex, /cask/antigravity-cli,
+# /cask/copilot-cli; docs.github.com "Install Copilot CLI"). Without brew the vendor's own script is used
+# (_MAC_CURL_INSTALL). Binary name -> (cask, manual-install URL).
+_MAC_BREW_CASKS = {
+    "codex": ("codex", "https://github.com/openai/codex"),
+    "agy": ("antigravity-cli", "https://antigravity.google/docs/cli/install"),
+    "copilot": ("copilot-cli", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
 }
 # Official installers, run through bash with pipefail so a failed download is an error, not an empty
 # script that "succeeds". claude puts its binary in ~/.local/bin. The Kiro script, on macOS, normally
@@ -272,6 +284,14 @@ _MAC_BREW_TOOLS = {
 _MAC_CURL_INSTALL = {
     "claude": "set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash",
     "kiro-cli": "set -o pipefail; curl -fsSL https://cli.kiro.dev/install | bash -s -- --no-modify-path",
+    # no Homebrew package for grok: its official script only (x.ai/cli/install.sh, installs ~/.grok/bin + a link in ~/.local/bin)
+    "grok": "set -o pipefail; curl -fsSL https://x.ai/cli/install.sh | bash",
+}
+# Used only when brew is missing (see _MAC_BREW_CASKS). The scripts install in the user's home, never sudo.
+_MAC_CURL_FALLBACK = {
+    "codex": "set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=true sh",
+    "agy": "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    "copilot": "set -o pipefail; curl -fsSL https://gh.io/copilot-install | bash",
 }
 MAC_NOT_FOUND_HINT = {
     "kiro-cli": "The Kiro installer opens \"Kiro CLI.app\" (in /Applications) to finish setup. Wait for "
@@ -293,6 +313,12 @@ def mac_install_plan(tool: str, have_brew: bool) -> tuple[list[str] | None, str,
         return (["xcode-select", "--install"], "xcode-select --install",
                 "This opens a macOS dialog (Apple Command Line Tools, about 1 GB): click Install there, "
                 "wait until it finishes, then come back here.")
+    if tool in _MAC_BREW_CASKS:
+        cask, url = _MAC_BREW_CASKS[tool]
+        if have_brew:
+            return ["brew", "install", "--cask", cask], f"brew install --cask {cask}", ""
+        cmd = _MAC_CURL_FALLBACK[tool]
+        return ["/bin/bash", "-c", cmd], cmd, ""
     if tool in _MAC_BREW_TOOLS:
         formula, url = _MAC_BREW_TOOLS[tool]
         if have_brew:

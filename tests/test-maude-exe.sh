@@ -286,6 +286,130 @@ assert_contains "kiro HTTPException message" "download or install failed: Incomp
 assert_eq "kiro manifest with a wrong type does not raise" "1 0 tmp-left=0 The Kiro CLI manifest has no Windows x86_64 installer." "$(kiro_flow shape "$td" | head -1)"
 rm -rf "$td"
 
+# New agents: Codex, Grok (vendor PowerShell installers), Antigravity, Copilot CLI (native, verified, per user)
+assert_eq "agent binaries" "{'codex': 'codex', 'antigravity': 'agy', 'grok': 'grok', 'copilot': 'copilot'}" "$(py "m.AGENT_BINARIES")"
+assert_eq "agent binaries match the TOOL_INSTALL binaries" "['codex', 'agy', 'grok', 'copilot']" "$(py "[m.TOOL_INSTALL[l][0] for l in ('Codex', 'Antigravity', 'Grok', 'Copilot CLI')]")"
+assert_eq "agent binaries equal in maude.py (macOS table)" "$(py "m.AGENT_BINARIES")" "$(python3 -I -c "
+import ast, sys
+for n in ast.parse(open(sys.argv[1], encoding='utf-8').read()).body:
+    if isinstance(n, ast.Assign) and any(getattr(t, 'id', '') == 'AGENT_BINARIES' for t in n.targets):
+        print(ast.literal_eval(n.value))" "${SCRIPT_DIR}/../light/maude.py")"
+assert_eq "plan codex: vendor script, no bun" "[('Codex', \"\$env:CODEX_NON_INTERACTIVE='true'; irm https://chatgpt.com/codex/install.ps1 | iex\")]" "$(py "m.install_plan('Codex', False, False)")"
+assert_eq "plan grok: vendor script, no bun" "[('Grok', 'irm https://x.ai/cli/install.ps1 | iex')]" "$(py "m.install_plan('Grok', False, False)")"
+assert_eq "plan antigravity and copilot are single native steps" "['Antigravity', 'Copilot CLI']" "$(py "[m.install_plan(t, False, False)[0][0] for t in ('Antigravity', 'Copilot CLI')]")"
+assert_eq "native installers registered" "True True" "$(py "'Antigravity' in m.NATIVE_INSTALL") $(py "'Copilot CLI' in m.NATIVE_INSTALL")"
+assert_eq "no new agent needs admin, msiexec, winget or npm" 0 "$(py "sum(any(w in m.TOOL_INSTALL[l][1].lower() for w in ('runas', 'msiexec', 'winget', 'npm', 'sudo')) for l in ('Codex', 'Antigravity', 'Grok', 'Copilot CLI'))")"
+assert_eq "find_tool codex vendor folder" 'C:\L\Programs\OpenAI\Codex\bin' "$(py "m.find_tool('codex', {'USERPROFILE': r'C:\\U', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: path if path and 'Codex' in path else None)")"
+assert_eq "find_tool grok vendor folder" 'C:\U\.grok\bin' "$(py "m.find_tool('grok', {'USERPROFILE': r'C:\\U'}, lambda b, path=None: path if path and path.endswith('.grok\\\\bin') else None)")"
+assert_eq "find_tool agy per-user folder" 'C:\L\agy\bin' "$(py "m.find_tool('agy', {'USERPROFILE': r'C:\\U', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: path if path and path.endswith('agy\\\\bin') else None)")"
+assert_eq "find_tool copilot per-user folder" 'C:\L\Programs\Copilot CLI' "$(py "m.find_tool('copilot', {'USERPROFILE': r'C:\\U', 'LOCALAPPDATA': r'C:\\L'}, lambda b, path=None: path if path and 'Copilot' in path else None)")"
+assert_eq "user_dirs without LOCALAPPDATA is unchanged" 'C:\U\.local\bin;C:\U\.bun\bin' "$(py "';'.join(m.user_dirs({'USERPROFILE': r'C:\\U'}))")"
+
+# agy_package: only a storage.googleapis.com antigravity-public .exe with a 128-digit SHA-512
+Z128=$(printf '0%.0s' $(seq 128))
+AGYU=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.15-1/windows-x64/cli_windows_x64.exe
+apk() { py "m.agy_package({'url': '$1', 'sha512': '$2'})"; }
+assert_eq "agy package ok" "('$AGYU', '$Z128')" "$(apk "$AGYU" "$Z128")"
+for bad in 'http://storage.googleapis.com/antigravity-public/a.exe' 'https://evil.example/antigravity-public/a.exe' 'https://storage.googleapis.com/other/a.exe' 'https://storage.googleapis.com/antigravity-public/../a.exe' 'https://storage.googleapis.com/antigravity-public/a.msi' 'https://storage.googleapis.com/antigravity-public/a.exe?x=1'; do
+  assert_eq "agy package rejects url '$bad'" None "$(apk "$bad" "$Z128")"
+done
+assert_eq "agy package rejects a sha256 digest" None "$(apk "$AGYU" "$Z64")"
+assert_eq "agy package: junk manifest" None "$(py "m.agy_package([1])")"
+
+# download_verified: a 128-digit digest means SHA-512
+dv_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys, io, os, hashlib, tempfile
+sys.path.insert(0, sys.argv[1]); import maude_exe as m
+algo, good = sys.argv[2], sys.argv[3] == "good"
+data = b"payload"
+dg = getattr(hashlib, algo)(data).hexdigest()
+if not good:
+    dg = "0" * len(dg)
+td = tempfile.mkdtemp(); dest = os.path.join(td, "f")
+try:
+    m.download_verified("https://x.example/f", dest, dg, lambda req, timeout=None: io.BytesIO(data))
+    print("ok", os.path.exists(dest))
+except ValueError as e:
+    print("mismatch", os.path.exists(dest), "checksum mismatch" in str(e))
+import shutil; shutil.rmtree(td)
+PY
+}
+assert_eq "download_verified sha256 ok" "ok True" "$(dv_run sha256 good)"
+assert_eq "download_verified sha512 ok" "ok True" "$(dv_run sha512 good)"
+assert_eq "download_verified sha512 mismatch removes the file" "mismatch False True" "$(dv_run sha512 bad)"
+
+# Antigravity / Copilot CLI install flows: fake network, temp dest
+ag_flow() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys, io, os, json, hashlib, shutil, tempfile, urllib.error, zipfile
+sys.path.insert(0, sys.argv[1]); import maude_exe as m
+which, mode = sys.argv[2], sys.argv[3]
+arch = "ARM64" if mode == "arm64" else "x86" if mode == "x86" else "AMD64"
+td = tempfile.mkdtemp(); dest = os.path.join(td, "dest"); tmproot = os.path.join(td, "tmp"); os.makedirs(tmproot)
+env = {"PROCESSOR_ARCHITECTURE": arch, "LOCALAPPDATA": td}
+seen, said = [], []
+def zbytes(names, link=False):
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        for n in names:
+            zi = zipfile.ZipInfo(n)
+            if link:
+                zi.external_attr = 0o120777 << 16
+            z.writestr(zi, b"EXE-BYTES")
+    return b.getvalue()
+if which == "agy":
+    exe = b"agy-exe-bytes"
+    sha = hashlib.sha512(exe).hexdigest() if mode != "badsha" else "0" * 128
+    url = "https://storage.googleapis.com/antigravity-public/x/cli.exe" if mode != "badurl" else "https://evil.example/cli.exe"
+    plat = "windows_arm64" if mode == "arm64" else "windows_amd64"
+    routes = {m.AGY_MANIFEST_BASE + plat + ".json": json.dumps({"version": "1", "url": url, "sha512": sha}).encode(),
+              "https://storage.googleapis.com/antigravity-public/x/cli.exe": exe}
+    fn = lambda **kw: m.install_antigravity(env, say=said.append, urlopen=urlopen, dest=dest)
+else:
+    zname = "copilot-win32-arm64.zip" if mode == "arm64" else "copilot-win32-x64.zip"
+    z = zbytes({"nomember": ["other.exe"], "link": ["copilot.exe"]}.get(mode, ["copilot.exe"]), link=mode == "link")
+    sha = hashlib.sha256(z).hexdigest() if mode != "badsha" else "0" * 64
+    sums = f"{sha}  {zname}\n" + ("1" * 64) + "  other.zip\n"
+    routes = {m.COPILOT_DL + "SHA256SUMS.txt": (b"" if mode == "nosum" else sums.encode()), m.COPILOT_DL + zname: z}
+    fn = lambda **kw: m.install_copilot(env, say=said.append, urlopen=urlopen, tmp_root=tmproot, dest=dest)
+def urlopen(req, timeout=None):
+    seen.append(req.full_url)
+    assert req.full_url.startswith("https://"), req.full_url
+    if req.full_url not in routes:
+        raise urllib.error.URLError("unreachable")
+    return io.BytesIO(routes[req.full_url])
+rc = fn()
+left = sorted(os.listdir(dest)) if os.path.isdir(dest) else []
+tmpleft = len(os.listdir(tmproot))
+final = os.path.join(dest, "agy.exe" if which == "agy" else "copilot.exe")
+print(rc, left, tmpleft, open(final, "rb").read() if os.path.exists(final) else None, "|".join(said))
+shutil.rmtree(td)
+PY
+}
+assert_eq "agy install ok: only agy.exe in the folder" "0 ['agy.exe'] 0 b'agy-exe-bytes' Downloading Antigravity CLI (about 240 MB)..." "$(ag_flow agy ok)"
+assert_eq "agy install arm64 reads the arm64 manifest" "0 ['agy.exe'] 0 b'agy-exe-bytes' Downloading Antigravity CLI (about 240 MB)..." "$(ag_flow agy arm64)"
+out=$(ag_flow agy badsha)
+assert_eq "agy checksum mismatch: nothing left behind" "1 [] 0 None" "$(echo "$out" | cut -d' ' -f1-4 | sed "s/ b'[^']*'//")"
+assert_contains "agy checksum mismatch is reported" "checksum mismatch" "$out"
+assert_eq "agy manifest with a foreign url is refused" "1 [] 0 None The Antigravity manifest has no usable Windows download." "$(ag_flow agy badurl)"
+assert_eq "agy on a 32-bit CPU: no build" "1 [] 0 None No Antigravity CLI build for this Windows." "$(ag_flow agy x86)"
+assert_contains "agy offline: reported, not raised" "download or install failed" "$(python3 -I - "${SCRIPT_DIR}/../light" <<'PY'
+import sys, urllib.error
+sys.path.insert(0, sys.argv[1]); import maude_exe as m
+said = []
+def uo(req, timeout=None): raise urllib.error.URLError("down")
+print(m.install_antigravity({"PROCESSOR_ARCHITECTURE": "AMD64", "LOCALAPPDATA": "C:/x"}, said.append, uo, "C:/x/d"), said[0])
+PY
+)"
+assert_eq "copilot install ok: only copilot.exe, temp cleaned" "0 ['copilot.exe'] 0 b'EXE-BYTES' Downloading Copilot CLI (about 70 MB)..." "$(ag_flow copilot ok)"
+assert_eq "copilot arm64 picks the arm64 zip" "0 ['copilot.exe'] 0 b'EXE-BYTES' Downloading Copilot CLI (about 70 MB)..." "$(ag_flow copilot arm64)"
+out=$(ag_flow copilot badsha)
+assert_eq "copilot checksum mismatch: nothing installed" "1 [] 0 None" "$(echo "$out" | cut -d' ' -f1-4)"
+assert_contains "copilot checksum mismatch is reported" "checksum mismatch" "$out"
+assert_eq "copilot: no checksum for the zip -> refused" "1 [] 0 None No SHA-256 for copilot-win32-x64.zip in the Copilot CLI release." "$(ag_flow copilot nosum)"
+assert_eq "copilot zip without copilot.exe is refused" "1 [] 0 None Downloading Copilot CLI (about 70 MB)...|The Copilot CLI zip looks wrong (no plain copilot.exe); not installing it." "$(ag_flow copilot nomember)"
+assert_eq "copilot zip with a symlink member is refused" "1 [] 0 None Downloading Copilot CLI (about 70 MB)...|The Copilot CLI zip looks wrong (no plain copilot.exe); not installing it." "$(ag_flow copilot link)"
+assert_eq "copilot on a 32-bit CPU: no zip" "1 [] 0 None No Copilot CLI release zip for this Windows." "$(ag_flow copilot x86)"
+
 # GitHub CLI: per-user release zip, no winget, no admin
 assert_eq "gh arch amd64" amd64 "$(py "m.gh_arch({'PROCESSOR_ARCHITECTURE': 'AMD64'})")"
 assert_eq "gh arch arm64 (native over wow64)" arm64 "$(py "m.gh_arch({'PROCESSOR_ARCHITECTURE': 'AMD64', 'PROCESSOR_ARCHITEW6432': 'ARM64'})")"

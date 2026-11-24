@@ -204,7 +204,18 @@ TOOL_INSTALL = {
                              "SHA-256 and install it for this user (msiexec /qn, no admin)"),
     "OpenCode": ("opencode", "bun install -g --trust opencode-ai"),
     "Crush": ("crush", "bun install -g --trust @charmland/crush"),
+    # Codex and Grok: the vendors' own per-user PowerShell installers (no admin; each checks what it downloads).
+    "Codex": ("codex", "$env:CODEX_NON_INTERACTIVE='true'; irm https://chatgpt.com/codex/install.ps1 | iex"),
+    "Grok": ("grok", "irm https://x.ai/cli/install.ps1 | iex"),
+    # Antigravity and Copilot CLI: install_antigravity()/install_copilot() do it in Python (see NATIVE_INSTALL).
+    "Antigravity": ("agy", "download agy.exe from Google's Antigravity release manifest (storage.googleapis.com), "
+                           "check its SHA-512 and put it in %LOCALAPPDATA%\\agy\\bin (this user only, no admin)"),
+    "Copilot CLI": ("copilot", "download copilot-win32-<arch>.zip from github.com/github/copilot-cli, check its "
+                               "SHA-256 and unpack it to %LOCALAPPDATA%\\Programs\\Copilot CLI (this user only, no admin)"),
 }
+# Agent key -> the command (binary) each agent installs, for the TUI picker to launch. Same table in
+# maude.py (AGENT_BINARIES); tests/test-maude-exe.sh checks the two stay equal.
+AGENT_BINARIES = {"codex": "codex", "antigravity": "agy", "grok": "grok", "copilot": "copilot"}
 
 
 def ps_cmd(cmd: str) -> list[str]:
@@ -223,8 +234,9 @@ def _http_get(url: str, urlopen=urllib.request.urlopen, limit: int = 8 << 20, ti
 
 
 def download_verified(url: str, dest: str, sha256: str, urlopen=urllib.request.urlopen, timeout: int = 60) -> None:
-    """Stream url to dest and check its SHA-256. On a mismatch dest is removed and ValueError raised."""
-    h = hashlib.sha256()
+    """Stream url to dest and check its digest: SHA-256 (64 hex digits) or, when the vendor publishes
+    only that, SHA-512 (128 hex digits). On a mismatch dest is removed and ValueError raised."""
+    h = hashlib.sha512() if len(sha256) == 128 else hashlib.sha256()
     req = urllib.request.Request(url, headers={"User-Agent": "maude.exe"})
     with urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:
         while chunk := r.read(1 << 20):
@@ -237,6 +249,7 @@ def download_verified(url: str, dest: str, sha256: str, urlopen=urllib.request.u
 
 
 _SHA_RE = re.compile(r"[0-9a-fA-F]{64}")
+_SHA512_RE = re.compile(r"[0-9a-fA-F]{128}")
 _KIRO_PATH_RE = re.compile(r"(?!\.)[0-9A-Za-z._-]+/(?!\.)[0-9A-Za-z._-]+\.msi")
 
 
@@ -296,19 +309,135 @@ def install_kiro(say=print, run=None, urlopen=urllib.request.urlopen, tmp_root=N
     return rc or 1
 
 
-NATIVE_INSTALL = {"Kiro CLI": install_kiro}  # tool label -> Python installer taking say=, returning an exit code
+AGY_MANIFEST_BASE = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/"  # as in antigravity.google/cli/install.ps1
+_AGY_URL_RE = re.compile(r"https://storage\.googleapis\.com/antigravity-public/[0-9A-Za-z._/-]+\.exe")
+
+
+def agy_dest(env=os.environ) -> str | None:
+    """Per-user folder of agy.exe (the same one the vendor's install.ps1 uses)."""
+    return str(W(env["LOCALAPPDATA"]) / "agy" / "bin") if env.get("LOCALAPPDATA") else None
+
+
+def agy_package(manifest) -> tuple[str, str] | None:
+    """(exe url, sha512) from the Antigravity manifest, else None. The url must be an https
+    storage.googleapis.com/antigravity-public/... .exe and the digest 128 hex digits."""
+    if not isinstance(manifest, dict):
+        return None
+    url, sha = manifest.get("url"), manifest.get("sha512")
+    if (isinstance(url, str) and _AGY_URL_RE.fullmatch(url) and ".." not in url
+            and isinstance(sha, str) and _SHA512_RE.fullmatch(sha)):
+        return url, sha.lower()
+    return None
+
+
+def install_antigravity(env=os.environ, say=print, urlopen=urllib.request.urlopen, dest=None) -> int:
+    """Install the Antigravity CLI (agy.exe) per user: the vendor's manifest, SHA-512 checked download, no admin.
+    The vendor script also runs `agy install` (shell setup); Maude skips that and manages PATH itself."""
+    arch = {"amd64": "amd64", "arm64": "arm64"}.get(gh_arch(env) or "")
+    dest = dest or agy_dest(env)
+    if not arch or not dest:
+        say("No Antigravity CLI build for this Windows.")
+        return 1
+    staged = None
+    try:
+        pkg = agy_package(json.loads(_http_get(f"{AGY_MANIFEST_BASE}windows_{arch}.json", urlopen)))
+        if not pkg:
+            say("The Antigravity manifest has no usable Windows download.")
+            return 1
+        os.makedirs(dest, exist_ok=True)
+        fd, staged = tempfile.mkstemp(prefix=".agy-new-", suffix=".exe", dir=dest)  # same folder: the move is a rename
+        os.close(fd)
+        say("Downloading Antigravity CLI (about 240 MB)...")
+        download_verified(pkg[0], staged, pkg[1], urlopen, timeout=300)
+        os.replace(staged, os.path.join(dest, "agy.exe"))
+        staged = None
+        return 0
+    except KeyboardInterrupt:
+        say("Antigravity install cancelled.")
+        return 1
+    except Exception as err:  # URLError, HTTPException, bad JSON, locked file, ...: never crash the TUI
+        say(f"The Antigravity download or install failed: {err}")
+        return 1
+    finally:
+        if staged:
+            with contextlib.suppress(OSError):
+                os.remove(staged)
+
+
+COPILOT_DL = "https://github.com/github/copilot-cli/releases/latest/download/"
+
+
+def copilot_dest(env=os.environ) -> str | None:
+    """Per-user folder of copilot.exe."""
+    return str(W(env["LOCALAPPDATA"]) / "Programs" / "Copilot CLI") if env.get("LOCALAPPDATA") else None
+
+
+def install_copilot(env=os.environ, say=print, urlopen=urllib.request.urlopen, tmp_root=None, dest=None) -> int:
+    """Install GitHub Copilot CLI per user from the official release zip (SHA-256 from the release's
+    SHA256SUMS.txt, no admin). Only copilot.exe is taken from the zip. The npm package would need Node.js."""
+    arch = {"amd64": "x64", "arm64": "arm64"}.get(gh_arch(env) or "")
+    dest = dest or copilot_dest(env)
+    if not arch or not dest:
+        say("No Copilot CLI release zip for this Windows.")
+        return 1
+    tmp = staged = None
+    try:
+        zname = f"copilot-win32-{arch}.zip"
+        sha = checksum_for(_http_get(COPILOT_DL + "SHA256SUMS.txt", urlopen).decode("utf-8", "replace"), zname)
+        if not sha:
+            say(f"No SHA-256 for {zname} in the Copilot CLI release.")
+            return 1
+        tmp = tempfile.mkdtemp(prefix="maude-copilot-", dir=tmp_root)
+        zpath = os.path.join(tmp, zname)
+        say("Downloading Copilot CLI (about 70 MB)...")
+        download_verified(COPILOT_DL + zname, zpath, sha, urlopen, timeout=300)
+        with zipfile.ZipFile(zpath) as zf:
+            m = next((i for i in zf.infolist() if i.filename == "copilot.exe"), None)
+            if m is None or (m.external_attr >> 16) & 0o170000 == 0o120000:
+                say("The Copilot CLI zip looks wrong (no plain copilot.exe); not installing it.")
+                return 1
+            os.makedirs(dest, exist_ok=True)
+            fd, staged = tempfile.mkstemp(prefix=".copilot-new-", suffix=".exe", dir=dest)
+            with os.fdopen(fd, "wb") as out, zf.open(m) as src:
+                shutil.copyfileobj(src, out)
+        os.replace(staged, os.path.join(dest, "copilot.exe"))
+        staged = None
+        return 0
+    except KeyboardInterrupt:
+        say("Copilot CLI install cancelled.")
+        return 1
+    except Exception as err:  # URLError, BadZipFile, locked file, ...: never crash the TUI
+        say(f"The Copilot CLI download or install failed: {err}")
+        return 1
+    finally:
+        if staged:
+            with contextlib.suppress(OSError):
+                os.remove(staged)
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# tool label -> Python installer taking say=, returning an exit code (called as native[label](say=say))
+NATIVE_INSTALL = {"Kiro CLI": install_kiro, "Antigravity": install_antigravity, "Copilot CLI": install_copilot}
+
 
 
 def user_dirs(env) -> list[str]:
-    """Per-user install folders: claude (.local\\bin), bun and bun globals (.bun\\bin)."""
+    """Per-user install folders: claude (.local\\bin), bun and bun globals (.bun\\bin), and with LOCALAPPDATA
+    the Antigravity (agy\\bin) and Copilot CLI folders, which Maude puts on the user PATH itself."""
     up = env["USERPROFILE"]
-    return [str(W(up) / ".local" / "bin"), str(W(up) / ".bun" / "bin")]
+    return [str(W(up) / ".local" / "bin"), str(W(up) / ".bun" / "bin")] + [d for d in (
+        (str(W(env["LOCALAPPDATA"]) / "agy" / "bin"), str(W(env["LOCALAPPDATA"]) / "Programs" / "Copilot CLI"))
+        if env.get("LOCALAPPDATA") else ()) if d]
 
 
 def tool_dirs(env) -> list[str]:
-    """user_dirs plus the Kiro MSI folder (a system install that sets its own PATH)."""
+    """user_dirs plus the Kiro MSI folder (a system install that sets its own PATH) and the folders of the
+    Codex and Grok installers (their scripts add themselves to the user PATH)."""
     extra = [str(W(env[v]) / sub) for v, sub in (("ProgramFiles", "Kiro-Cli"), ("LOCALAPPDATA", r"Programs\Kiro-Cli"),
                                                   ("LOCALAPPDATA", "Kiro-Cli")) if env.get(v)]
+    extra += [str(W(env[v]) / sub) for v, sub in (("LOCALAPPDATA", r"Programs\OpenAI\Codex\bin"), ("USERPROFILE", r".grok\bin"))
+              if env.get(v)]
     return user_dirs(env) + extra
 
 

@@ -19,7 +19,8 @@ src = open(sys.argv[1], encoding="utf-8").read()
 tree = ast.parse(src, feature_version=(3, 9))
 want = {"MAC_TOOL_LABELS", "MAC_BREW_URL", "_MAC_BREW_TOOLS", "_MAC_CURL_INSTALL", "mac_install_plan",
         "_mac_find", "mac_ensure_tool", "_mac_offered", "mac_offer", "MAC_GIT_STUB", "_mac_clt_cache",
-        "mac_clt_ready", "MAC_NOT_FOUND_HINT", "MAC_TOOL_DIRS", "plat_tool", "MAC_NO_GIT", "git_exe"}
+        "mac_clt_ready", "MAC_NOT_FOUND_HINT", "MAC_TOOL_DIRS", "plat_tool", "MAC_NO_GIT", "git_exe",
+        "_MAC_BREW_CASKS", "_MAC_CURL_FALLBACK", "AGENT_BINARIES"}
 import subprocess as realsp, shutil as realshutil
 from pathlib import Path
 
@@ -43,7 +44,7 @@ def out(k, v):
 
 plan = ns["mac_install_plan"]
 # -- the pure plan --
-for tool in ("claude", "kiro-cli", "git", "gh", "opencode", "crush", "nonesuch"):
+for tool in ("claude", "kiro-cli", "git", "gh", "opencode", "crush", "codex", "agy", "grok", "copilot", "nonesuch"):
     for brew in (False, True):
         argv, shown, note = plan(tool, brew)
         out(f"plan.{tool}.{'brew' if brew else 'nobrew'}", (argv, shown, bool(note)))
@@ -117,6 +118,20 @@ out("run.git.brew", (r[0], r[1]))
 r = runner("kiro-cli", set(), ["y"])
 out("run.kiro", (r[0], r[1][0][:2], "cli.kiro.dev/install" in r[1][0][2]))
 
+# new agents: brew cask when brew exists, the vendor script otherwise; grok has no brew package
+r = runner("agy", set(), ["y"], brew="/opt/homebrew/bin/brew")
+out("run.agy.brew", r[1])
+r = runner("codex", set(), ["y"])
+out("run.codex.nobrew", (r[0], r[1][0][:2], "chatgpt.com/codex/install.sh" in r[1][0][2], r[2]))
+r = runner("copilot", set(), ["n"], brew="/opt/homebrew/bin/brew")
+out("run.copilot.decline", (r[0], r[1]))
+r = runner("grok", set(), ["y"], brew="/opt/homebrew/bin/brew")
+out("run.grok.brew.still.script", (r[1][0][:2], "x.ai/cli/install.sh" in r[1][0][2]))
+out("agent.binaries", ns["AGENT_BINARIES"])
+out("agent.binaries.labelled", all(b in ns["MAC_TOOL_LABELS"] for b in ns["AGENT_BINARIES"].values()))
+out("agent.binaries.installable", all(plan(b, True)[0] is not None and plan(b, False)[0] is not None for b in ns["AGENT_BINARIES"].values()))
+out("agent.sh.only", not any(("sudo" in c or "| sh" in c and "pipefail" not in c) for c in list(ns["_MAC_CURL_FALLBACK"].values()) + [ns["_MAC_CURL_INSTALL"]["grok"]]))
+
 # -- _mac_find: Apple's /usr/bin/git stub does not count without the Command Line Tools --
 class RC:
     def __init__(self, c): self.returncode = c
@@ -137,8 +152,10 @@ ns["mac_offer"]("gh")
 out("offer.gh.nobrew.once", (calls, sorted(ns["_mac_offered"])))
 
 # -- pipefail: a failed download must make the whole command fail (curl replaced by `false`; bash only) --
-for tool, url in (("claude", "https://claude.ai/install.sh"), ("kiro-cli", "https://cli.kiro.dev/install")):
-    cmd = ns["_MAC_CURL_INSTALL"][tool]
+for tool, url in (("claude", "https://claude.ai/install.sh"), ("kiro-cli", "https://cli.kiro.dev/install"),
+                  ("grok", "https://x.ai/cli/install.sh"), ("codex", "https://chatgpt.com/codex/install.sh"),
+                  ("agy", "https://antigravity.google/cli/install.sh"), ("copilot", "https://gh.io/copilot-install")):
+    cmd = ns["_MAC_CURL_INSTALL"].get(tool) or ns["_MAC_CURL_FALLBACK"][tool]
     out(f"pipefail.{tool}.prefix", cmd.startswith("set -o pipefail; curl -fsSL " + url))
     fake = cmd.replace("curl -fsSL " + url, "false")
     out(f"pipefail.{tool}.fails", realsp.run(["/bin/bash", "-c", fake]).returncode != 0)
@@ -263,6 +280,21 @@ for t in claude kiro-cli; do
   assert_eq "$t: a failing download makes the command fail" "True" "$(get pipefail.$t.fails)"
   assert_eq "$t: without pipefail the failure would have been hidden" "True" "$(get pipefail.$t.needed)"
 done
+assert_eq "codex with brew: cask" "(['brew', 'install', '--cask', 'codex'], 'brew install --cask codex', False)" "$(get plan.codex.brew)"
+assert_eq "agy with brew: antigravity-cli cask" "(['brew', 'install', '--cask', 'antigravity-cli'], 'brew install --cask antigravity-cli', False)" "$(get plan.agy.brew)"
+assert_eq "copilot with brew: copilot-cli cask" "(['brew', 'install', '--cask', 'copilot-cli'], 'brew install --cask copilot-cli', False)" "$(get plan.copilot.brew)"
+assert_contains "codex without brew: vendor script, non-interactive" "CODEX_NON_INTERACTIVE=true sh" "$(get plan.codex.nobrew)"
+assert_contains "agy without brew: vendor script" "antigravity.google/cli/install.sh" "$(get plan.agy.nobrew)"
+assert_contains "copilot without brew: vendor script" "gh.io/copilot-install" "$(get plan.copilot.nobrew)"
+assert_eq "grok: vendor script, same with and without brew" "$(get plan.grok.nobrew)" "$(get plan.grok.brew)"
+assert_contains "grok: x.ai script" "https://x.ai/cli/install.sh" "$(get plan.grok.nobrew)"
+assert_eq "agy via brew runs the resolved brew path" "[['/opt/homebrew/bin/brew', 'install', '--cask', 'antigravity-cli']]" "$(get run.agy.brew)"
+assert_eq "codex without brew runs bash -c with the script" "('/fake/bin/codex', ['/bin/bash', '-c'], True, ['Install Codex'])" "$(get run.codex.nobrew)"
+assert_eq "declined copilot runs nothing" "(None, [])" "$(get run.copilot.decline)"
+assert_eq "grok has no brew package: still the script" "(['/bin/bash', '-c'], True)" "$(get run.grok.brew.still.script)"
+assert_eq "agent binary names" "{'codex': 'codex', 'antigravity': 'agy', 'grok': 'grok', 'copilot': 'copilot'}" "$(get agent.binaries)"
+assert_eq "every agent binary has a label and a plan with and without brew" "True True" "$(get agent.binaries.labelled) $(get agent.binaries.installable)"
+assert_eq "no sudo in the new scripts" "True" "$(get agent.sh.only)"
 assert_eq "installer non-zero exit is reported as a failure" "True" "$(get run.claude.fail.rc2.msg)"
 assert_eq "kiro not on PATH after install: Kiro-specific hint" "True" "$(get run.kiro.notfound.hint)"
 assert_eq "other tools keep the generic not-found message" "True" "$(get run.claude.notfound.generic)"
