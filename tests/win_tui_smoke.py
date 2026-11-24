@@ -1063,7 +1063,87 @@ try:
             if f.exists():
                 f.unlink()
         s = maude.load_settings(); s.pop("anthropic_key_active", None); maude.save_settings(s)
-    # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
+    # Parked on Bedrock (only clauderc.inactive), box shown checked and NOT flipped: a Save from Paste, Bedrock or Foundry
+    # re-creates the active clauderc, which must be parked again (merged) so Bedrock stays effective and the box checked.
+    async def check_parked_unflipped():
+        azure = home / ".azure"
+        (home / ".aws").mkdir(exist_ok=True)
+        (home / ".aws" / "credentials").write_text("[bedrock]\naws_access_key_id = A\n")
+        (home / ".aws" / "config").write_text("[profile bedrock]\nregion = us-west-2\n")
+        s = maude.load_settings(); s["native_only_approved"] = True; maude.save_settings(s)
+
+        async def run_case(mode, sandbox):
+            rcp = (azure / "clauderc") if sandbox else rc_file
+            inp = rcp.with_name("clauderc.inactive")
+            for f in (rc_file, inactive_file, azure / "clauderc", azure / "clauderc.inactive"):
+                if f.exists():
+                    f.unlink()
+            maude.write_clauderc({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2", "ANTHROPIC_FOUNDRY_API_KEY": "oldfk"}, inp)
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                app = pilot.app
+                await wait_table(pilot)
+                try:
+                    if sandbox:
+                        maude.IS_WIN = False
+                        app.push_screen(maude.CredsEntryScreen())
+                        await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
+                        scr = app.screen
+                        await wait_query(pilot, lambda: scr, "#btn-creds-save")
+                    else:
+                        scr = await open_settings(pilot)
+                    cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+                    await wait_until(pilot, lambda: cb.display and cb.value is True and scr._parked_at_open)
+                    assert cb.value is True and scr._parked_at_open and scr._default_bedrock_initial, (mode, sandbox)
+                    if mode == "paste":
+                        scr.query_one("#creds-text").text = "export AWS_REGION=eu-west-1\n"
+                    elif mode == "bedrock":
+                        await press_mode(pilot, scr, "bedrock")
+                        scr.query_one("#creds-aws-key").value = "AKIAXX"; scr.query_one("#creds-aws-secret").value = "sec"
+                    else:
+                        await press_mode(pilot, scr, "foundry")
+                        scr.query_one("#creds-foundry-url").value = "https://new.example/anthropic"; scr.query_one("#creds-foundry-key").value = "newfk"
+                    scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                    await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+                    assert len(app.screen_stack) == 1, (mode, sandbox, str(scr.query_one("#creds-status").render()))
+                    # ended parked: no active file, the saved values merged into the parked one, the reader says Bedrock
+                    assert not rcp.exists() and inp.exists(), (mode, sandbox, rcp.exists(), inp.exists())
+                    parked = maude.read_clauderc(inp)
+                    assert parked.get("CLAUDE_CODE_USE_BEDROCK") == "1" and maude.bedrock_parked_state() is True, (mode, sandbox, parked)
+                    if mode == "paste":
+                        assert parked.get("AWS_REGION") == "eu-west-1", parked
+                    elif mode == "bedrock":
+                        assert parked.get("AWS_ACCESS_KEY_ID") == "AKIAXX", parked
+                    else:
+                        assert parked.get("ANTHROPIC_FOUNDRY_API_KEY") == "newfk", parked
+                        await wait_until(pilot, lambda: any("Bedrock stays the default" in n.message for n in app._notifications))
+                        assert any("Bedrock stays the default" in n.message for n in app._notifications), list(app._notifications)
+                    if not sandbox:  # Bedrock is what Claude Code gets, not "no backend" and not the Foundry endpoint
+                        e = maude.plat_claude_env()
+                        assert e.get("CLAUDE_CODE_USE_BEDROCK") == "1" and e.get("ANTHROPIC_BASE_URL") != "https://new.example/anthropic", (mode, e)
+                finally:
+                    maude.IS_WIN = True
+            if not sandbox:  # reopening: still shown as the Bedrock default
+                async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                    scr = await open_settings(pilot)
+                    cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+                    await wait_until(pilot, lambda: cb.display and cb.value is True)
+                    assert cb.value is True and scr._parked_at_open, mode
+                    scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
+                    await wait_until(pilot, lambda: len(pilot.app.screen_stack) == 1)
+
+        for mode in ("paste", "bedrock", "foundry"):
+            await run_case(mode, False)
+        await run_case("paste", True)     # the same with the sandbox paths (~/.azure/clauderc)
+        await run_case("foundry", True)
+    saved_env = dict(os.environ)
+    try:
+        asyncio.run(check_parked_unflipped())
+    finally:
+        os.environ.clear(); os.environ.update(saved_env)
+        for f in (home / ".aws" / "credentials", home / ".aws" / "config", rc_file, inactive_file,
+                  home / ".azure" / "clauderc", home / ".azure" / "clauderc.inactive"):
+            if f.exists():
+                f.unlink()    # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
     # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
     old_pt, old_auth = maude.plat_tool, maude.gh_is_authed
     maude.plat_tool = lambda n: "C:/fake/" + n + ".exe"   # git and gh "installed": no offer, no suspend

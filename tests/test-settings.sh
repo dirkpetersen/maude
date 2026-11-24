@@ -33,7 +33,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "with_active_anthropic_key", "apply_anthropic_key", "OPENCODE_PROVIDER", "OPENCODE_NPM", "OPENCODE_KEY_REF",
         "opencode_config_path", "opencode_url_error", "_opencode_load", "_opencode_store", "read_opencode_custom",
         "merge_opencode_config", "remove_opencode_custom", "KEY_AGENTS",
-        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "claude_env_from", "plat_claude_env", "plat_tool_env",
+        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "bedrock_parked_state", "claude_env_from", "plat_claude_env", "plat_tool_env",
         "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
 
 def load(platform, login=False):
@@ -294,6 +294,33 @@ tgt = home / "real-clauderc"; tgt.write_text("old"); rcp.unlink(); os.symlink(tg
 ns["write_clauderc"]({"C": "3"})
 check("write_private.symlink_written_through", rcp.is_symlink() and tgt.read_text() == "export C='3'\n" and mode(tgt) == "0o600", tgt.read_text())
 rcp.unlink(); tgt.unlink()
+reset()
+# bedrock_parked_state(): the one predicate for the Settings box reader and plat_claude_env()
+ns = load("win32")
+rc, inactive = ns["clauderc_path"](), ns["clauderc_inactive_path"]()
+check("parked.none", ns["bedrock_parked_state"]() is False)
+ns["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2"}, inactive)
+check("parked.only_inactive", ns["bedrock_parked_state"]() is True)
+rc.write_text("")
+check("parked.empty_active", ns["bedrock_parked_state"]() is True)
+rc.write_bytes(b"\xff\xfe\x00bad\xff")
+check("parked.undecodable_active", ns["bedrock_parked_state"]() is True)
+ns["write_clauderc"]({"AWS_REGION": "eu-west-1"}, rc)
+check("parked.both_active_without_foundry_flag", ns["bedrock_parked_state"]() is True)
+ns["write_clauderc"]({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, rc)
+check("parked.both_active_foundry_means_not_parked", ns["bedrock_parked_state"]() is False)
+rc.unlink(); inactive.unlink()
+# plat_claude_env natively: both files, active only has AWS_REGION -> Bedrock effective, the active vars still pass
+(home / ".aws").mkdir(exist_ok=True); (home / ".aws" / "config").write_text("[profile bedrock]\nregion = us-west-2\n")
+ns = load("win32")
+ns["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2"}, ns["clauderc_inactive_path"]())
+ns["write_clauderc"]({"AWS_REGION": "eu-west-1", "MY_VAR": "x"}, ns["clauderc_path"]())
+e = ns["plat_claude_env"]()
+check("parked.env.both_files_bedrock", e.get("CLAUDE_CODE_USE_BEDROCK") == "1" and e.get("AWS_REGION") == "eu-west-1" and e.get("MY_VAR") == "x", e)
+ns["write_clauderc"]({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_BASE_URL": "https://f", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, ns["clauderc_path"]())
+e = ns["plat_claude_env"]()
+check("parked.env.stale_inactive_next_to_active_foundry", e.get("ANTHROPIC_BASE_URL") == "https://f" and e.get("CLAUDE_CODE_USE_BEDROCK") == "0", e)
+(home / ".aws" / "config").unlink()
 reset()
 # secrets are written atomically: no temp file is left behind
 check("secret.no_tmp_left", not [q for q in (home / ".maude").iterdir() if q.name.startswith(".secret-")])
