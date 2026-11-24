@@ -493,6 +493,15 @@ def plat_tool_env() -> dict:
     return {} if current_platform() == "linux-sandbox" else read_clauderc()
 
 
+def find_powershell() -> str:
+    """Windows PowerShell 5.1 (System32 path, then PATH), or "" if it cannot be found."""
+    ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                      "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    if os.path.isfile(ps):
+        return ps
+    return shutil.which("powershell.exe") or shutil.which("powershell") or ""
+
+
 def _child_env(tools: bool = False) -> dict | None:
     """env= for child processes: None (inherit) unless there is something to add.
     tools=True: for Kiro/OpenCode/Crush (raw clauderc exports), else for Claude Code."""
@@ -5636,25 +5645,33 @@ class MaudeApp(App):
             return
         # Windows: maude.exe may have been started from Explorer/a shortcut (no shell behind it),
         # so open PowerShell here and come back to the TUI when it exits.
-        ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
-                          "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-        if not os.path.isfile(ps):
-            ps = shutil.which("powershell.exe") or shutil.which("powershell") or ""
-        sel = self._selected_project()
-        cwd = str(sel) if sel is not None else os.path.expanduser("~")
+        ps = find_powershell()
         if not ps:
             self.notify("Could not start PowerShell: powershell.exe not found.", severity="error")
             return
-        try:
-            with self.suspend():
-                print("Type exit to return to Maude.", flush=True)
-                try:
-                    subprocess.run([ps, "-NoLogo"], cwd=cwd, env=_child_env(), check=False)
-                except KeyboardInterrupt:
-                    pass
-        except OSError as e:
-            self.notify(f"Could not start PowerShell: {e}", severity="error")
-            return
+        sel = self._selected_project()
+        cwd = str(sel) if sel is not None and sel.is_dir() else os.path.expanduser("~")
+        err = ""
+        # App.suspend() has no try/finally: nothing may raise inside the with block, or the
+        # TUI driver is never resumed. So catch everything there and notify afterwards.
+        with self.suspend():
+            print("Type exit to return to Maude.", flush=True)
+            # Textual runs under asyncio.run(), whose SIGINT handler cancels the main task, so
+            # Ctrl+C inside PowerShell would end Maude: ignore it here, the child still gets it.
+            try:
+                old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            except (ValueError, OSError):
+                old = None
+            try:
+                # raw clauderc exports (like Kiro/OpenCode/Crush): claude and kiro-cli both work
+                subprocess.run([ps, "-NoLogo"], cwd=cwd, env=_child_env(tools=True), check=False)
+            except OSError as e:
+                err = str(e)
+            finally:
+                if old is not None:
+                    signal.signal(signal.SIGINT, old)
+        if err:
+            self.notify(f"Could not start PowerShell: {err}", severity="error")
         self._refresh_table()
 
     @on(DataTable.RowSelected)

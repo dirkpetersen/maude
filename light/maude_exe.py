@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1016,11 +1017,21 @@ def _run(cmd: list[str], **kw) -> int:
     """Run cmd and wait. Ctrl+C belongs to the child (Claude Code cancels a turn with it):
     subprocess.run would kill the child on KeyboardInterrupt, so keep waiting instead."""
     p = subprocess.Popen(cmd, **kw)
-    while True:
-        try:
-            return p.wait()
-        except KeyboardInterrupt:
-            continue
+    # Under the Textual TUI (asyncio.run) SIGINT cancels the main task instead of raising
+    # KeyboardInterrupt, which would end Maude when the child exits: ignore it while waiting.
+    try:
+        old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError):  # not the main thread
+        old = None
+    try:
+        while True:
+            try:
+                return p.wait()
+            except KeyboardInterrupt:
+                continue
+    finally:
+        if old is not None:
+            signal.signal(signal.SIGINT, old)
 
 
 def path_with(value: str, d: str) -> str | None:
@@ -1504,7 +1515,7 @@ _no_install = False  # set by _main: relaunch passes --no-install on
 def run_tui(folder: str = "", model: str = "") -> int:
     """Run the Windows TUI (light/maude.py). With a folder (outside the share): list it, preselect
     its row and show the OUTSIDE warning. The folder is registered only when it is opened from the
-    TUI (MaudeApp._register_selected), never just by starting. A normal quit (q, Command Line) just
+    TUI (MaudeApp._register_selected), never just by starting. A normal quit (q) just
     returns. Textual's App.run() does not re-raise errors in handlers: it prints the traceback and
     sets return_code = 1, so check that too. On a failure the window waits for Enter on a terminal,
     so the window of the Explorer menu does not close over the error."""
