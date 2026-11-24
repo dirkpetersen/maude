@@ -764,7 +764,7 @@ try:
     assert "hidden-pane" not in hp and "HIDDENPANE" not in hp, hp  # the Paste and Bedrock panes were not the active mode
     assert not (home / ".aws" / "credentials").exists() or "HIDDENPANE" not in (home / ".aws" / "credentials").read_text()
     rc_file.unlink()
-    # Settings screen (formerly Settings): label, native-only checkbox (persisted + re-greys the Agent column),
+    # Settings screen (formerly Set Creds): label, native-only checkbox (persisted + re-greys the Agent column),
     # Anthropic pane (key active/inactive), OpenCode pane, and nothing from hidden panes is saved.
     from textual.widgets import RadioButton, Checkbox, Button
     oc_cfg = home / ".config" / "opencode" / "opencode.json"
@@ -790,6 +790,8 @@ try:
         await wait_until(pilot, lambda: scr.query_one("#creds-pane-" + mode).display)
         for m in ("paste", "anthropic", "bedrock", "foundry", "opencode"):
             assert scr.query_one("#creds-pane-" + m).display == (m == mode), (m, mode)
+        # the screen moves focus to the pane's first field after the refresh: let that settle before the test focuses things
+        await wait_until(pilot, lambda: scr.focused is not None and "#" + scr.focused.id == scr._FOCUS[mode])
 
     async def save_and_close(pilot, scr):
         scr.query_one("#btn-creds-save").press(); await pilot.pause()
@@ -798,6 +800,7 @@ try:
 
     async def check_settings_screen():
         disabled = lambda a: [str(b.label) for b in a.query_one("#agent-select").query(RadioButton) if b.disabled]
+        akey_file, okey_file = home / ".maude" / "anthropic-key", home / ".maude" / "opencode-key"
         maude.save_settings({"native_only_approved": True})
         async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
             app = pilot.app
@@ -805,14 +808,22 @@ try:
             assert str((await wait_query(pilot, lambda: scr, "#creds-title")).render()) == "Settings"
             cb = await wait_query(pilot, lambda: scr, "#creds-native-only")  # visible above the mode buttons, whatever pane
             assert cb.value is True and "Only allow Kiro.dev and Github Copilot outside the Sandbox" in str(cb.label), cb.label
-            assert scr.query_one("#creds-native-only").region.y < scr.query_one("#creds-tabs").region.y
+            assert cb.region.height == 1 and scr.query_one("#creds-native-only").region.y < scr.query_one("#creds-tabs").region.y
             assert len(disabled(app)) == len(maude.AGENTS) - 2, disabled(app)
             # Anthropic pane: Claude Login button inside it, masked key field, "Use this API key" unchecked
             await press_mode(pilot, scr, "anthropic")
             assert str(scr.query_one("#btn-creds-login", Button).label) == "Claude Login"
             assert scr.query_one("#creds-anthropic-key").password is True
             assert scr.query_one("#creds-anthropic-use", Checkbox).value is False
+            assert "even if you are logged in" in str(scr.query_one("#creds-pane-anthropic").query("Label").last().render())
             assert scr.query_one("#creds-oc-key").password is True
+            # M3: Save with nothing changed in the Anthropic pane touches no key file
+            scr.query_one("#btn-creds-save").press(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+            assert not akey_file.exists() and not rc_file.exists(), "an unchanged Anthropic pane must not write"
+            scr = await open_settings(pilot)
+            cb = scr.query_one("#creds-native-only", Checkbox)
+            await press_mode(pilot, scr, "anthropic")
             # text typed in panes that are not the active mode is never saved
             (await wait_query(pilot, lambda: scr, "#creds-oc-url")).value = "https://hidden.example/v1"
             scr.query_one("#creds-oc-model").value = "hidden-model"
@@ -825,12 +836,14 @@ try:
             await wait_until(pilot, lambda: disabled(app) == [])
             assert disabled(app) == [], disabled(app)          # apply_agent_restrictions() ran: everything enabled
         sj = settings_file.read_text()
-        assert maude.load_settings()["native_only_approved"] is False and "sk-ant-test1" in sj, sj
-        assert rc_file.read_text() == "export ANTHROPIC_API_KEY='sk-ant-test1'\n", rc_file.read_text()
-        assert not any(s in sj + rc_file.read_text() + oc_cfg.read_text()
-                       for s in ("hidden-paste", "oc-hidden-key", "hidden.example", "hidden-model")), "hidden panes were saved"
-        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-test1"
-        # Second run: state is shown; deactivating keeps the key in settings.json and exports nothing
+        assert maude.load_settings()["native_only_approved"] is False and maude.load_settings()["anthropic_key_active"] is True, sj
+        assert akey_file.read_text() == "sk-ant-test1" and "sk-ant-test1" not in sj, "the key lives in its own file"
+        assert not rc_file.exists(), "natively the active key is injected, never written to the clauderc"
+        assert not any(s in sj + akey_file.read_text() + oc_cfg.read_text() for s in
+                       ("hidden-paste", "oc-hidden-key", "hidden.example", "hidden-model")), "hidden panes were saved"
+        assert not okey_file.exists()
+        assert maude.plat_claude_env().get("ANTHROPIC_API_KEY") == "sk-ant-test1"   # wins even over a claude login
+        # Second run: state is shown; deactivating keeps the key file and injects nothing
         async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
             app = pilot.app
             scr = await open_settings(pilot)
@@ -840,31 +853,90 @@ try:
             assert use.value is True and scr.query_one("#creds-anthropic-key").value == ""  # the key is never shown
             use.value = False
             await save_and_close(pilot, scr)
-        assert not rc_file.exists(), "inactive key must not be exported"
-        assert maude.load_settings()["anthropic_api_key"] == "sk-ant-test1"
+        assert akey_file.read_text() == "sk-ant-test1" and maude.load_settings()["anthropic_key_active"] is False
         assert maude.plat_claude_env() == {} and maude._child_env() is None
-        # Activating again with an empty field reuses the stored key; OpenCode pane merges non-destructively
+        # Activating again with an empty field reuses the stored key; the OpenCode pane merges non-destructively
         async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
             app = pilot.app
             scr = await open_settings(pilot)
             await press_mode(pilot, scr, "anthropic")
             scr.query_one("#creds-anthropic-use", Checkbox).value = True
             await save_and_close(pilot, scr)
-            assert rc_file.read_text() == "export ANTHROPIC_API_KEY='sk-ant-test1'\n"
-            assert maude.plat_claude_env() == {"ANTHROPIC_API_KEY": "sk-ant-test1"}
+            assert maude.plat_claude_env().get("ANTHROPIC_API_KEY") == "sk-ant-test1", maude.plat_claude_env()
             scr = await open_settings(pilot)
             await press_mode(pilot, scr, "opencode")
-            scr.query_one("#creds-oc-url").value = "ftp://nope"   # invalid: stays open with an error, saves nothing
             scr.query_one("#creds-oc-model").value = "qwen3-coder"
             scr.query_one("#creds-oc-key").value = "oc-secret"
-            scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
-            assert isinstance(app.screen, maude.CredsEntryScreen) and "http" in str(scr.query_one("#creds-status").render())
-            assert "oc-secret" not in rc_file.read_text()
+            for bad in ("ftp://nope", "http://h.example/v1", "https://u:p@h.example/v1", "https://h.example/{env:X}"):
+                scr.query_one("#creds-oc-url").value = bad        # invalid: stays open with an error, saves nothing
+                scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+                assert isinstance(app.screen, maude.CredsEntryScreen) and str(scr.query_one("#creds-status").render()), bad
+                assert not okey_file.exists() and "maude-custom" not in oc_cfg.read_text(), bad
             scr.query_one("#creds-oc-url").value = "https://llm.example/v1"
             scr.query_one("#creds-native-only", Checkbox).value = True
             await save_and_close(pilot, scr)
             await wait_until(pilot, lambda: len(disabled(app)) == len(maude.AGENTS) - 2)
             assert len(disabled(app)) == len(maude.AGENTS) - 2, disabled(app)  # checked again: greyed out again
+        assert okey_file.read_text() == "oc-secret" and not rc_file.exists()
+        # A commented opencode.json is refused with a message, the key file is not written, and nothing is half-saved
+        keep = oc_cfg.read_text()
+        oc_cfg.write_text('{ // my notes\n "theme": "t" }')
+        okey_file.unlink()
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
+            scr = await open_settings(pilot)
+            await press_mode(pilot, scr, "opencode")
+            scr.query_one("#creds-oc-url").value = "https://llm.example/v1"
+            scr.query_one("#creds-oc-model").value = "m"
+            scr.query_one("#creds-oc-key").value = "oc-secret2"
+            scr.query_one("#btn-creds-save").press(); await pilot.pause(); await pilot.pause()
+            assert isinstance(app.screen, maude.CredsEntryScreen) and "comments" in str(scr.query_one("#creds-status").render())
+            assert not okey_file.exists() and oc_cfg.read_text().startswith("{ // my notes")
+            scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+        oc_cfg.write_text(keep)
+        okey_file.write_text("oc-secret")
+        # The Remove button deletes the custom provider and the key file
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
+            scr = await open_settings(pilot)
+            await press_mode(pilot, scr, "opencode")
+            assert scr.query_one("#creds-oc-url").value == "https://llm.example/v1" and scr.query_one("#creds-oc-model").value == "qwen3-coder"
+            scr.query_one("#btn-oc-remove").press(); await pilot.pause(); await pilot.pause()
+            await wait_until(pilot, lambda: not okey_file.exists())
+            assert not okey_file.exists() and scr.query_one("#creds-oc-url").value == ""
+            assert "maude-custom" not in oc_cfg.read_text() and '"model"' not in oc_cfg.read_text()
+            scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
+            await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+        # Put the custom provider back for the final checks below
+        maude.merge_opencode_config("https://llm.example/v1", "qwen3-coder", True)
+        maude.write_secret(okey_file, "oc-secret")
+        # Reach: at 80x24 and 100x30 every pane's fields and buttons can be focused and shown inside the body
+        for size in ((80, 24), (100, 30)):
+            async with maude.MaudeApp().run_test(size=size) as pilot:
+                app = pilot.app
+                scr = await open_settings(pilot)
+                body = scr.query_one("#creds-body")
+                for tab in ("paste", "anthropic", "bedrock", "foundry", "opencode"):
+                    b = scr.query_one("#btn-creds-mode-" + tab)
+                    assert b.region.x >= 0 and b.region.right <= size[0] and b.region.bottom <= size[1], (size, tab, b.region)
+                    await press_mode(pilot, scr, tab)
+                    widgets = list(scr.query_one("#creds-pane-" + tab).query("Input, TextArea, Button, Checkbox"))
+                    assert widgets, tab
+                    for w in widgets:
+                        w.focus()
+                        ok = await wait_until(pilot, lambda: scr.focused is w and w.region.height > 0 and w.region.overlaps(body.region))
+                        assert ok, (size, tab, w.id, w.region, body.region, body.scroll_y, body.max_scroll_y, body.virtual_size, scr.focused)
+                    first = next(w for w in widgets if w.id in ("creds-text", "creds-anthropic-key", "creds-aws-key", "creds-foundry-url", "creds-oc-url"))
+                    first.focus()
+                    if tab != "paste":  # the paste area is taller than the body at 24 rows: it scrolls
+                        assert await wait_until(pilot, lambda: body.region.contains_region(first.region)), (size, tab, first.region, body.region)
+                for sel in ("#creds-native-only", "#btn-creds-save", "#btn-creds-cancel"):
+                    w = scr.query_one(sel); w.focus(); await pilot.pause()
+                    assert w.region.height > 0 and w.region.bottom <= size[1] and w.region.right <= size[0], (size, sel, w.region)
+                assert len(scr.query_one("#creds-status").region) >= 0 and scr.query_one("#creds-status").region.right <= size[0]
+                scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
+                await wait_until(pilot, lambda: len(app.screen_stack) == 1)
     saved_env = dict(os.environ)
     try:
         asyncio.run(check_settings_screen())
@@ -875,11 +947,11 @@ try:
     assert oc["theme"] == "t" and "//" not in oc and oc["model"] == "maude-custom/qwen3-coder", oc
     assert oc["provider"]["zai-coding-plan"]["options"]["apiKey"] == "{env:ZHIPU_API_KEY}", oc
     mc = oc["provider"]["maude-custom"]
-    assert mc["npm"] == "@ai-sdk/openai-compatible" and mc["options"] == {"baseURL": "https://llm.example/v1", "apiKey": "{env:MAUDE_OPENCODE_API_KEY}"}, mc
+    assert mc["npm"] == "@ai-sdk/openai-compatible" and mc["options"] == {"baseURL": "https://llm.example/v1", "apiKey": "{file:~/.maude/opencode-key}"}, mc
     assert "qwen3-coder" in mc["models"] and "oc-secret" not in oc_cfg.read_text()
     assert (oc_cfg.parent / "opencode.json.maude-bak").is_file()
-    assert "MAUDE_OPENCODE_API_KEY='oc-secret'" in rc_file.read_text() and maude.load_settings()["native_only_approved"] is True
-    rc_file.unlink()
+    assert (home / ".maude" / "opencode-key").read_text() == "oc-secret" and maude.load_settings()["native_only_approved"] is True
+    (home / ".maude" / "opencode-key").unlink(); (home / ".maude" / "anthropic-key").unlink()
     # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
     # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
     old_pt, old_auth = maude.plat_tool, maude.gh_is_authed

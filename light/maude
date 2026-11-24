@@ -263,7 +263,7 @@ load_lib kanna.sh || true
 # Pin rationale: 8.2.3 crashes the Settings modal as it opens with
 # KeyError 'text-area--gutter' (textual#6528); >=8.2.4 fixes that. Rapid clicks
 # on the mode buttons could still trigger it (or NoMatches) on later 8.x until
-# CredsEntryScreen kept its three mode panes always mounted (toggled by
+# CredsEntryScreen kept its mode panes always mounted (toggled by
 # `display`, nothing re-mounted). <9 shields auto-updating end-user
 # machines from an unknown future major-version break.
 TEXTUAL_PIN='textual>=8.2.4,<9'

@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from rich.text import Text
 from rich.color import Color
@@ -425,8 +426,6 @@ def clauderc_inactive_path() -> Path:
 
 _BEDROCK_PROFILE_RE = re.compile(r"^\[(profile\s+)?bedrock\]", re.MULTILINE)
 _DUMMY_API_KEY = "sk-ant-dummy"
-# The OpenCode custom-provider key (Settings > OpenCode). A Maude-specific name: OPENCODE_API_KEY belongs to OpenCode Zen.
-OPENCODE_API_ENV = "MAUDE_OPENCODE_API_KEY"
 
 
 def claude_env_from(rc: dict, environ, logged_in: bool, aws_config: str, parked_bedrock: bool = False) -> dict:
@@ -506,23 +505,26 @@ def plat_claude_env() -> dict:
     parked = False
     if not rc and not clauderc_path().exists() and inactive.exists():
         parked = read_clauderc(inactive).get("CLAUDE_CODE_USE_BEDROCK") == "1"
-    if not rc and not parked:
-        return {}
-    try:
-        aws = AWS_CONFIG_PATH.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        aws = ""
-    return claude_env_from(rc, os.environ, have_claude_login(), aws, parked)
+    env: dict = {}
+    if rc or parked:
+        try:
+            aws = AWS_CONFIG_PATH.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            aws = ""
+        env = claude_env_from(rc, os.environ, have_claude_login(), aws, parked)
+    key = active_anthropic_key()  # Settings > Anthropic > "Use this API key": wins over a login, Bedrock, Foundry
+    return with_active_anthropic_key(env, key, os.environ) if key else env
 
 
 def plat_tool_env() -> dict:
     """Extra environment for the non-Claude tools (Kiro, OpenCode, Crush): the raw clauderc exports
-    only, no wrapper rewrites (no dummy key, no login stripping). Sandbox: nothing, except the OpenCode
-    custom-provider key (the opencode.json written by Settings refers to it as {env:MAUDE_OPENCODE_API_KEY})."""
-    rc = read_clauderc()
+    only, no wrapper rewrites (no dummy key, no login stripping), plus the active Anthropic API key (Settings).
+    Sandbox: nothing."""
     if current_platform() == "linux-sandbox":
-        return {OPENCODE_API_ENV: rc[OPENCODE_API_ENV]} if rc.get(OPENCODE_API_ENV) else {}
-    return rc
+        return {}
+    env = read_clauderc()
+    key = active_anthropic_key()
+    return {**env, "ANTHROPIC_API_KEY": key} if key else env
 
 
 def find_powershell() -> str:
@@ -901,9 +903,8 @@ def credentials_configured() -> bool:
     # clauderc (sandbox: ~/.azure/clauderc, Windows/macOS: ~/.maude/clauderc)
     rc = clauderc_path()
     if rc.exists() and rc.stat().st_size > 0:
-        # A file holding only the OpenCode key (Settings > OpenCode) is no Claude credential.
-        return set(read_clauderc(rc)) != {OPENCODE_API_ENV}
-    return False
+        return True
+    return bool(active_anthropic_key())  # Settings > Anthropic: the key is kept in ~/.maude/anthropic-key
 
 
 def check_credentials() -> bool:
@@ -3089,9 +3090,9 @@ def _write_private(path: Path, data: bytes) -> None:
         pass
 
 
-def write_clauderc(values: dict[str, str]) -> None:
-    """Write env vars to clauderc_path() as `export KEY='VALUE'` lines (mode 0600 from creation)."""
-    path = clauderc_path(create=True)
+def write_clauderc(values: dict[str, str], path: Path | None = None) -> None:
+    """Write env vars to clauderc_path() (or `path`) as `export KEY='VALUE'` lines (mode 0600 from creation)."""
+    path = path or clauderc_path(create=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"export {k}={_sh_quote(str(v))}" for k, v in values.items() if CRED_KEY_RE.match(f"{k}=x")]
     _write_private(path, ("\n".join(lines) + "\n").encode("utf-8"))  # LF on Windows too (also read by bash)
@@ -3111,6 +3112,31 @@ def merge_clauderc(values: dict[str, str]) -> None:
             raise OSError(f"{path} is not valid UTF-8/UTF-16 text; it was left untouched") from None
     existing.update(values)
     write_clauderc(existing)
+
+
+def _parse_rc_strict(path: Path) -> dict:
+    try:
+        return parse_clauderc(_decode_text_strict(path.read_bytes()))
+    except ValueError:
+        raise OSError(f"{path} is not valid UTF-8/UTF-16 text; it was left untouched") from None
+
+
+def park_clauderc(park: bool) -> None:
+    """Move clauderc to clauderc.inactive (park=True: Bedrock is the default) or back (park=False: Foundry is).
+    When BOTH files exist (a save re-created the active one while the other was parked) nothing is ever deleted
+    unmerged: the values of both are combined (the active file wins on a collision) into the destination and only
+    then the source is removed. An undecodable file makes it refuse (OSError)."""
+    active, inactive = clauderc_path(), clauderc_inactive_path()
+    src, dst = (active, inactive) if park else (inactive, active)
+    if not src.exists():
+        return
+    if not dst.exists():
+        src.rename(dst)
+        return
+    a, b = _parse_rc_strict(src), _parse_rc_strict(dst)
+    merged = {**b, **a} if park else {**a, **b}  # the active file's values win either way
+    write_clauderc(merged, dst)
+    src.unlink()
 
 
 def remove_clauderc_keys(keys) -> None:
@@ -3133,74 +3159,184 @@ def remove_clauderc_keys(keys) -> None:
         path.unlink()
 
 
-# ── Settings > Anthropic: the API key can be kept without being exported ────────
-# Active   = `export ANTHROPIC_API_KEY=...` in clauderc (the ~/bin/claude wrapper and plat_claude_env use it).
-# Inactive = the key lives only in ~/.maude/settings.json (mode 0600) and is NOT in clauderc, so a Claude login
-#            or Bedrock/Foundry wins. Settings.json survives every clauderc rewrite (merge_clauderc, parking).
-ANTHROPIC_KEY_SETTING = "anthropic_api_key"
-ANTHROPIC_DISPLACED_SETTING = "anthropic_displaced"  # Bedrock/Foundry flags switched off while the key was active
-_CLOUD_FLAGS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY")
+# ── Settings: secrets kept in their own 0600 files (never in clauderc, so "Default to AWS Bedrock" parking
+#    and clauderc rewrites cannot strand them) ──────────────────────────────────────────────────────────
+ANTHROPIC_ACTIVE_SETTING = "anthropic_key_active"  # settings.json: is the key in ~/.maude/anthropic-key in use?
+ANTHROPIC_BASE = "https://api.anthropic.com"
+_ACTIVE_OFF_VARS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX")
+_ACTIVE_UNSET_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
 
 
-def stored_anthropic_key(settings: dict | None = None) -> str:
-    v = (load_settings() if settings is None else settings).get(ANTHROPIC_KEY_SETTING, "")
-    return v if isinstance(v, str) else ""
+def anthropic_key_file() -> Path:
+    return STATE_DIR / "anthropic-key"
+
+
+def opencode_key_file() -> Path:
+    return STATE_DIR / "opencode-key"
+
+
+def _one_line(v: str) -> str:
+    return re.sub(r"[\x00\r\n\x0b\x0c\x1c-\x1e\x85  ]", "", v).strip()
+
+
+def read_secret(path: Path) -> str:
+    """The one-line secret in `path` ("" when missing/unreadable)."""
+    try:
+        return _one_line(_decode_text_strict(path.read_bytes()))
+    except (OSError, ValueError):
+        return ""
+
+
+def write_secret(path: Path, value: str) -> None:
+    """Write a secret file (mode 0600 from creation, no trailing newline: OpenCode's {file:} reads it as is)."""
+    maude_dir()
+    _write_private(path, _one_line(value).encode("utf-8"))
+
+
+def remove_secret(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def active_anthropic_key() -> str:
+    """The Anthropic API key when "Use this API key" is on (settings.json flag + ~/.maude/anthropic-key), else ""."""
+    if load_settings().get(ANTHROPIC_ACTIVE_SETTING) is True:
+        return read_secret(anthropic_key_file())
+    return ""
+
+
+def with_active_anthropic_key(env: dict, key: str, ambient) -> dict:
+    """Pure (Windows/macOS): `env` (what claude_env_from returned) with the active API key forced on, even when a
+    claude login exists. Bedrock/Foundry/Vertex flags that are set anywhere are turned off and a custom base URL /
+    auth token is removed (a None value = remove), for Claude Code's child environment only; no file is edited."""
+    out = dict(env)
+    merged = {**ambient, **env}
+    out["ANTHROPIC_API_KEY"] = key
+    for k in _ACTIVE_OFF_VARS:
+        if k in merged:
+            out[k] = "0"
+    for k in _ACTIVE_UNSET_VARS:
+        if k in merged:
+            out[k] = None
+    return out
 
 
 def apply_anthropic_key(new_key: str, active: bool) -> None:
-    """Make the Anthropic API key active (exported from clauderc) or inactive (kept in settings.json only).
-    new_key "" = keep the stored/exported one. ValueError (message for the user) when activating with no key;
-    OSError when a file cannot be written. Activating also switches Bedrock/Foundry off in clauderc (they would
-    otherwise win over a plain key) and remembers which, so deactivating switches them back on."""
+    """Settings > Anthropic. Stores the key in ~/.maude/anthropic-key (0600) and sets the flag in settings.json.
+    new_key "" = keep the key exported in clauderc, else the stored one. ValueError (message for the user) when
+    activating with no/unsuitable key; OSError when a file cannot be written.
+    Windows/macOS: nothing goes into clauderc (plat_claude_env injects the key and wins over a login, Bedrock and
+    Foundry); a key found exported in clauderc is moved into the key file.
+    Sandbox: the ~/bin/claude wrapper only reads clauderc. Its ANTHROPIC_BASE_URL branch (checked first, before the
+    login, Foundry and Bedrock) passes a key starting with sk-ant- through unchanged and itself sets
+    CLAUDE_CODE_USE_BEDROCK/FOUNDRY to 0, so active = `export ANTHROPIC_API_KEY` + `export ANTHROPIC_BASE_URL=
+    https://api.anthropic.com` in clauderc; inactive removes both. CLAUDE_CODE_USE_* is never touched."""
+    sandbox = current_platform() == "linux-sandbox"
     rc = read_clauderc()
-    key = new_key.strip() or rc.get("ANTHROPIC_API_KEY", "") or stored_anthropic_key()
+    key = _one_line(new_key) or rc.get("ANTHROPIC_API_KEY", "") or read_secret(anthropic_key_file())
     if not key:
         if active:
             raise ValueError("Enter an ANTHROPIC_API_KEY first.")
         return
+    if active and sandbox and not key.startswith("sk-ant-"):
+        raise ValueError("In the sandbox the key must start with sk-ant- (the claude wrapper replaces anything else).")
+    write_secret(anthropic_key_file(), key)  # the key is parked first: never lost between the writes below
     settings = load_settings()
-    displaced = [k for k in settings.get(ANTHROPIC_DISPLACED_SETTING, []) if k in _CLOUD_FLAGS] \
-        if isinstance(settings.get(ANTHROPIC_DISPLACED_SETTING), list) else []
-    changed = settings.get(ANTHROPIC_KEY_SETTING) != key
-    settings[ANTHROPIC_KEY_SETTING] = key  # the key is parked first: it is never lost between the two writes
-    if active:
+    settings[ANTHROPIC_ACTIVE_SETTING] = bool(active)
+    if not save_settings(settings):
+        raise OSError("could not write ~/.maude/settings.json")
+    if sandbox and active:
         vals = {"ANTHROPIC_API_KEY": key}
-        for k in _CLOUD_FLAGS:
-            if rc.get(k) == "1":
-                vals[k] = "0"
-                if k not in displaced:
-                    displaced.append(k)
-        settings[ANTHROPIC_DISPLACED_SETTING] = displaced
-        if not save_settings(settings):
-            raise OSError("could not write ~/.maude/settings.json")
+        if not rc.get("ANTHROPIC_BASE_URL"):
+            vals["ANTHROPIC_BASE_URL"] = ANTHROPIC_BASE
         merge_clauderc(vals)
-        os.environ["ANTHROPIC_API_KEY"] = key
-        for k in _CLOUD_FLAGS:
-            if vals.get(k) == "0":
-                os.environ.pop(k, None)
     else:
-        vals = {k: "1" for k in displaced if rc.get(k) == "0"}
-        settings[ANTHROPIC_DISPLACED_SETTING] = []
-        if (changed or displaced) and not save_settings(settings):
-            raise OSError("could not write ~/.maude/settings.json")
-        remove_clauderc_keys(["ANTHROPIC_API_KEY"])
-        if vals:
-            merge_clauderc(vals)
-        if os.environ.get("ANTHROPIC_API_KEY") == key:
-            os.environ.pop("ANTHROPIC_API_KEY", None)
+        drop = ["ANTHROPIC_API_KEY"]
+        if sandbox and rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE:
+            drop.append("ANTHROPIC_BASE_URL")
+        remove_clauderc_keys(drop)
+    if os.environ.get("ANTHROPIC_API_KEY") == key:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
 
 
 # ── Settings > OpenCode: a custom OpenAI-compatible provider in ~/.config/opencode/opencode.json ───────
 # Format (opencode.ai/docs/providers "Custom provider", /docs/config): `provider.<id>.npm` =
-# "@ai-sdk/openai-compatible", `options.baseURL`, `options.apiKey` ("{env:VAR}" is expanded by OpenCode),
-# `models.<model-id>`; the top-level `model` ("<provider>/<model>") is what `opencode` starts on when no --model
-# is given, i.e. the picker's Model: auto.
+# "@ai-sdk/openai-compatible", `options.baseURL`, `options.apiKey`, `models.<model-id>`; the top-level `model`
+# ("<provider>/<model>") is what `opencode` starts on when no --model is given, i.e. the picker's Model: auto.
+# The key is referenced as {file:~/.maude/opencode-key} (OpenCode substitutes {file:...} and {env:...} in the config;
+# `~/` is accepted), so it is not duplicated in the JSON, needs no environment variable and also works when
+# `opencode` is started by hand.
 OPENCODE_PROVIDER = "maude-custom"
 OPENCODE_NPM = "@ai-sdk/openai-compatible"
+OPENCODE_KEY_REF = "{file:~/.maude/opencode-key}"
 
 
 def opencode_config_path() -> Path:
     return Path.home() / ".config" / "opencode" / "opencode.json"
+
+
+def opencode_url_error(url: str) -> str:
+    """"" when `url` is acceptable as the OpenCode model URL, else a message. https anywhere; http only for
+    localhost, 127.0.0.1 and ::1; no braces (OpenCode would substitute them), no user:password@, no whitespace."""
+    if not url or re.search(r"[\s{}\"'\\]", url):
+        return "OpenCode model URL: a plain URL like https://host/v1 is needed (no spaces, braces or quotes)."
+    try:
+        u = urllib.parse.urlsplit(url)
+        host = u.hostname
+        u.port  # raises ValueError for a bad port
+    except ValueError:
+        return "OpenCode model URL is not a valid URL."
+    if u.scheme not in ("http", "https") or not host:
+        return "OpenCode model URL must start with https:// (or http:// for localhost)."
+    if "@" in u.netloc:
+        return "OpenCode model URL must not contain user:password@ (use the api_key field)."
+    if u.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"):
+        return "http:// is only allowed for localhost, 127.0.0.1 and [::1]; use https://."
+    return ""
+
+
+def _opencode_load() -> tuple[Path, bytes, dict]:
+    """(real path, raw bytes, parsed object) of opencode.json. A symlink is followed (the target is edited, the
+    link stays). Comments / not an object: OSError, nothing touched."""
+    path = Path(os.path.realpath(opencode_config_path()))
+    obj: dict = {}
+    raw = b""
+    if path.exists():
+        raw = path.read_bytes()
+        try:
+            obj = json.loads(_decode_text_strict(raw))
+        except ValueError:
+            raise OSError(f"{path} has comments or is not valid JSON, so Maude left it untouched "
+                          "(remove the comments or edit it by hand)") from None
+        if not isinstance(obj, dict):
+            raise OSError(f"{path} is not a JSON object; it was left untouched")
+    return path, raw, obj
+
+
+def _opencode_store(path: Path, raw: bytes, obj: dict) -> None:
+    """Atomic write (temp file beside the target) with a one-time `.maude-bak` copy (0600) of the old file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bak = path.with_name(path.name + ".maude-bak")
+    if raw and not bak.exists():
+        shutil.copy2(path, bak)
+        try:
+            bak.chmod(0o600)
+        except OSError:
+            pass
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".opencode-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def read_opencode_custom() -> tuple[str, str]:
@@ -3222,21 +3358,10 @@ def read_opencode_custom() -> tuple[str, str]:
 
 def merge_opencode_config(url: str, model: str, with_key: bool) -> None:
     """Add/refresh the maude-custom provider in opencode.json without touching anything else (other providers,
-    other keys). A one-time `.maude-bak` copy (0600) is taken before the first change. File with comments or
-    that is not a JSON object: OSError, left untouched. The key is never written here, only the reference
-    {env:MAUDE_OPENCODE_API_KEY} (with_key). Drops the `//` "managed by maude" marker: from now on the file is the
-    user's and `maude update` no longer regenerates it. Sets the top-level `model`."""
-    path = opencode_config_path()
-    obj: dict = {}
-    raw = b""
-    if path.exists():
-        raw = path.read_bytes()
-        try:
-            obj = json.loads(_decode_text_strict(raw))
-        except ValueError:
-            raise OSError(f"{path} is not plain JSON (comments?); it was left untouched") from None
-        if not isinstance(obj, dict):
-            raise OSError(f"{path} is not a JSON object; it was left untouched")
+    other keys). with_key adds apiKey = {file:~/.maude/opencode-key} (the file itself is written by the caller
+    AFTER this succeeds). Drops the `//` "managed by maude" marker (the file is the user's now, `maude update`
+    no longer regenerates it). Sets the top-level `model`. See _opencode_load for the refusals."""
+    path, raw, obj = _opencode_load()
     obj.setdefault("$schema", "https://opencode.ai/config.json")
     if isinstance(obj.get("//"), str) and "managed by maude" in obj["//"]:
         del obj["//"]
@@ -3245,33 +3370,32 @@ def merge_opencode_config(url: str, model: str, with_key: bool) -> None:
     opts = entry.get("options") if isinstance(entry.get("options"), dict) else {}
     opts["baseURL"] = url
     if with_key:
-        opts["apiKey"] = "{env:" + OPENCODE_API_ENV + "}"
+        opts["apiKey"] = OPENCODE_KEY_REF
     models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
     models.setdefault(model, {"name": model})
     entry.update({"npm": OPENCODE_NPM, "name": "Custom (Maude)", "options": opts, "models": models})
     prov[OPENCODE_PROVIDER] = entry
     obj["provider"] = prov
     obj["model"] = f"{OPENCODE_PROVIDER}/{model}"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    bak = path.with_name(path.name + ".maude-bak")
-    if raw and not bak.exists():
-        shutil.copy2(path, bak)
-        try:
-            bak.chmod(0o600)
-        except OSError:
-            pass
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".opencode-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(obj, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _opencode_store(path, raw, obj)
+
+
+def remove_opencode_custom() -> bool:
+    """Undo merge_opencode_config: delete provider.maude-custom and the top-level `model` when it points at it,
+    then delete ~/.maude/opencode-key. True when the config changed. Same refusals as the merge."""
+    path, raw, obj = _opencode_load()
+    changed = False
+    prov = obj.get("provider")
+    if isinstance(prov, dict) and OPENCODE_PROVIDER in prov:
+        del prov[OPENCODE_PROVIDER]
+        changed = True
+    if isinstance(obj.get("model"), str) and obj["model"].startswith(OPENCODE_PROVIDER + "/"):
+        del obj["model"]
+        changed = True
+    if changed:
+        _opencode_store(path, raw, obj)
+    remove_secret(opencode_key_file())
+    return changed
 
 
 def merge_gemini_env(values: dict[str, str], remove=None) -> None:
@@ -3522,6 +3646,7 @@ class CredsEntryScreen(ModalScreen[bool]):
     def __init__(self) -> None:
         super().__init__()
         self.mode = self.MODE_PASTE
+        self._anth_initial_use = False
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -3534,15 +3659,15 @@ class CredsEntryScreen(ModalScreen[bool]):
                                id="creds-native-only",
                                value=bool(load_settings().get("native_only_approved", True)))
             with Horizontal(id="creds-tabs"):
-                yield Button("Paste exports", id="btn-creds-mode-paste",
+                yield Button("Paste",     id="btn-creds-mode-paste",
                              variant="primary")
-                yield Button("Anthropic",     id="btn-creds-mode-anthropic",
+                yield Button("Anthropic", id="btn-creds-mode-anthropic",
                              variant="default")
-                yield Button("AWS Bedrock",   id="btn-creds-mode-bedrock",
+                yield Button("Bedrock",   id="btn-creds-mode-bedrock",
                              variant="default")
-                yield Button("Azure Foundry", id="btn-creds-mode-foundry",
+                yield Button("Foundry",   id="btn-creds-mode-foundry",
                              variant="default")
-                yield Button("OpenCode",      id="btn-creds-mode-opencode",
+                yield Button("OpenCode",  id="btn-creds-mode-opencode",
                              variant="default")
             with Container(id="creds-body"):
                 yield from self._compose_body()
@@ -3645,7 +3770,7 @@ class CredsEntryScreen(ModalScreen[bool]):
                 "Try again, or use one of the other methods.[/]")
 
     def _switch_mode(self, mode: str) -> None:
-        # All three mode bodies stay mounted from compose(); switching only toggles `display` and the
+        # All mode bodies stay mounted from compose(); switching only toggles `display` and the
         # button variants. Nothing is removed or re-mounted, so a rapid click or a click right after the
         # screen opens cannot race a TextArea that is still rendering (textual KeyError text-area--gutter,
         # NoMatches). save() reads only the pane of self.mode, so hidden fields never count.
@@ -3698,13 +3823,14 @@ class CredsEntryScreen(ModalScreen[bool]):
             yield Button("Claude Login", id="btn-creds-login", variant="default")
             yield Label("Claude subscription: sign in with your claude.ai account (no API key).")
             yield Label("ANTHROPIC_API_KEY:")
-            has_key = bool(stored_anthropic_key() or read_clauderc().get("ANTHROPIC_API_KEY"))
+            has_key = bool(read_secret(anthropic_key_file()) or read_clauderc().get("ANTHROPIC_API_KEY"))
+            # State when the screen opened: Save changes nothing unless the field or the checkbox differs from it.
+            self._anth_initial_use = bool(active_anthropic_key() or read_clauderc().get("ANTHROPIC_API_KEY"))
             yield Input(placeholder="saved (leave empty to keep it)" if has_key else "sk-ant-...",
                         id="creds-anthropic-key", password=True)
-            yield Checkbox("Use this API key", id="creds-anthropic-use",
-                           value=bool(read_clauderc().get("ANTHROPIC_API_KEY")))
-            yield Label("Checked: the key is exported. Unchecked: it is kept but not used, so a Claude "
-                        "login or Bedrock/Foundry wins.")
+            yield Checkbox("Use this API key", id="creds-anthropic-use", value=self._anth_initial_use)
+            yield Label("Checked: Maude starts Claude with this key, even if you are logged in. "
+                        "Unchecked: Claude Login / Bedrock / Foundry are used.")
         with Vertical(id="creds-pane-bedrock", classes="creds-pane"):
             yield Label("AWS Bedrock — region defaults to us-west-2.")
             yield Label("AWS_ACCESS_KEY_ID:")
@@ -3727,8 +3853,10 @@ class CredsEntryScreen(ModalScreen[bool]):
             yield Input(value=oc_url, placeholder="https://host/v1", id="creds-oc-url")
             yield Label("Model name (as the endpoint calls it):")
             yield Input(value=oc_model, placeholder="e.g. qwen3-coder", id="creds-oc-model")
-            yield Label("api_key (empty keeps the saved one; stored in clauderc as " + OPENCODE_API_ENV + "):")
-            yield Input(placeholder="api key", id="creds-oc-key", password=True)
+            yield Label("api_key (empty keeps the saved one; kept in ~/.maude/opencode-key):")
+            yield Input(placeholder="saved (leave empty to keep it)" if read_secret(opencode_key_file())
+                        else "api key", id="creds-oc-key", password=True)
+            yield Button("Remove OpenCode custom provider", id="btn-oc-remove", variant="default")
 
     def _update_default_checkbox(self) -> None:
         """Show the Bedrock-vs-Foundry default toggle only when both
@@ -3774,7 +3902,11 @@ class CredsEntryScreen(ModalScreen[bool]):
         # Apply the routing checkbox if it's visible (it concerns Bedrock vs Foundry only; the Anthropic key
         # and OpenCode panes have their own routing).
         if self.mode not in (self.MODE_ANTHROPIC, self.MODE_OPENCODE):
-            self._apply_default_provider()
+            try:
+                self._apply_default_provider()
+            except OSError as err:
+                self._set_status(f"[bold red]Could not switch the default provider: {err}[/]")
+                return
         self.dismiss(True)
 
     def _save_native_only(self) -> None:
@@ -3795,6 +3927,8 @@ class CredsEntryScreen(ModalScreen[bool]):
     def _save_anthropic(self) -> None:
         key = self.query_one("#creds-anthropic-key", Input).value.strip()
         use = self.query_one("#creds-anthropic-use", Checkbox).value
+        if not key and use == self._anth_initial_use:
+            return  # nothing changed in this pane: touch no file
         try:
             apply_anthropic_key(key, use)
         except ValueError as err:
@@ -3807,18 +3941,34 @@ class CredsEntryScreen(ModalScreen[bool]):
         key = self.query_one("#creds-oc-key", Input).value.strip()
         if not url and not model and not key:
             return  # nothing entered: only the checkbox above may have changed
-        if not re.fullmatch(r"https?://[^\s\"'\\]+", url):
-            self._set_status("[bold red]OpenCode model URL must start with http:// or https:// (no spaces).[/]")
+        err = opencode_url_error(url)
+        if err:
+            self._set_status(f"[bold red]{err}[/]")
             raise _CredsValidation()
         if not MODEL_ID_RE.fullmatch(model):
             self._set_status("[bold red]OpenCode needs the model name the endpoint expects "
                              "(letters, digits and . _ : / @ + # -).[/]")
             raise _CredsValidation()
-        # The key goes to clauderc (OpenCode reads it as {env:...}); a key left empty keeps the saved one.
+        # Config first: a refused file (comments, not an object) leaves nothing half-saved. The key file follows;
+        # a key left empty keeps the saved one. opencode.json refers to it as {file:~/.maude/opencode-key}.
+        try:
+            merge_opencode_config(url, model, with_key=bool(key) or bool(read_secret(opencode_key_file())))
+        except OSError as err:
+            self._set_status(f"[bold red]OpenCode config not saved: {err}[/]")
+            raise _CredsValidation() from None
         if key:
-            merge_clauderc({OPENCODE_API_ENV: key})
-            os.environ[OPENCODE_API_ENV] = key
-        merge_opencode_config(url, model, with_key=bool(key) or bool(read_clauderc().get(OPENCODE_API_ENV)))
+            write_secret(opencode_key_file(), key)
+
+    @on(Button.Pressed, "#btn-oc-remove")
+    def oc_remove(self) -> None:
+        try:
+            changed = remove_opencode_custom()
+        except OSError as err:
+            self._set_status(f"[bold red]Could not remove: {err}[/]")
+            return
+        for i in ("#creds-oc-url", "#creds-oc-model", "#creds-oc-key"):
+            self.query_one(i, Input).value = ""
+        self._set_status("OpenCode custom provider removed." if changed else "No OpenCode custom provider was set up.")
 
     def _save_paste(self) -> None:
         text = self.query_one("#creds-text", TextArea).text
@@ -3906,34 +4056,21 @@ class CredsEntryScreen(ModalScreen[bool]):
         cb = self.query_one("#creds-default-bedrock", Checkbox)
         if not cb.display:
             return
-        active   = clauderc_path()
-        inactive = clauderc_inactive_path()
         if cb.value:
-            # Bedrock active → park clauderc out of the way so the
-            # wrapper doesn't source Foundry creds.
-            if active.exists():
-                try:
-                    if inactive.exists():
-                        inactive.unlink()
-                    active.rename(inactive)
-                except OSError:
-                    pass
+            # Bedrock is the default now: a plain API key must not win over it, and clauderc is parked so the
+            # wrapper doesn't source Foundry creds. Both files existing is merged, never deleted (park_clauderc).
+            if active_anthropic_key():
+                apply_anthropic_key("", False)
+            park_clauderc(True)
             os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
             os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
         else:
-            # Foundry active → restore clauderc if it was parked.
-            if inactive.exists() and not active.exists():
-                try:
-                    inactive.rename(active)
-                except OSError:
-                    pass
+            # Foundry active → restore clauderc if it was parked (merging when a save re-created it).
+            park_clauderc(False)
             os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
             os.environ["CLAUDE_CODE_USE_FOUNDRY"] = "1"
-            # Persist the routing flag (only when clauderc is the
-            # active file — otherwise we'd be writing to .inactive).
-            if active.exists():
+            if clauderc_path().exists():
                 merge_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1"})
-
     @on(Button.Pressed, "#btn-creds-cancel")
     def cancel(self) -> None:
         self.dismiss(False)
@@ -5744,8 +5881,9 @@ class MaudeApp(App):
     }
 
     #creds-box {
-        padding: 2 3;
+        padding: 1 3;
         width: 90;
+        max-width: 100%;
         height: 42;
         max-height: 100%;
         border: heavy #b87878;
@@ -5766,6 +5904,7 @@ class MaudeApp(App):
 
     #creds-tabs Button {
         margin-right: 1;
+        min-width: 0;
     }
 
     #creds-body {
@@ -5779,6 +5918,14 @@ class MaudeApp(App):
 
     #creds-pane-anthropic, #creds-pane-bedrock, #creds-pane-foundry, #creds-pane-opencode {
         display: none;  /* paste is the initial mode; _switch_mode toggles these */
+    }
+
+    #creds-box Checkbox {
+        border: none;
+        padding: 0;
+        margin: 0;
+        height: 1;
+        width: 100%;
     }
 
     #creds-native-only {
@@ -5806,9 +5953,11 @@ class MaudeApp(App):
     }
 
     #creds-status {
-        height: 1;
+        height: auto;
+        max-height: 3;
+        width: 100%;
         color: #c09898;
-        margin-top: 1;
+        margin-top: 0;
     }
 
     #creds-default-bedrock {

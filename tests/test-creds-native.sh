@@ -26,7 +26,10 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "creds_gate_decision", "creds_gate_blocks", "AWS_CREDS_PATH", "AWS_CONFIG_PATH", "FEATURES",
         "hidden_widgets", "feature_on", "FEATURE_WIDGETS", "_unquote_rc_value", "_sh_quote", "_write_private",
         "_decode_text_strict", "plat_tool_env", "creds_gate_precheck", "_LOGIN_OK", "_INI_HEADER_RE",
-        "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES", "OPENCODE_API_ENV"}
+        "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES",
+        "active_anthropic_key", "with_active_anthropic_key", "anthropic_key_file", "read_secret", "_one_line",
+        "ANTHROPIC_ACTIVE_SETTING", "load_settings", "_parse_settings", "_decode_state", "SETTINGS_FILE",
+        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS"}
 
 def load(platform):
     ns = {"os": os, "re": re, "json": json, "shutil": shutil, "subprocess": subprocess, "time": time,
