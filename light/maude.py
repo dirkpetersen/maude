@@ -1654,7 +1654,7 @@ def start_models_refresh(on_done=None) -> None:
 def _parse_settings(raw: bytes) -> dict | None:
     try:
         obj = json.loads(_decode_state(raw))
-    except (ValueError, TypeError):
+    except Exception:  # not JSON, wrong type, or nested so deep that json raises RecursionError: load_settings never raises
         return None
     return obj if isinstance(obj, dict) else None
 
@@ -3093,19 +3093,25 @@ def _sh_quote(v: str) -> str:
 
 
 def _write_private(path: Path, data: bytes) -> None:
-    """Write bytes to a file that is created mode 0600 (no window where it is group/world readable).
-    The mode has no effect on Windows, where the user profile ACL protects the file."""
-    flags = os.O_WRONLY
-    flags |= os.O_CREAT
-    flags |= os.O_TRUNC
-    flags |= getattr(os, "O_BINARY", 0)
-    fd = os.open(str(path), flags, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
+    """Write bytes to a file atomically and mode 0600 (temp file in the same folder, created 0600 so there is no
+    window where it is group/world readable, then replace_retry). A symlinked target is written through (the link
+    stays). The mode has no effect on Windows, where the user profile ACL protects the file."""
+    real = Path(os.path.realpath(str(path)))
+    fd, tmp = tempfile.mkstemp(dir=str(real.parent), prefix=".tmp-", suffix=real.suffix)
     try:
-        path.chmod(0o600)  # a pre-existing file keeps its old mode otherwise
-    except OSError:
-        pass
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        replace_retry(tmp, real)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_clauderc(values: dict[str, str], path: Path | None = None) -> None:
@@ -3257,13 +3263,13 @@ def apply_anthropic_key(new_key: str, active: bool) -> None:
     """Settings > Anthropic (Windows/macOS only; a no-op in the sandbox). Stores the key in ~/.maude/anthropic-key
     (0600) and sets the flag in settings.json; plat_claude_env() injects the key when the flag is on (it wins over a
     login, Bedrock and Foundry), nothing is added to clauderc. A clauderc ANTHROPIC_API_KEY equal to the key is moved
-    into the key file (a different key of the user's is never removed). new_key "" = keep the key exported in
-    clauderc, else the stored one. ValueError (message for the user) when activating with no key; OSError when a file
+    into the key file (a different key of the user's is never removed). new_key "" = keep the stored key file,
+    else take the one exported in clauderc (a stored key is never overwritten by a clauderc key). ValueError (message for the user) when activating with no key; OSError when a file
     cannot be written."""
     if not is_native():
         return
     rc = read_clauderc()
-    key = _one_line(new_key) or rc.get("ANTHROPIC_API_KEY", "") or read_secret(anthropic_key_file())
+    key = _one_line(new_key) or read_secret(anthropic_key_file()) or rc.get("ANTHROPIC_API_KEY", "")
     if not key:
         if active:
             raise ValueError("Enter an ANTHROPIC_API_KEY first.")
@@ -3868,7 +3874,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             has_key = bool(read_secret(anthropic_key_file()) or read_clauderc().get("ANTHROPIC_API_KEY"))
             # State when the screen opened: Save changes nothing unless the field or the checkbox differs from it.
             native = is_native()  # API key mode is Windows/macOS only for now: in the sandbox both are disabled
-            self._anth_initial_use = native and bool(active_anthropic_key() or read_clauderc().get("ANTHROPIC_API_KEY"))
+            self._anth_initial_use = native and bool(active_anthropic_key())  # the flag + key file only, not a pasted key
             yield Input(placeholder="saved (leave empty to keep it)" if has_key else "sk-ant-...",
                         id="creds-anthropic-key", password=True, disabled=not native)
             yield Checkbox("Use this API key", id="creds-anthropic-use", value=self._anth_initial_use, disabled=not native)
@@ -3914,9 +3920,10 @@ class CredsEntryScreen(ModalScreen[bool]):
             cb.display = True
             # If clauderc is parked as .inactive, Bedrock is the
             # currently-default provider; check the box accordingly.
-            # (clauderc.inactive existing at all means Bedrock is the default: a Paste/Foundry save while parked
-            # re-creates clauderc, and the next Bedrock-default Save merges both files again.)
-            parked = clauderc_inactive_path().exists()
+            # Only the parked file present = Bedrock is the default. When BOTH exist (a save re-created the active
+            # file while parked, or a stale .inactive is left next to an active Foundry setup) the active file
+            # decides: any credential in it (CLAUDE_CODE_USE_FOUNDRY=1 included) means Foundry, unchecked.
+            parked = clauderc_inactive_path().exists() and not read_clauderc()
             cb.value = parked or (
                 bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
                 and not bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
@@ -4112,6 +4119,8 @@ class CredsEntryScreen(ModalScreen[bool]):
         cb = self.query_one("#creds-default-bedrock", Checkbox)
         if not cb.display:
             return
+        if cb.value == self._default_bedrock_initial:
+            return  # not flipped in this session: change nothing (no parking, no env or clauderc rewrite)
         if cb.value:
             # Bedrock is the default now: a plain API key must not win over it, and clauderc is parked so the
             # wrapper doesn't source Foundry creds. Both files existing is merged, never deleted (park_clauderc).

@@ -108,11 +108,12 @@ for plat, tag in (("win32", "win"), ("darwin", "mac")):
     ns["park_clauderc"](True)
     check(f"{tag}.parked.key_still_injected", ns["plat_claude_env"]().get("ANTHROPIC_API_KEY") == "sk-ant-k1" and ns["clauderc_inactive_path"]().exists())
     ns["park_clauderc"](False)
-    # a key pasted into clauderc (Paste pane) is moved to the key file when the user unchecks the box
+    # a key pasted into clauderc (Paste pane) stays while a key file exists (the stored key wins, the file is never overwritten)
     ns["apply_anthropic_key"]("", False)
     ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-pasted"})
     ns["apply_anthropic_key"]("", False)
-    check(f"{tag}.paste_moved", "ANTHROPIC_API_KEY" not in ns["read_clauderc"]() and akey.read_text() == "sk-ant-pasted", ns["read_clauderc"]())
+    check(f"{tag}.paste_kept_when_key_file_exists", ns["read_clauderc"]().get("ANTHROPIC_API_KEY") == "sk-ant-pasted" and akey.read_text() == "sk-ant-k1", (ns["read_clauderc"](), akey.read_text()))
+    ns["apply_anthropic_key"]("", False); ns["remove_clauderc_keys"](["ANTHROPIC_API_KEY"])
     # activate with no key at all: error, nothing written
     reset()
     try:
@@ -267,6 +268,33 @@ for f in list(real.parent.iterdir()):
     f.unlink()
 real.parent.rmdir()
 
+# a stored key file is never overwritten by a clauderc key; an empty field keeps the stored key
+ns = load("win32")
+ns["write_secret"](akey, "sk-ant-stored"); ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-pasted"})
+ns["apply_anthropic_key"]("", True)
+check("key.stored_beats_clauderc_key", akey.read_text() == "sk-ant-stored" and ns["read_clauderc"]().get("ANTHROPIC_API_KEY") == "sk-ant-pasted"
+      and ns["active_anthropic_key"]() == "sk-ant-stored", (akey.read_text(), ns["read_clauderc"]()))
+reset()
+ns["merge_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-only-in-rc"})   # no key file: the clauderc key is taken over (and moved)
+ns["apply_anthropic_key"]("", True)
+check("key.rc_key_taken_when_no_file", akey.read_text() == "sk-ant-only-in-rc" and "ANTHROPIC_API_KEY" not in ns["read_clauderc"]())
+reset()
+# load_settings never raises, even for pathologically nested JSON
+sj.parent.mkdir(parents=True, exist_ok=True); sj.write_text("[" * 200000 + "]" * 200000)
+ns = load("win32")
+check("settings.deep_json_defaults", ns["load_settings"]() == {"native_only_approved": True})
+reset()
+# _write_private is atomic: 0600 even over a wider file, no temp left, a symlinked target is written through
+ns = load("win32")
+rcp = ns["clauderc_path"](create=True); rcp.write_text("export A='1'\n"); rcp.chmod(0o644)
+ns["write_clauderc"]({"B": "2"})
+check("write_private.mode_0600_over_wider", mode(rcp) == "0o600" and rcp.read_text() == "export B='2'\n", mode(rcp))
+check("write_private.no_tmp_left", not [q for q in rcp.parent.iterdir() if q.name.startswith(".tmp-")])
+tgt = home / "real-clauderc"; tgt.write_text("old"); rcp.unlink(); os.symlink(tgt, rcp)
+ns["write_clauderc"]({"C": "3"})
+check("write_private.symlink_written_through", rcp.is_symlink() and tgt.read_text() == "export C='3'\n" and mode(tgt) == "0o600", tgt.read_text())
+rcp.unlink(); tgt.unlink()
+reset()
 # secrets are written atomically: no temp file is left behind
 check("secret.no_tmp_left", not [q for q in (home / ".maude").iterdir() if q.name.startswith(".secret-")])
 # ── OpenCode URL validation ──

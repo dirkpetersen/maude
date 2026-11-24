@@ -12,7 +12,7 @@ d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
 
 cat > "$d/run.py" <<'PY'
-import ast, json, os, re, shutil, subprocess, sys, time, types
+import ast, json, os, re, shutil, subprocess, sys, tempfile, time, types
 from pathlib import Path
 
 src_path = sys.argv[1]
@@ -33,7 +33,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "replace_retry"}
 
 def load(platform):
-    ns = {"os": os, "re": re, "json": json, "shutil": shutil, "subprocess": subprocess, "time": time,
+    ns = {"os": os, "re": re, "json": json, "shutil": shutil, "subprocess": subprocess, "time": time, "tempfile": tempfile,
           "Path": Path, "sys": types.SimpleNamespace(platform=platform)}
     for n in tree.body:
         names = {t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)} | {getattr(n, "name", "")}

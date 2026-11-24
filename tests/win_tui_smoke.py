@@ -945,7 +945,8 @@ try:
                 for sel in ("#creds-native-only", "#btn-creds-save", "#btn-creds-cancel"):
                     w = scr.query_one(sel); w.focus(); await pilot.pause()
                     assert w.region.height > 0 and w.region.bottom <= size[1] and w.region.right <= size[0], (size, sel, w.region)
-                assert len(scr.query_one("#creds-status").region) >= 0 and scr.query_one("#creds-status").region.right <= size[0]
+                st = scr.query_one("#creds-status")
+                assert st.region.height >= 1 and st.region.right <= size[0] and st.region.bottom <= size[1], (size, st.region)
                 scr.query_one("#btn-creds-cancel").press(); await pilot.pause()
                 await wait_until(pilot, lambda: len(app.screen_stack) == 1)
     import json as _json
@@ -973,6 +974,22 @@ try:
         maude.merge_clauderc({"ANTHROPIC_FOUNDRY_API_KEY": "fk", "CLAUDE_CODE_USE_FOUNDRY": "1"})
         maude.write_secret(akey_file, "sk-ant-b1")
         s = maude.load_settings(); s["anthropic_key_active"] = True; s["native_only_approved"] = True; maude.save_settings(s)
+        # 0) BOTH files present when the screen opens (a stale clauderc.inactive next to an active Foundry setup): the
+        #    box reads unchecked, and an unflipped Paste Save leaves clauderc, clauderc.inactive and the env untouched
+        maude.write_clauderc({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2"}, inactive_file)
+        flags = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY")
+        env_before = {k: os.environ.get(k) for k in flags}
+        rc_before, inactive_before = rc_file.read_text(), inactive_file.read_text()
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            scr = await open_settings(pilot)
+            cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+            await wait_until(pilot, lambda: cb.display)
+            assert cb.display and cb.value is False and scr._default_bedrock_initial is False, (cb.display, cb.value)
+            await save_and_close(pilot, scr)
+        assert "CLAUDE_CODE_USE_FOUNDRY" in rc_file.read_text()  # the Foundry setup stays active
+        assert rc_file.read_text() == rc_before and inactive_file.read_text() == inactive_before, "an unflipped Save must change no file"
+        assert {k: os.environ.get(k) for k in flags} == env_before, "an unflipped Save must not change the environment"
+        inactive_file.unlink()
         async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:   # 1) box shown, not flipped: a plain Save keeps the key
             scr = await open_settings(pilot)
             cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
