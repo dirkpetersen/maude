@@ -9,7 +9,7 @@ In this mode, `maude.exe` runs on Windows. The AI tool runs on your Windows acco
 !!! warning "No sandbox"
     AI agents run with your full Windows user rights. They can reach all your files, SSH keys and browser data. The normal permission prompts of the AI tool stay on. Maude never turns them off.
 
-1. Download `maude.exe` from the [latest GitHub release](https://github.com/dirkpetersen/maude/releases/latest). The exe is not signed. If Windows shows "Windows protected your PC", select **More info**, then **Run anyway**.
+1. [Download maude.exe (v0.3.8)](https://github.com/dirkpetersen/maude/releases/download/v0.3.8/maude.exe). The exe is not signed. If Windows shows "Windows protected your PC", select **More info**, then **Run anyway**.
 2. Open PowerShell. Run the file once. Go to the folder that has the file first, for example Downloads.
 
     ```powershell

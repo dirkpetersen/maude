@@ -154,7 +154,7 @@ Flags: `--version`, `--uninstall` (removes the keys; then delete `%USERPROFILE%\
 
 ## Install
 
-Download `maude.exe` (and `maude.exe.sha256`) from the latest GitHub Release and run it once, also from the Downloads folder: it copies itself to `%USERPROFILE%\.local\bin`. Check the hash with `Get-FileHash maude.exe`. The exe is unsigned, so SmartScreen shows "Windows protected your PC": choose More info, then Run anyway.
+[Download maude.exe (v0.3.8)](https://github.com/dirkpetersen/maude/releases/download/v0.3.8/maude.exe) (checksum: [maude.exe.sha256](https://github.com/dirkpetersen/maude/releases/download/v0.3.8/maude.exe.sha256)) and run it once, also from the Downloads folder: it copies itself to `%USERPROFILE%\.local\bin`. Check the hash with `Get-FileHash maude.exe`. The exe is unsigned, so SmartScreen shows "Windows protected your PC": choose More info, then Run anyway.
 
 ## Build
 
