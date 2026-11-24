@@ -3195,8 +3195,8 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
 class SSHKeyUnlockScreen(ModalScreen[None]):
     """Prompt for the SSH key passphrase and load it into ssh-agent.
 
-    Triggered at TUI startup when ~/.ssh/id_ed25519 is encrypted but the
-    running ssh-agent doesn't have it yet.
+    Triggered at TUI startup (sandbox; natively only when Maude started its own agent) or by To Github
+    when ~/.ssh/id_ed25519 is encrypted but the running ssh-agent doesn't have it yet.
     """
 
     BINDINGS = [Binding("escape", "skip", show=False)]
@@ -5368,6 +5368,11 @@ class MaudeApp(App):
         # block was just appended and won't take effect until the next
         # login). Spinning up our own ssh-agent is cheap and keeps git
         # push from blocking on a passphrase prompt.
+        if is_native() and ssh_agent_running():
+            # Windows/macOS: the user's own agent (Windows ssh-agent service, macOS launchd agent)
+            # is already in charge of the key; never prompt for its passphrase at startup.
+            mac_load_keychain()  # macOS: no-op elsewhere; loads keychain-stored keys silently
+            return
         if not ensure_ssh_agent():
             return
         mac_load_keychain()  # macOS: after a restart the agent is empty until the keychain is loaded
