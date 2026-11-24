@@ -7,11 +7,11 @@ on:
       - "docs/**"
       - "zensical.toml"
       - ".github/workflows/docs.yml"
+      - "scripts/docs-set-release.py"
   workflow_dispatch:
-  workflow_call:
     inputs:
       tag:
-        description: "Release tag (vX.Y.Z) the maude.exe download links should point at"
+        description: "Release tag (vX.Y.Z) the maude.exe download links should point at; empty = newest release"
         required: false
         type: string
         default: ""
@@ -40,8 +40,8 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           tag="${INPUT_TAG:-}"
-          if [[ -z "$tag" ]]; then
-            tag="$(gh release view --repo "${{ github.repository }}" --json tagName -q .tagName 2>/dev/null || true)"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || true)"
           fi
           python3 scripts/docs-set-release.py "$tag" docs
       - run: pip install zensical

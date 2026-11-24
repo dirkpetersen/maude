@@ -6,7 +6,7 @@ Usage: docs-set-release.py <tag> [docs_dir]
 Rewrites, in every .md under docs_dir:
   .../dirkpetersen/maude/releases/download/vX.Y.Z/maude.exe[.sha256]
   link text "Download maude.exe (vX.Y.Z)"
-Only exact vMAJOR.MINOR.MINOR tags are accepted; anything else is a no-op
+Only exact vMAJOR.MINOR.PATCH tags are accepted; anything else is a no-op
 (exit 0) so a docs build never breaks.
 """
 import pathlib
@@ -14,7 +14,7 @@ import re
 import sys
 
 SEMVER = r"v[0-9]+\.[0-9]+\.[0-9]+"
-URL = re.compile(r"(dirkpetersen/maude/releases/download/)" + SEMVER + r"(/maude\.exe)")
+URL = re.compile(r"(https://github\.com/dirkpetersen/maude/releases/download/)" + SEMVER + r"(/maude\.exe)")
 TEXT = re.compile(r"(Download maude\.exe \()" + SEMVER + r"(\))")
 
 
@@ -26,11 +26,19 @@ def main() -> int:
         return 0
     changed = 0
     for p in sorted(root.rglob("*.md")):
-        s = p.read_text(encoding="utf-8")
+        try:
+            s = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"docs-set-release: skipping {p}: {e}")
+            continue
         n = URL.sub(lambda m: m.group(1) + tag + m.group(2), s)
         n = TEXT.sub(lambda m: m.group(1) + tag + m.group(2), n)
         if n != s:
-            p.write_text(n, encoding="utf-8", newline="")
+            try:
+                p.write_text(n, encoding="utf-8", newline="")
+            except OSError as e:
+                print(f"docs-set-release: cannot write {p}: {e}")
+                continue
             changed += 1
             print(f"docs-set-release: {p} -> {tag}")
     print(f"docs-set-release: {changed} file(s) updated to {tag}")

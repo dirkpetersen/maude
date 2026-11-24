@@ -254,13 +254,17 @@ jobs:
             dist/maude.exe.sha256
 
   # Redeploy the docs site so the maude.exe links point at this release.
-  # A release made with GITHUB_TOKEN does not trigger other workflows, hence workflow_call.
+  # The github-pages environment only accepts deploys from main, so dispatch
+  # docs.yml on main instead of calling it (a called workflow would run on the tag ref).
   update-docs:
     needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    uses: ./.github/workflows/docs.yml
-    with:
-      tag: ${{ github.ref_name }}
+      actions: write
+    steps:
+      - name: Dispatch docs.yml on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
