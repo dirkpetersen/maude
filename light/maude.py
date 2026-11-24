@@ -208,16 +208,17 @@ _mac_clt_cache: list = [None]  # per process: does `xcode-select -p` succeed (No
 
 def mac_clt_ready(run=None) -> bool:
     """macOS: are the Command Line Tools installed (so /usr/bin/git is real git, not Apple's stub)?
-    Cached per process; mac_ensure_tool resets the cache after an install attempt. An injected `run`
-    (tests) is never cached."""
-    if run is None and _mac_clt_cache[0] is not None:
-        return _mac_clt_cache[0]
+    Only a True answer is cached (per process): while the tools are missing it is re-checked, so an
+    install done outside Maude is noticed. A timeout counts as not ready. mac_ensure_tool also resets
+    the cache after an install attempt. An injected `run` (tests) is never cached."""
+    if run is None and _mac_clt_cache[0]:
+        return True
     try:
-        ok = (run or subprocess.run)(["xcode-select", "-p"], capture_output=True).returncode == 0
-    except OSError:
+        ok = (run or subprocess.run)(["xcode-select", "-p"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
         ok = False
-    if run is None:
-        _mac_clt_cache[0] = ok
+    if run is None and ok:
+        _mac_clt_cache[0] = True
     return ok
 
 
@@ -273,8 +274,8 @@ _MAC_CURL_INSTALL = {
     "kiro-cli": "set -o pipefail; curl -fsSL https://cli.kiro.dev/install | bash -s -- --no-modify-path",
 }
 MAC_NOT_FOUND_HINT = {
-    "kiro-cli": "Kiro CLI installs as an app: open \"Kiro CLI.app\" (in /Applications) once to finish "
-                "setup, then open a new terminal window and try again.",
+    "kiro-cli": "The Kiro installer opens \"Kiro CLI.app\" (in /Applications) to finish setup. Wait for "
+                "that to complete, or open the app once yourself, then try again.",
 }
 
 
@@ -4349,6 +4350,11 @@ class DetachFromGithubScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#btn-detach-go")
     def go(self) -> None:
         cwd = str(self.project_path)
+        if IS_MAC and not plat_tool("git"):
+            self.query_one("#detach-status", Label).update(
+                "[bold red]Git is not installed. Open Setup Git(hub): Maude offers to install it.[/]"
+            )
+            return
         try:
             r = subprocess.run(
                 [git_exe(), "-C", cwd, "remote", "remove", "origin"],

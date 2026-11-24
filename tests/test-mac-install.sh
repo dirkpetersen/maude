@@ -35,7 +35,7 @@ def build(ns, skip=()):
             exec(compile(ast.Module([n], []), "maude.py", "exec", flags=__future__.annotations.compiler_flag), ns)
     return ns
 
-ns = build({"subprocess": types.SimpleNamespace(run=boom), "plat_tool": boom, "input": boom, "IS_MAC": True,
+ns = build({"subprocess": types.SimpleNamespace(run=boom, TimeoutExpired=realsp.TimeoutExpired), "plat_tool": boom, "input": boom, "IS_MAC": True,
             "IS_WIN": False, "is_native": lambda: True}, skip=("plat_tool", "git_exe"))
 
 def out(k, v):
@@ -159,22 +159,21 @@ def world(found, clt_ok):
         return R(0 if clt_ok[0] else 2)
     def which(name, path=None):
         return found.get(path, {}).get(name)
-    w = build({"subprocess": types.SimpleNamespace(run=fake_run), "shutil": types.SimpleNamespace(which=which),
+    w = build({"subprocess": types.SimpleNamespace(run=fake_run, TimeoutExpired=realsp.TimeoutExpired), "shutil": types.SimpleNamespace(which=which),
                "IS_MAC": True, "IS_WIN": False, "is_native": lambda: True, "Path": Path, "input": boom, "mx": None})
     return w, calls
 
 ok = [False]
 w, calls = world({None: {"git": "/usr/bin/git", "gh": "/usr/bin/gh"}}, ok)
 out("tool.stub.none", w["plat_tool"]("git"))
-out("tool.stub.cached", (w["plat_tool"]("git"), w["git_exe"](), len(calls)))
+out("tool.stub.rechecked", (w["plat_tool"]("git"), w["git_exe"](), len(calls), w["_mac_clt_cache"][0]))
 out("tool.other.untouched", (w["plat_tool"]("gh"), len(calls)))
-ok[0] = True                                  # the user installed the tools, but the answer is cached
-out("tool.cached.still.none", w["plat_tool"]("git"))
-w["_mac_clt_cache"][0] = None
-out("tool.real.after.clt", (w["plat_tool"]("git"), w["git_exe"]()))
+ok[0] = True                                  # CLT installed outside Maude: noticed without a reset
+out("tool.negative.not.cached", (w["plat_tool"]("git"), w["git_exe"](), w["_mac_clt_cache"][0]))
+out("tool.positive.cached", (w["plat_tool"]("git"), len(calls)))
 ok2 = [True]
 w, calls = world({None: {"git": "/usr/bin/git"}}, ok2)
-out("tool.real.git", (w["plat_tool"]("git"), len(calls)))
+out("tool.real.git", (w["plat_tool"]("git"), w["plat_tool"]("git"), len(calls)))
 ok3 = [False]
 w, calls = world({None: {"git": "/usr/bin/git"}, "/opt/homebrew/bin": {"git": "/opt/homebrew/bin/git"}}, ok3)
 out("tool.stub.brewgit", w["plat_tool"]("git"))
@@ -200,6 +199,15 @@ out("reset.unfinished", (res, any("not installed yet" in m for m in said), any("
 # kiro: the zip fallback / the app's own setup put it in ~/.local/bin, which plat_tool searches
 kdir = str(Path.home() / ".local" / "bin")
 w, calls = world({kdir: {"kiro-cli": kdir + "/kiro-cli"}}, [True])
+# xcode-select -p hanging: treated as not ready, never cached, and called with a timeout
+seen = {}
+def hang(argv, **kw):
+    seen.update(kw)
+    raise realsp.TimeoutExpired(argv, kw.get("timeout"))
+w2, calls = world({}, [True])
+w2["subprocess"] = types.SimpleNamespace(run=hang, TimeoutExpired=realsp.TimeoutExpired)
+out("clt.timeout", (w2["mac_clt_ready"](), w2["_mac_clt_cache"][0] is None))
+out("clt.timeout.arg", seen.get("timeout") == 10)
 out("tool.kiro.localbin", w["plat_tool"]("kiro-cli") == kdir + "/kiro-cli")
 PY
 
@@ -260,11 +268,14 @@ assert_eq "kiro not on PATH after install: Kiro-specific hint" "True" "$(get run
 assert_eq "other tools keep the generic not-found message" "True" "$(get run.claude.notfound.generic)"
 assert_eq "xcode-select path, git still missing: not installed yet, not 'was installed'" "(None, True, False)" "$(get run.git.clt.missing)"
 assert_eq "plat_tool(git): Apple stub without CLT is None" "None" "$(get tool.stub.none)"
-assert_eq "stub check is cached (one xcode-select run), git_exe never the bare name" "(None, '/nonexistent/git', 1)" "$(get tool.stub.cached)"
-assert_eq "other tools do not trigger the CLT check" "('/usr/bin/gh', 1)" "$(get tool.other.untouched)"
-assert_eq "cached answer is kept until reset" "None" "$(get tool.cached.still.none)"
-assert_eq "after reset and CLT installed: real git" "('/usr/bin/git', '/usr/bin/git')" "$(get tool.real.after.clt)"
-assert_eq "real /usr/bin/git when xcode-select -p succeeds" "('/usr/bin/git', 1)" "$(get tool.real.git)"
+assert_eq "stub without CLT: re-checked each time (not cached), git_exe never the bare name" "(None, '/nonexistent/git', 3, None)" "$(get tool.stub.rechecked)"
+assert_eq "other tools do not trigger the CLT check" "('/usr/bin/gh', 3)" "$(get tool.other.untouched)"
+assert_eq "CLT installed outside Maude is noticed without a reset" "('/usr/bin/git', '/usr/bin/git', True)" "$(get tool.negative.not.cached)"
+assert_eq "a positive answer is cached" "('/usr/bin/git', 4)" "$(get tool.positive.cached)"
+assert_eq "real /usr/bin/git when xcode-select -p succeeds (one run for two lookups)" "('/usr/bin/git', '/usr/bin/git', 1)" "$(get tool.real.git)"
+assert_eq "xcode-select timeout: not ready, not cached" "(False, True)" "$(get clt.timeout)"
+assert_eq "xcode-select is called with a timeout" "True" "$(get clt.timeout.arg)"
+assert_contains "detach on macOS checks for missing git first" 'if IS_MAC and not plat_tool("git"):' "$(cat "$MAUDE_PY")"
 assert_eq "stub on PATH but Homebrew git exists: Homebrew git" "/opt/homebrew/bin/git" "$(get tool.stub.brewgit)"
 assert_eq "Homebrew git needs no CLT check" "('/opt/homebrew/bin/git', 0)" "$(get tool.brewgit.nocheck)"
 assert_eq "no git at all: None and a nonexistent path" "(None, '/nonexistent/git')" "$(get tool.git_exe.missing)"
