@@ -29,7 +29,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES",
         "active_anthropic_key", "with_active_anthropic_key", "anthropic_key_file", "read_secret", "_one_line",
         "ANTHROPIC_ACTIVE_SETTING", "load_settings", "_parse_settings", "_decode_state", "SETTINGS_FILE",
-        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS", "KEY_AGENTS", "SANDBOX_MODEL_VARS", "ANTHROPIC_BASE",
+        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS", "KEY_AGENTS",
         "replace_retry"}
 
 def load(platform):
@@ -563,6 +563,16 @@ with contextlib.redirect_stderr(err):
     r = mx._creds_env()
 out("exe.key_active", f"{r}|{err.getvalue().strip()}")  # key active, no clauderc: maude.py IS loaded (the load fails here)
 del sys.modules["maude"]
+open(home + "/.maude/settings.json", "wb").write('{"anthropic_key_active": true}'.encode("utf-16"))  # PowerShell 5.1 `>` writes UTF-16
+sys.modules["maude"] = None
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    r = mx._creds_env()
+out("exe.key_utf16", f"{r}|{err.getvalue().strip()}")
+del sys.modules["maude"]
+open(home + "/.maude/settings.json", "w").write("[" * 200000 + "]" * 200000)  # json raises RecursionError: must not escape
+out("exe.key_deep_json", f"{mx._creds_env()} {'maude' in sys.modules}")
+open(home + "/.maude/settings.json", "w").write('{"anthropic_key_active": true}')
 os.unlink(home + "/.maude/anthropic-key")
 out("exe.key_active_nofile", f"{mx._creds_env()} {'maude' in sys.modules}")  # flag on but no key file: nothing
 open(home + "/.maude/clauderc", "w").write("export AWS_X='1'\n")
@@ -598,6 +608,8 @@ eval_val() { printf '%s\n' "$exe_res" | grep -m1 "^$1=" | cut -d= -f2-; }
 assert_eq "exe: ~/.aws/config alone loads nothing and never imports maude.py" "None False" "$(eval_val exe.aws_only)"
 assert_eq "exe: key file with the flag off loads nothing" "None False" "$(eval_val exe.key_inactive)"
 assert_contains "exe: an active Anthropic key alone makes the Explorer route load maude.py" "None|Maude: could not load the saved credentials" "$(eval_val exe.key_active)"
+assert_contains "exe: a UTF-16 settings.json (BOM) is read" "None|Maude: could not load the saved credentials" "$(eval_val exe.key_utf16)"
+assert_eq "exe: a pathologically nested settings.json loads nothing and does not raise" "None False" "$(eval_val exe.key_deep_json)"
 assert_eq "exe: flag on but no key file loads nothing" "None False" "$(eval_val exe.key_active_nofile)"
 assert_contains "exe: a failed load prints one warning and starts without" "None|Maude: could not load the saved credentials" "$(eval_val exe.importfail)"
 assert_eq "exe: the TUI hook is used when set" "{'A': '1'}" "$(eval_val exe.hook)"

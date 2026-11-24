@@ -1003,6 +1003,40 @@ try:
             await wait_until(pilot, lambda: cb4.display and cb4.value is True and scr._default_bedrock_initial is True)
             await save_and_close(pilot, scr)
         assert maude.load_settings()["anthropic_key_active"] is True and inactive_file.exists() and not rc_file.exists()
+    # Sandbox: API key mode is not available yet: the key field and the checkbox are disabled with a note and the
+    # Anthropic pane saves nothing (only this screen runs with the sandbox flags; a stale flag in settings.json is ignored)
+    async def check_sandbox_settings():
+        akey_file, azure_rc = home / ".maude" / "anthropic-key", home / ".azure" / "clauderc"
+        s = maude.load_settings(); s["anthropic_key_active"] = True; maude.save_settings(s)
+        maude.write_secret(akey_file, "sk-ant-stale")
+        before = settings_file.read_text()
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
+            await wait_table(pilot)
+            maude.IS_WIN = False
+            try:
+                app.push_screen(maude.CredsEntryScreen())
+                await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
+                scr = app.screen
+                await wait_query(pilot, lambda: scr, "#btn-creds-save")
+                assert len(scr.query("#creds-native-only")) == 0, "no native-only checkbox in the sandbox"
+                await press_mode(pilot, scr, "anthropic")
+                key, use = scr.query_one("#creds-anthropic-key"), scr.query_one("#creds-anthropic-use", Checkbox)
+                assert key.disabled and use.disabled and use.value is False, (key.disabled, use.disabled, use.value)
+                note = str(scr.query_one("#creds-anthropic-note").render())
+                assert "not available in the sandbox yet" in note and "Claude Login" in note and "Paste" in note, note
+                assert not scr.query_one("#btn-creds-login", Button).disabled
+                key.value = "sk-ant-typed"; use.value = True       # set in code: Save must still write nothing
+                scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+                assert len(app.screen_stack) == 1, (app.screen_stack, str(scr.query_one("#creds-status").render()))
+            finally:
+                maude.IS_WIN = True
+        assert settings_file.read_text() == before and akey_file.read_text() == "sk-ant-stale", "sandbox save wrote something"
+        assert not azure_rc.exists() and not rc_file.exists()
+        akey_file.unlink()
+        s = maude.load_settings(); s.pop("anthropic_key_active", None); maude.save_settings(s)
+    asyncio.run(check_sandbox_settings())
     saved_env = dict(os.environ)
     try:
         asyncio.run(check_default_bedrock())

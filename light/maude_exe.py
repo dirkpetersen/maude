@@ -1132,8 +1132,11 @@ def _anthropic_key_active(up: str) -> bool:
     ~/.maude/anthropic-key exists. Stdlib only (this runs before maude.py is loaded)."""
     try:
         with open(os.path.join(up, ".maude", "settings.json"), "rb") as fh:
-            flag = json.loads(fh.read().decode("utf-8-sig")).get("anthropic_key_active") is True
-    except (OSError, ValueError, AttributeError):
+            raw = fh.read()
+        # a UTF-16 BOM (PowerShell 5.1 `>`) is honoured, a UTF-8 BOM dropped, like maude.py's _decode_state
+        text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig")
+        flag = json.loads(text).get("anthropic_key_active") is True
+    except Exception:  # unreadable, undecodable, not an object, or nested so deep that json raises RecursionError
         return False
     return flag and os.path.isfile(os.path.join(up, ".maude", "anthropic-key"))
 

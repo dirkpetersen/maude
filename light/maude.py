@@ -921,12 +921,8 @@ def credentials_configured() -> bool:
     # clauderc (sandbox: ~/.azure/clauderc, Windows/macOS: ~/.maude/clauderc)
     rc = clauderc_path()
     if rc.exists() and rc.stat().st_size > 0:
-        vals = read_clauderc(rc)
-        only_maude = bool(vals) and all(k in SANDBOX_MODEL_VARS or (k == "ANTHROPIC_BASE_URL" and v == ANTHROPIC_BASE)
-                                        for k, v in vals.items())
-        if not only_maude:  # model ids / Maude's base URL alone (an unchecked key left them) are no credentials
-            return True
-    return bool(active_anthropic_key())  # Settings > Anthropic: the key is kept in ~/.maude/anthropic-key
+        return True
+    return bool(active_anthropic_key())  # Windows/macOS: Settings > Anthropic keeps the key in ~/.maude/anthropic-key
 
 
 def check_credentials() -> bool:
@@ -3147,28 +3143,18 @@ def park_clauderc(park: bool) -> None:
     """Move clauderc to clauderc.inactive (park=True: Bedrock is the default) or back (park=False: Foundry is).
     When BOTH files exist (a save re-created the active one while the other was parked) nothing is ever deleted
     unmerged: the values of both are combined (the active file wins on a collision) into the destination and only
-    then the source is removed. An undecodable file makes it refuse (OSError).
-    Sandbox, Anthropic key active: Maude's key block (see key_block_keys: the key, Maude's base URL and model ids)
-    is never parked; it stays in the active clauderc and only the rest moves."""
+    then the source is removed. An undecodable file makes it refuse (OSError)."""
     active, inactive = clauderc_path(), clauderc_inactive_path()
     src, dst = (active, inactive) if park else (inactive, active)
     if not src.exists():
         return
-    a = _parse_rc_strict(src)
-    keep = {k: a[k] for k in key_block_keys(a)} if park else {}
-    if not keep:
-        if not dst.exists():
-            src.rename(dst)
-            return
-        b = _parse_rc_strict(dst)
-        write_clauderc({**b, **a} if park else {**a, **b}, dst)  # the active file's values win either way
-        src.unlink()
+    if not dst.exists():
+        src.rename(dst)
         return
-    rest = {k: v for k, v in a.items() if k not in keep}
-    if rest or dst.exists():
-        b = _parse_rc_strict(dst) if dst.exists() else {}
-        write_clauderc({**b, **rest}, dst)
-    write_clauderc(keep, src)  # the active file keeps only the key block
+    a, b = _parse_rc_strict(src), _parse_rc_strict(dst)
+    merged = {**b, **a} if park else {**a, **b}  # the active file's values win either way
+    write_clauderc(merged, dst)
+    src.unlink()
 
 def remove_clauderc_keys(keys) -> None:
     """Delete `keys` from clauderc_path() (other exports stay). A clauderc left empty is removed, so it no
@@ -3190,24 +3176,11 @@ def remove_clauderc_keys(keys) -> None:
         path.unlink()
 
 
-# ── Settings: secrets kept in their own 0600 files (never in clauderc, so "Default to AWS Bedrock" parking
-#    and clauderc rewrites cannot strand them) ──────────────────────────────────────────────────────────
+# ── Settings: secrets kept in their own 0600 files (never in clauderc, so "Default to AWS Bedrock" parking and
+#    clauderc rewrites cannot strand them). The Anthropic API key mode ("Use this API key") is Windows/macOS only for
+#    now: the sandbox's ~/bin/claude wrapper only reads clauderc and has no plain-key branch, so the sandbox uses
+#    Claude Login or a pasted `export ANTHROPIC_API_KEY=...` line. ──────────────────────────────────────────────
 ANTHROPIC_ACTIVE_SETTING = "anthropic_key_active"  # settings.json: is the key in ~/.maude/anthropic-key in use?
-ANTHROPIC_BASE = "https://api.anthropic.com"
-# Sandbox: the wrapper's ANTHROPIC_BASE_URL branch sets neither USING_NATIVE nor USING_FOUNDRY, so its model block
-# (claude-wrapper.sh lines 934-945, `${VAR:-default}`) would fall back to the Bedrock ids (global.anthropic.*). It honours
-# values already in the environment (clauderc is sourced first), so Maude writes the plain Anthropic ids.
-SANDBOX_MODEL_VARS = {"ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5", "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
-                      "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5", "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-2"}
-
-
-def anthropic_key_effective() -> bool:
-    """Is the Anthropic API key in use right now (what the checkbox shows)? Native: the flag + key file, or a key
-    exported in clauderc. Sandbox: only key + Maude's base URL in clauderc (a pasted key alone is not enough)."""
-    rc = read_clauderc()
-    if current_platform() == "linux-sandbox":
-        return bool(rc.get("ANTHROPIC_API_KEY")) and rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE
-    return bool(active_anthropic_key() or rc.get("ANTHROPIC_API_KEY"))
 _ACTIVE_OFF_VARS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX")
 _ACTIVE_UNSET_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
 
@@ -3221,7 +3194,7 @@ def opencode_key_file() -> Path:
 
 
 def _one_line(v: str) -> str:
-    return re.sub(r"[\x00\r\n\x0b\x0c\x1c-\x1e\x85  ]", "", v).strip()
+    return re.sub(r"[\x00\r\n\x0b\x0c\x1c-\x1e\x85\u2028\u2029]", "", v).strip()
 
 
 def read_secret(path: Path) -> str:
@@ -3257,8 +3230,9 @@ def remove_secret(path: Path) -> None:
 
 
 def active_anthropic_key() -> str:
-    """The Anthropic API key when "Use this API key" is on (settings.json flag + ~/.maude/anthropic-key), else ""."""
-    if load_settings().get(ANTHROPIC_ACTIVE_SETTING) is True:
+    """The Anthropic API key when "Use this API key" is on (settings.json flag + ~/.maude/anthropic-key), else "".
+    Windows/macOS only: in the sandbox a flag in settings.json is ignored."""
+    if is_native() and load_settings().get(ANTHROPIC_ACTIVE_SETTING) is True:
         return read_secret(anthropic_key_file())
     return ""
 
@@ -3279,106 +3253,28 @@ def with_active_anthropic_key(env: dict, key: str, ambient) -> dict:
     return out
 
 
-ANTHROPIC_OWNED_SETTING = "anthropic_owned"  # settings.json (sandbox): what Maude wrote into clauderc, to remove only that
-PLAIN_MODEL_RE = re.compile(r"claude-[A-Za-z0-9._-]+(\[1m\])?")  # an id that api.anthropic.com understands
-
-
-def _owned(settings: dict) -> dict:
-    v = settings.get(ANTHROPIC_OWNED_SETTING)
-    return v if isinstance(v, dict) else {}
-
-
-def key_block_keys(rc: dict) -> set:
-    """Sandbox, "Use this API key" on: the clauderc variables that make up Maude's key block (the key, Maude's base
-    URL, the model ids it wrote and that still have its value). Never parked by park_clauderc. Else empty."""
-    if current_platform() != "linux-sandbox":
-        return set()
-    s = load_settings()
-    if s.get(ANTHROPIC_ACTIVE_SETTING) is not True:
-        return set()
-    owned = _owned(s)
-    ids = owned.get("ids") if isinstance(owned.get("ids"), dict) else {}
-    keys = {k for k in ("ANTHROPIC_API_KEY",) if k in rc}
-    if rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE:
-        keys.add("ANTHROPIC_BASE_URL")
-    keys |= {var for var, val in ids.items() if rc.get(var) == val}
-    return keys
-
-
 def apply_anthropic_key(new_key: str, active: bool) -> None:
-    """Settings > Anthropic. Stores the key in ~/.maude/anthropic-key (0600) and sets the flag in settings.json.
-    new_key "" = keep the key exported in clauderc, else the stored one. ValueError (message for the user) when
-    activating with no/unsuitable key; OSError when a file cannot be written.
-    Windows/macOS: nothing is added to clauderc (plat_claude_env injects the key and wins over a login, Bedrock and
-    Foundry); a clauderc ANTHROPIC_API_KEY equal to the key is moved into the key file.
-    Sandbox: the ~/bin/claude wrapper only reads clauderc. Its ANTHROPIC_BASE_URL branch (checked first, before the
-    login, Foundry and Bedrock) passes a key starting with sk-ant- through unchanged and itself sets
-    CLAUDE_CODE_USE_BEDROCK/FOUNDRY to 0, so active = `export ANTHROPIC_API_KEY` + `export ANTHROPIC_BASE_URL=
-    https://api.anthropic.com` plus plain model ids (SANDBOX_MODEL_VARS) in clauderc. A model id the user set that is
-    a plain claude-* id stays; any other existing id is replaced and its old value kept in settings.json (restored on
-    uncheck); Maude's own earlier values are refreshed. What Maude wrote is recorded (ANTHROPIC_OWNED_SETTING) and
-    unchecking removes exactly that, never a key, URL or id Maude did not write. A custom ANTHROPIC_BASE_URL is
-    refused (ValueError). CLAUDE_CODE_USE_* is never touched."""
-    sandbox = current_platform() == "linux-sandbox"
+    """Settings > Anthropic (Windows/macOS only; a no-op in the sandbox). Stores the key in ~/.maude/anthropic-key
+    (0600) and sets the flag in settings.json; plat_claude_env() injects the key when the flag is on (it wins over a
+    login, Bedrock and Foundry), nothing is added to clauderc. A clauderc ANTHROPIC_API_KEY equal to the key is moved
+    into the key file (a different key of the user's is never removed). new_key "" = keep the key exported in
+    clauderc, else the stored one. ValueError (message for the user) when activating with no key; OSError when a file
+    cannot be written."""
+    if not is_native():
+        return
     rc = read_clauderc()
     key = _one_line(new_key) or rc.get("ANTHROPIC_API_KEY", "") or read_secret(anthropic_key_file())
     if not key:
         if active:
             raise ValueError("Enter an ANTHROPIC_API_KEY first.")
         return
-    if active and sandbox:
-        if not key.startswith("sk-ant-"):
-            raise ValueError("In the sandbox the key must start with sk-ant- (the claude wrapper replaces anything else).")
-        if rc.get("ANTHROPIC_BASE_URL") and rc["ANTHROPIC_BASE_URL"] != ANTHROPIC_BASE:
-            raise ValueError("A custom ANTHROPIC_BASE_URL is set (" + rc["ANTHROPIC_BASE_URL"] + "). Remove it first; "
-                             "an API key is not combined with a custom endpoint.")
     write_secret(anthropic_key_file(), key)  # the key is parked first: never lost between the writes below
     settings = load_settings()
     settings[ANTHROPIC_ACTIVE_SETTING] = bool(active)
-    owned = _owned(settings)
-    old_ids = owned.get("ids") if isinstance(owned.get("ids"), dict) else {}
-    replaced = dict(owned.get("replaced")) if isinstance(owned.get("replaced"), dict) else {}
-    drop: list = []
-    vals: dict = {}
-    if sandbox and active:
-        vals = {"ANTHROPIC_API_KEY": key}
-        base_ours = bool(owned.get("base"))
-        if rc.get("ANTHROPIC_BASE_URL") != ANTHROPIC_BASE:
-            vals["ANTHROPIC_BASE_URL"] = ANTHROPIC_BASE
-            base_ours = True
-        written: dict = {}
-        for var, plain in SANDBOX_MODEL_VARS.items():
-            cur = rc.get(var)
-            if not cur or cur == old_ids.get(var):  # unset, or Maude's own earlier value: (re)write the current id
-                vals[var] = plain
-                written[var] = plain
-            elif PLAIN_MODEL_RE.fullmatch(cur):
-                continue  # the user's own plain claude-* id stays
-            else:  # an id api.anthropic.com does not know (global.anthropic.*, a deployment name): replace, remember
-                replaced.setdefault(var, cur)
-                vals[var] = plain
-                written[var] = plain
-        settings[ANTHROPIC_OWNED_SETTING] = {"key": True, "base": base_ours, "ids": written, "replaced": replaced}
-    else:
-        if rc.get("ANTHROPIC_API_KEY") == key or (sandbox and owned.get("key")):
-            drop.append("ANTHROPIC_API_KEY")  # the user's own different key is never removed
-        if sandbox:
-            if owned.get("base") and rc.get("ANTHROPIC_BASE_URL") == ANTHROPIC_BASE:
-                drop.append("ANTHROPIC_BASE_URL")
-            for var, wv in old_ids.items():
-                if rc.get(var) == wv:
-                    drop.append(var)
-                    if var in replaced:
-                        vals[var] = replaced[var]
-            settings.pop(ANTHROPIC_OWNED_SETTING, None)
     if not save_settings(settings):
         raise OSError("could not write ~/.maude/settings.json")
-    if sandbox and active:
-        merge_clauderc(vals)
-    else:
-        remove_clauderc_keys(drop)
-        if vals:
-            merge_clauderc(vals)
+    if rc.get("ANTHROPIC_API_KEY") == key:
+        remove_clauderc_keys(["ANTHROPIC_API_KEY"])
     if os.environ.get("ANTHROPIC_API_KEY") == key:
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
@@ -3758,10 +3654,9 @@ class CredsEntryScreen(ModalScreen[bool]):
       • Anthropic    — "Claude Login" button (suspends the TUI and runs the unwrapped
         ~/.local/bin/claude /login for native claude.ai OAuth; dismisses the modal as saved when a valid
         token lands in ~/.claude/.credentials.json), the ANTHROPIC_API_KEY field and the checkbox
-        "Use this API key". The key is kept in ~/.maude/anthropic-key (0600). Checked: natively
-        plat_claude_env() injects it (it wins over a login); in the sandbox clauderc gets the key,
-        ANTHROPIC_BASE_URL=https://api.anthropic.com and plain model ids (see apply_anthropic_key).
-        Unchecked: the key is kept but not used.
+        "Use this API key" (Windows/macOS only for now; in the sandbox both are disabled with a note and this pane
+        saves nothing: use Claude Login or Paste). The key is kept in ~/.maude/anthropic-key (0600). Checked:
+        plat_claude_env() injects it for Claude Code (it wins over a login). Unchecked: the key is kept but not used.
       • Bedrock      — three named fields (access key / secret / region)
       • Foundry      — base URL + API key
       • OpenCode     — model URL, model name, api_key of an OpenAI-compatible endpoint
@@ -3948,7 +3843,8 @@ class CredsEntryScreen(ModalScreen[bool]):
         def go() -> None:
             try:
                 if self._FOCUS[self.mode] == selector and self.is_attached:  # only the active pane's field
-                    self.query_one(selector).focus()
+                    w = self.query_one(selector)
+                    (self.query_one("#btn-creds-login") if w.disabled else w).focus()  # sandbox: the key field is disabled
             except Exception:  # the widget is gone (screen closed): nothing to focus
                 pass
         self.call_after_refresh(go)
@@ -3971,12 +3867,17 @@ class CredsEntryScreen(ModalScreen[bool]):
             yield Label("ANTHROPIC_API_KEY:")
             has_key = bool(read_secret(anthropic_key_file()) or read_clauderc().get("ANTHROPIC_API_KEY"))
             # State when the screen opened: Save changes nothing unless the field or the checkbox differs from it.
-            self._anth_initial_use = anthropic_key_effective()
+            native = is_native()  # API key mode is Windows/macOS only for now: in the sandbox both are disabled
+            self._anth_initial_use = native and bool(active_anthropic_key() or read_clauderc().get("ANTHROPIC_API_KEY"))
             yield Input(placeholder="saved (leave empty to keep it)" if has_key else "sk-ant-...",
-                        id="creds-anthropic-key", password=True)
-            yield Checkbox("Use this API key", id="creds-anthropic-use", value=self._anth_initial_use)
-            yield Label("Checked: Maude starts Claude with this key, even if you are logged in. "
-                        "Unchecked: Claude Login / Bedrock / Foundry are used.")
+                        id="creds-anthropic-key", password=True, disabled=not native)
+            yield Checkbox("Use this API key", id="creds-anthropic-use", value=self._anth_initial_use, disabled=not native)
+            if native:
+                yield Label("Checked: Maude starts Claude with this key, even if you are logged in. "
+                            "Unchecked: Claude Login / Bedrock / Foundry are used.")
+            else:
+                yield Label("API key mode is not available in the sandbox yet. Use Claude Login, or Paste an "
+                            "`export ANTHROPIC_API_KEY=...` line.", id="creds-anthropic-note")
         with Vertical(id="creds-pane-bedrock", classes="creds-pane"):
             yield Label("AWS Bedrock — region defaults to us-west-2.")
             yield Label("AWS_ACCESS_KEY_ID:")
@@ -4013,7 +3914,9 @@ class CredsEntryScreen(ModalScreen[bool]):
             cb.display = True
             # If clauderc is parked as .inactive, Bedrock is the
             # currently-default provider; check the box accordingly.
-            parked = clauderc_inactive_path().exists() and not clauderc_path().exists()
+            # (clauderc.inactive existing at all means Bedrock is the default: a Paste/Foundry save while parked
+            # re-creates clauderc, and the next Bedrock-default Save merges both files again.)
+            parked = clauderc_inactive_path().exists()
             cb.value = parked or (
                 bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
                 and not bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
@@ -4073,6 +3976,8 @@ class CredsEntryScreen(ModalScreen[bool]):
             apply()
 
     def _save_anthropic(self) -> None:
+        if not is_native():
+            return  # sandbox: the key field and the checkbox are disabled, this pane saves nothing
         key = self.query_one("#creds-anthropic-key", Input).value.strip()
         use = self.query_one("#creds-anthropic-use", Checkbox).value
         if not key and use == self._anth_initial_use:
