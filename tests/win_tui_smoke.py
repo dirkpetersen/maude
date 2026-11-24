@@ -52,7 +52,8 @@ try:
     proj = share / "Projects" / "demo"
     proj.mkdir(parents=True)
     home.mkdir()
-    os.environ.update(USERPROFILE=str(home), HOME=str(home), LOCALAPPDATA=str(Path(d) / "lad"))
+    os.environ.update(USERPROFILE=str(home), HOME=str(home), LOCALAPPDATA=str(Path(d) / "lad"),
+                      MAUDE_MODELS_REFRESH="0")  # the TUI starts a daily model-list download otherwise
     import maude_exe as mx
     mx.fstab_share = lambda: None            # no wsl.exe call
     mx.read_share = lambda: None             # no real registry
@@ -131,16 +132,56 @@ try:
                 assert not app.query_one(i).display, i
             for i in ("#btn-open", "#btn-new", "#btn-cli", "#btn-creds", "#btn-update", "#btn-github", "#btn-togithub", "#fresh-context", "#perplexity"):
                 assert app.query_one(i).display, i
-            # Radio coupling: fable then Crush must leave exactly one button on per set (opus, Crush).
+            # Pickers: column order Agent, Model, Thinking; 8 agents in the fixed order; outside the sandbox only
+            # Kiro CLI and GitHub Copilot CLI are enabled (the rest greyed out, not hidden); the saved agent
+            # (none: Claude Code) is switched to Kiro CLI; the Model list follows the agent, auto first.
             from textual.widgets import RadioButton
             rb = lambda sel, n: app.query_one(sel).query(RadioButton)[n]
-            await pilot.click(rb("#model-select", 0)); await pilot.pause()
-            await pilot.click(rb("#tool-select", 3)); await pilot.pause()
+            labels = lambda sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.display]
             get_on = lambda: {sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
-                              for sel in ("#model-select", "#tool-select")}
-            await wait_until(pilot, lambda: get_on() == {"#model-select": ["opus"], "#tool-select": ["Crush"]})
-            on = get_on()
-            assert on == {"#model-select": ["opus"], "#tool-select": ["Crush"]}, on
+                              for sel in ("#agent-select", "#model-select")}
+            cols = [app.query_one(i).region.x for i in ("#agent-col", "#model-col", "#effort-col")]
+            assert cols == sorted(cols) and len(set(cols)) == 3, cols            # Agent | Model | Thinking, left to right
+            assert [str(app.query_one(i).render()) for i in ("#agent-label", "#model-label", "#effort-label")] == ["Agent", "Model", "Thinking"]
+            AG = ["Claude Code", "Codex", "Antigravity", "Grok CLI", "Kiro CLI", "GitHub Copilot CLI", "OpenCode", "Crush"]
+            assert labels("#agent-select") == AG == list(maude.AGENTS), labels("#agent-select")
+            dis = lambda: [str(b.label) for b in app.query_one("#agent-select").query(RadioButton) if b.disabled]
+            assert dis() == [a for a in AG if a not in ("Kiro CLI", "GitHub Copilot CLI")], dis()
+            assert all(b.display for b in app.query_one("#agent-select").query(RadioButton))  # greyed out, not hidden
+            await wait_until(pilot, lambda: get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["auto"]})
+            assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["auto"]}, get_on()
+            assert labels("#model-select") == ["auto", "fable", "opus", "sonnet", "haiku", "5.6 sol", "5.6 terra", "5.6 luna"], labels("#model-select")
+            assert app.query_one("#effort-select").disabled      # Kiro CLI has no reasoning-effort setting
+            await pilot.click(rb("#agent-select", 7)); await pilot.pause()   # Crush: disabled, a click changes nothing
+            assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["auto"]} and app._tool == "Kiro CLI", get_on()
+            await pilot.click(rb("#model-select", 2)); await pilot.pause()    # Kiro: opus
+            await wait_until(pilot, lambda: app._model == "claude-opus-5.5")
+            assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["opus"]} and maude.read_model() == "claude-opus-5.5", get_on()
+            await pilot.click(rb("#agent-select", 5)); await pilot.pause()    # GitHub Copilot CLI: its own list
+            await wait_until(pilot, lambda: app._tool == "GitHub Copilot CLI" and labels("#model-select")[-1] == "6.1 terra")
+            assert labels("#model-select") == ["auto", "fable", "opus", "sonnet", "haiku", "6.2 sol", "6.2 astra", "6.1 terra"], labels("#model-select")
+            # the current id (claude-opus-5.5) is also in Copilot's list, so it stays selected
+            assert get_on() == {"#agent-select": ["GitHub Copilot CLI"], "#model-select": ["opus"]} and app._model == "claude-opus-5.5", get_on()
+            await pilot.click(rb("#model-select", 5)); await pilot.pause()    # 6.2 sol
+            await wait_until(pilot, lambda: app._model == "gpt-6.2-sol")
+            assert maude.read_model() == "gpt-6.2-sol" and maude.read_tool() == "GitHub Copilot CLI"
+            await pilot.click(rb("#agent-select", 4)); await pilot.pause()    # back to Kiro CLI: remembers opus (gpt-6.2-sol is not in its list)
+            await wait_until(pilot, lambda: app._tool == "Kiro CLI" and app._model == "claude-opus-5.5")
+            assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["opus"]}, get_on()
+            await pilot.click(rb("#model-select", 0)); await pilot.pause()    # leave the state at auto
+            await wait_until(pilot, lambda: app._model == "auto")
+            assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["auto"]}, get_on()
+            # The public hook the Settings screen calls: switching the restriction off enables every agent.
+            maude.save_settings({"native_only_approved": False}); app.apply_agent_restrictions(); await pilot.pause()
+            await wait_until(pilot, lambda: dis() == [])
+            assert dis() == [] and app._tool == "Kiro CLI", dis()
+            await pilot.click(rb("#agent-select", 1)); await pilot.pause()    # Codex: Thinking becomes available
+            await wait_until(pilot, lambda: app._tool == "Codex" and not app.query_one("#effort-select").disabled)
+            assert labels("#model-select") == ["auto", "6.2 astra", "6.2 sol", "6.1 sol", "6.1 terra", "6 luna"], labels("#model-select")
+            maude.save_settings({"native_only_approved": True}); app.apply_agent_restrictions(); await pilot.pause()
+            await wait_until(pilot, lambda: app._tool == "Kiro CLI")           # a now-forbidden agent falls back to Kiro CLI
+            assert app._tool == "Kiro CLI" and get_on()["#agent-select"] == ["Kiro CLI"] and app.query_one("#effort-select").disabled, get_on()
+            assert dis() == [a for a in AG if a not in ("Kiro CLI", "GitHub Copilot CLI")], dis()
             # PowerShell button (Windows): suspends, runs powershell.exe -NoLogo in the selected
             # project's folder (else home) and comes back to the TUI; it must NOT exit the app.
             import contextlib
@@ -274,7 +315,12 @@ try:
 
     on = asyncio.run(check_select(out1))                      # existing registry entry (listed once)
     on = asyncio.run(check_select(fresh, "sonnet"))           # not in the registry: still listed and selected
-    assert on == ["sonnet"], on                               # --model preselects the picker
+    assert on == ["auto"], on                                 # outside the sandbox Claude Code is not allowed: --model is ignored
+    maude.save_settings({"native_only_approved": False})
+    on = asyncio.run(check_select(fresh, "sonnet"))
+    assert on == ["sonnet"], on                               # --model preselects the picker (and selects Claude Code)
+    assert maude.read_tool() == "Claude Code" and maude.read_model() == "sonnet"
+    maude.save_settings({"native_only_approved": True})
     async def check_plain():  # no select: no warning
         async with maude.MaudeApp().run_test(size=(140, 40)) as pilot:
             await pilot.pause()
@@ -388,21 +434,23 @@ try:
         maude.open_project = orig_open
     # Picker state lives in <home>/.maude/maude-model|maude-tool (all platforms): loaded at startup, written on change.
     sd = home / ".maude"; mf, tf = sd / "maude-model", sd / "maude-tool"
-    sd.mkdir(exist_ok=True); mf.write_text("sonnet,high\n"); tf.write_text("Kiro CLI")
+    sd.mkdir(exist_ok=True); mf.write_text("claude-sonnet-5.5,high\n"); tf.write_text("Kiro CLI")  # an id of Kiro's list
+    maude.save_settings({"native_only_approved": False})  # every agent usable: the clicks below need Claude/Codex
     (home / ".maude-model").write_text("haiku")  # legacy file must lose against the new file
     async def check_files():
         from textual.widgets import RadioButton, Static
-        async with maude.MaudeApp().run_test(size=(120, 35)) as pilot:
+        async with maude.MaudeApp().run_test(size=(120, 40)) as pilot:
             app = pilot.app
             await pilot.pause()
             lit = lambda sel: [str(b.label) for b in app.query_one(sel).query(RadioButton) if b.value]
-            await wait_until(pilot, lambda: lit("#model-select") == ["sonnet"] and lit("#tool-select") == ["Kiro CLI"] and lit("#effort-select") == ["high"])
-            await wait_until(pilot, lambda: all(app.query_one(i).region.height > 0 for i in ("#model-select", "#tool-select", "#effort-select", "#fresh-context", "#perplexity", "#maude-version")))
-            assert lit("#model-select") == ["sonnet"] and lit("#tool-select") == ["Kiro CLI"], (lit("#model-select"), lit("#tool-select"))
-            assert lit("#effort-select") == ["high"], lit("#effort-select")
-            # Layout at a typical 120x35 terminal: every picker and the toggles sit fully inside the sidebar.
+            await wait_until(pilot, lambda: lit("#model-select") == ["sonnet"] and lit("#agent-select") == ["Kiro CLI"] and lit("#effort-select") == ["high"])
+            await wait_until(pilot, lambda: all(app.query_one(i).region.height > 0 for i in ("#model-select", "#agent-select", "#effort-select", "#fresh-context", "#perplexity", "#maude-version")))
+            assert lit("#model-select") == ["sonnet"] and lit("#agent-select") == ["Kiro CLI"], (lit("#model-select"), lit("#agent-select"))
+            assert lit("#effort-select") == ["high"], lit("#effort-select")   # kept, though Kiro CLI ignores it
+            # Layout at a roomy 120x40 terminal: every picker and the toggles sit fully inside the sidebar.
+            # (At 80x24 the 8-agent column does not fit: the sidebar scrolls.)
             side = app.query_one("#sidebar").region
-            for i in ("#model-select", "#tool-select", "#effort-select", "#fresh-context", "#perplexity", "#maude-version"):
+            for i in ("#model-select", "#agent-select", "#effort-select", "#fresh-context", "#perplexity", "#maude-version"):
                 r = app.query_one(i).region
                 assert r.height > 0 and r.y >= side.y and r.bottom <= side.bottom and r.right <= side.right, (i, r, side)
             # Toggles: one line each, box left of the label, same x, Perplexity MCP directly under Clear History.
@@ -428,20 +476,28 @@ try:
             assert [str(b.label) for b in app.query_one("#effort-select").query(RadioButton)] == ["auto", "low", "medium", "high", "xhigh", "max"]
             tips = str(app.query_one("#tips", Static).render())
             assert "Alt+V" in tips and "Paste image" in tips and "drop" not in tips, tips
-            await pilot.click(app.query_one("#model-select").query(RadioButton)[3]); await pilot.pause()
-            await pilot.click(app.query_one("#tool-select").query(RadioButton)[3]); await pilot.pause()
-            await wait_until(pilot, lambda: mf.read_text() == "haiku,high" and tf.read_text() == "Crush")
-            assert mf.read_text() == "haiku,high" and tf.read_text() == "Crush", (mf.read_text(), tf.read_text())  # model change keeps the level
+            await pilot.click(app.query_one("#model-select").query(RadioButton)[4]); await pilot.pause()   # Kiro: haiku
+            await wait_until(pilot, lambda: mf.read_text() == "claude-haiku-5.5,high")
+            assert mf.read_text() == "claude-haiku-5.5,high", mf.read_text()       # model change keeps the level
+            await pilot.click(app.query_one("#agent-select").query(RadioButton)[1]); await pilot.pause()   # Codex
+            await wait_until(pilot, lambda: tf.read_text() == "Codex" and mf.read_text() == "auto,high")
+            assert tf.read_text() == "Codex" and mf.read_text() == "auto,high", (tf.read_text(), mf.read_text())  # new agent: auto
+            assert not app.query_one("#effort-select").disabled
             await pilot.click(app.query_one("#effort-select").query(RadioButton)[4]); await pilot.pause()
-            await wait_until(pilot, lambda: mf.read_text() == "haiku,xhigh")
-            assert mf.read_text() == "haiku,xhigh", mf.read_text()
+            await wait_until(pilot, lambda: mf.read_text() == "auto,xhigh")
+            assert mf.read_text() == "auto,xhigh", mf.read_text()
             await pilot.click(app.query_one("#effort-select").query(RadioButton)[0]); await pilot.pause()
-            await wait_until(pilot, lambda: mf.read_text() == "haiku")
-            assert mf.read_text() == "haiku", mf.read_text()                       # auto = model alone
+            await wait_until(pilot, lambda: mf.read_text() == "auto")
+            assert mf.read_text() == "auto", mf.read_text()                        # auto effort = model alone
             await pilot.click(app.query_one("#effort-select").query(RadioButton)[2]); await pilot.pause()
-            await wait_until(pilot, lambda: mf.read_text() == "haiku,medium")
-            assert mf.read_text() == "haiku,medium", mf.read_text()
+            await wait_until(pilot, lambda: mf.read_text() == "auto,medium")
+            assert mf.read_text() == "auto,medium", mf.read_text()
+            await pilot.click(app.query_one("#agent-select").query(RadioButton)[4]); await pilot.pause()   # back to Kiro: remembered haiku
+            await wait_until(pilot, lambda: mf.read_text() == "claude-haiku-5.5,medium" and tf.read_text() == "Kiro CLI")
+            assert mf.read_text() == "claude-haiku-5.5,medium" and app.query_one("#effort-select").disabled, mf.read_text()
+            assert maude.read_agent_models().get("Codex") == "auto"
     asyncio.run(check_files())
+    maude.save_settings({"native_only_approved": True})
     assert maude.EFFORTS == mx.EFFORTS
     assert (home / ".maude-model").read_text() == "haiku"  # the legacy file was never touched while the new one existed
     # Legacy files: moved once into ~/.maude, then deleted. Bad values: defaults.
@@ -452,9 +508,10 @@ try:
     tf.write_text("Bogus"); assert maude.read_tool() == "Claude Code"
     mf.write_text("sonnet,bogus"); assert maude.read_model_effort() == ("sonnet", "")
     mf.write_text("opus,max"); assert maude.read_model_effort() == ("opus", "max")
-    mf.write_text("nope,high"); assert maude.read_model_effort() == ("opus", "high")
+    mf.write_text("bad model!,high"); assert maude.read_model_effort() == ("auto", "high")
+    mf.write_text("gpt-6.2-sol,high"); assert maude.read_model_effort() == ("gpt-6.2-sol", "high")   # any valid id is kept
     mf.unlink(); tf.unlink()
-    assert maude.read_model_effort() == ("opus", "") and maude.read_tool() == "Claude Code"   # nothing saved
+    assert maude.read_model_effort() == ("auto", "") and maude.read_tool() == "Claude Code"   # nothing saved
     assert maude.maude_dir() == sd and sd.is_dir()
 
     # Three modes: Windows mode with a sandbox (caption) and without one (no caption); the logo is red in both.
@@ -508,6 +565,10 @@ try:
                      (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
     calls[:] = [calls[0], calls[1]]
     assert not any("skip" in a or "bypass" in a for c, _ in calls for a in c)
+    calls.clear()
+    maude.open_project(proj, "auto", fresh=False, effort="low")  # auto: no --model flag at all
+    assert calls == [(["C:/c.exe", "--effort", "low", "--continue"], str(proj))], calls
+    calls.clear()
     # Set Creds on Windows: the button opens the screen, Save writes <home>/.maude/clauderc (never ~/.azure),
     # and the saved env reaches Claude Code and the other tools.
     rc_file = home / ".maude" / "clauderc"
@@ -546,6 +607,17 @@ try:
         envs.clear()
         maude.open_project(proj, "opus", tool=tool)
         assert envs and envs[-1][1]["ANTHROPIC_FOUNDRY_API_KEY"] == "kk", (tool, envs)
+    # A new agent without a Windows installer entry: a hint and nothing runs (never a crash).
+    asked0, had = [], mx.TOOL_INSTALL.pop("Codex", None)
+    import builtins; real_input = builtins.input; builtins.input = lambda q="": asked0.append(q) or ""
+    try:
+        envs.clear()
+        maude.open_project(proj, "auto", tool="Codex")
+    finally:
+        builtins.input = real_input
+        if had is not None:
+            mx.TOOL_INSTALL["Codex"] = had
+    assert envs == [] and asked0 and "Codex" in asked0[0], (envs, asked0)
     mcp = []
     real_run = subprocess.run
     subprocess.run = lambda cmd, **kw: mcp.append((cmd, kw.get("env"))) or subprocess.CompletedProcess(cmd, 0, "", "")
@@ -697,9 +769,12 @@ try:
             await wait_until(pilot, lambda: opened)
             await pilot.pause()
             assert opened == [proj] and len(app.screen_stack) == 1, (opened, app.screen_stack)
+    maude.save_settings({"native_only_approved": False})  # the gate is about Claude Code, which the default restriction switches off here
+    maude.save_tool("Claude Code")                        # (the restriction had saved Kiro CLI)
     try:
         asyncio.run(check_gate())
     finally:
+        maude.save_settings({"native_only_approved": True})
         maude.credentials_configured, maude.claude_login_status = old_cfg, old_status    # Missing non-Claude tool: install offered (declined here), nothing is run, TUI gets control back.
     calls.clear()
     asked = []

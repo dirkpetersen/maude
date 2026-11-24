@@ -31,13 +31,14 @@ KEYS = (r"Software\Classes\Directory\shell\OpenInMaude",
         r"Software\Classes\Directory\Background\shell\OpenInMaude")
 # Claude Code in the sandbox: continue the last session, else start a new one.
 # $1 = model override (may be empty); else the model in ~/.maude/maude-model ("<model>[,<effort>]",
-# old ~/.maude-model as fallback); else opus. The effort (low|medium|high|xhigh|max) becomes --effort.
+# old ~/.maude-model as fallback); else auto (no model argument). The effort (low|medium|high|xhigh|max) becomes --effort.
 OPEN_SH = ('v="$(cat ~/.maude/maude-model 2>/dev/null || cat ~/.maude-model 2>/dev/null)"; '
            'v="${v//[[:space:]]/}"; '
            'm="${1:-${v%%,*}}"; e=""; [[ "$v" == *,* ]] && e="${v#*,}"; '
-           '[[ "$m" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || m=opus; '
+           '[[ "$m" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || m=auto; '
+           '[[ "$m" == auto ]] && m=() || m=("$m"); '
            'case "$e" in low|medium|high|xhigh|max) x=(--effort "$e");; *) x=();; esac; '
-           'claude "$m" "${x[@]}" --continue || claude "$m" "${x[@]}"')
+           'claude "${m[@]}" "${x[@]}" --continue || claude "${m[@]}" "${x[@]}"')
 INSTALL_HINT = "Install Claude Code for Windows: irm https://claude.ai/install.ps1 | iex   (run in PowerShell)"
 
 
@@ -187,7 +188,8 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")  # Claude Code --effort; "" 
 
 def windows_cmd(claude: str, model: str, cont: bool, effort: str = "") -> list[str]:
     # No bypass or yolo flag here: default permission mode only.
-    return ([claude, "--model", model] + (["--effort", effort] if effort in EFFORTS else [])
+    return ([claude] + (["--model", model] if model and model != "auto" else [])  # auto: no model flag
+            + (["--effort", effort] if effort in EFFORTS else [])
             + (["--continue"] if cont else []))
 
 
@@ -985,7 +987,7 @@ def parse_model_pref(raw: str) -> tuple[str, str]:
     """"<model>[,<effort>]" -> (model, effort); a bad model gives opus, a bad effort gives ""."""
     m, _, e = raw.strip().partition(",")
     m, e = m.strip(), e.strip().lower()
-    return (m if valid_model(m) else "opus", e if e in EFFORTS else "")
+    return (m if valid_model(m) else "auto", e if e in EFFORTS else "")
 
 
 def windows_model_effort(userprofile: str) -> tuple[str, str]:

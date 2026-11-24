@@ -572,19 +572,38 @@ UPDATE_URL   = "https://raw.githubusercontent.com/dirkpetersen/maude/main/light/
 UPDATE_STAMP = Path.home() / ".maude-tui-last-update"
 UPDATE_HOUR  = 12  # local-time hour (noon) after which the daily refresh fires
 
-MODELS        = ("fable", "opus", "sonnet", "haiku")
-DEFAULT_MODEL = "opus"
+MODEL_AUTO    = "auto"          # built-in first model of every agent: pass no model flag at all
+DEFAULT_MODEL = MODEL_AUTO
 STATE_DIR     = Path.home() / ".maude"
-MODEL_FILE    = STATE_DIR / "maude-model"   # "<model>[,<effort>]", e.g. "opus,high" or "opus"
+MODEL_FILE    = STATE_DIR / "maude-model"   # "<model>[,<effort>]", e.g. "auto", "opus,high" or "gpt-6.2-sol"
 OLD_MODEL_FILE = Path.home() / ".maude-model"  # previous location, migrated on first read
-AI_TOOLS      = ("Claude Code", "Kiro CLI", "OpenCode", "Crush")
+# The Agent column, in display order. AI_TOOLS is the old name of the same tuple.
+AGENTS        = ("Claude Code", "Codex", "Antigravity", "Grok CLI", "Kiro CLI",
+                 "GitHub Copilot CLI", "OpenCode", "Crush")
+AI_TOOLS      = AGENTS
 DEFAULT_TOOL  = "Claude Code"
-TOOL_FILE     = STATE_DIR / "maude-tool"
+TOOL_FILE     = STATE_DIR / "maude-tool"      # the saved agent (file name kept for compatibility)
 OLD_TOOL_FILE = Path.home() / ".maude-tool"
-# Claude Code `--effort <level>` (verified in `claude --help`); "" = Claude Code's own default.
+AGENT_MODELS_FILE = STATE_DIR / "agent-models.json"  # {"<agent>": "<model id>"}: the model last used per agent
+# Outside the sandbox (NATIVE) and with settings["native_only_approved"], only these agents may run.
+NATIVE_APPROVED_AGENTS = ("Kiro CLI", "GitHub Copilot CLI")
+FALLBACK_AGENT = "Kiro CLI"
+SETTINGS_FILE = STATE_DIR / "settings.json"
+SETTINGS_DEFAULTS = {"native_only_approved": True}
+# Reasoning effort: Claude Code `--effort <level>` (`claude --help`), Codex `-c model_reasoning_effort=<level>`,
+# Antigravity `agy --effort <level>`. "" = the agent's own default. Other agents have no such flag.
 EFFORTS       = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_EFFORT = ""
-EFFORT_LABELS = ("auto",) + EFFORTS  # "auto" = Claude Code's own default (passes nothing)
+EFFORT_LABELS = ("auto",) + EFFORTS  # "auto" = the agent's own default (passes nothing)
+EFFORT_AGENTS = ("Claude Code", "Codex", "Antigravity")
+# Agents whose resume flag fails when there is nothing to resume: retry once without it.
+RESUME_FALLBACK_AGENTS = ("Codex", "Antigravity", "Grok CLI", "Kiro CLI", "GitHub Copilot CLI")
+MODEL_ID_RE   = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+#-]{0,79}$")  # nothing odd reaches a command line
+MODEL_SLOTS   = 12              # radio buttons in the Model column (auto + up to 11 configured models)
+MODELS_URL    = UPDATE_URL.rsplit("/", 1)[0] + "/maude-models.json"
+MODELS_DEFAULT_FILE = STATE_DIR / "models-default.json"  # daily copy of light/maude-models.json
+MODELS_USER_FILE    = STATE_DIR / "models.json"          # optional user overrides / additions
+MODELS_STAMP  = STATE_DIR / "models-last-update"          # YYYY-MM-DD of the last successful refresh
 VERSION_FILE  = Path.home() / ".local" / "share" / "maude" / "version"
 
 LOGO = (
@@ -1240,44 +1259,340 @@ def remove_perplexity() -> None:
         pass
 
 
+def valid_model_id(model: str) -> bool:
+    return isinstance(model, str) and bool(MODEL_ID_RE.match(model))
+
+
+def effort_for(tool: str, effort: str) -> str:
+    """The effort that really applies: "" unless the agent has a reasoning-effort setting."""
+    return effort if (tool in EFFORT_AGENTS and effort in EFFORTS) else ""
+
+
+def effort_args(effort: str, tool: str = DEFAULT_TOOL) -> list[str]:
+    """The agent's own effort flag for a known level, else nothing (nothing unvalidated reaches a command
+    line). Claude Code `--effort <level>`; Codex `-c model_reasoning_effort=<level>` (TOML, bare string is
+    taken literally); Antigravity `--effort <level>`. Other agents have none."""
+    e = effort_for(tool, effort)
+    if not e:
+        return []
+    return ["-c", f"model_reasoning_effort={e}"] if tool == "Codex" else ["--effort", e]
+
+
 def tool_command(tool: str, model: str, fresh: bool, effort: str = "") -> list[str]:
-    """Command line for an AI tool. Only Claude Code takes the model: the
-    others have no stable alias mapping, so they start on their own default."""
-    cont = [] if fresh else ["--continue"]
-    return {
-        "Claude Code": ["claude", model, *effort_args(effort), *cont],
-        "Kiro CLI": ["kiro-cli", "chat", *([] if fresh else ["--resume"])],
-        "OpenCode": ["opencode", *cont],
-        "Crush": ["crush", *cont],
-    }[tool]
-
-
-def effort_args(effort: str) -> list[str]:
-    """`--effort <level>` for a known level, else nothing (nothing unvalidated reaches a command line)."""
-    return ["--effort", effort] if effort in EFFORTS else []
+    """Command line of an agent. model "auto" (or anything invalid) passes no model, so the agent starts on its
+    own default model. `fresh` starts without resuming the previous session. Flags: Claude Code `claude [model]
+    --effort --continue`; Codex `codex -m M -c .. [resume --last]`; Antigravity `agy --model M --effort E -c`;
+    Grok `grok -m M -c`; Kiro `kiro-cli chat --model M --resume`; Copilot `copilot --model M --continue`;
+    OpenCode `opencode --model P/M --continue`; Crush `crush --model P/M --continue`."""
+    m = model if (model != MODEL_AUTO and valid_model_id(model)) else ""
+    eff = effort_args(effort, tool)
+    def opt(flag: str) -> list[str]:
+        return [flag, m] if m else []
+    if tool == "Claude Code":
+        return ["claude", *([m] if m else []), *eff, *([] if fresh else ["--continue"])]
+    if tool == "Codex":
+        return ["codex", *opt("-m"), *eff, *([] if fresh else ["resume", "--last"])]
+    if tool == "Antigravity":
+        return ["agy", *opt("--model"), *eff, *([] if fresh else ["-c"])]
+    if tool == "Grok CLI":
+        return ["grok", *opt("-m"), *([] if fresh else ["-c"])]
+    if tool == "Kiro CLI":
+        return ["kiro-cli", "chat", *opt("--model"), *([] if fresh else ["--resume"])]
+    if tool == "GitHub Copilot CLI":
+        return ["copilot", *opt("--model"), *([] if fresh else ["--continue"])]
+    if tool == "OpenCode":
+        return ["opencode", *opt("--model"), *([] if fresh else ["--continue"])]
+    if tool == "Crush":
+        return ["crush", *opt("--model"), *([] if fresh else ["--continue"])]
+    raise KeyError(tool)
 
 
 def parse_model_pref(raw: str) -> tuple[str, str]:
-    """"<model>[,<effort>]" -> (model, effort). Unknown model -> opus, unknown effort -> default."""
+    """"<model>[,<effort>]" -> (model, effort). Any syntactically valid model id is kept (whether the agent
+    offers it is decided by resolve_model); a bad one gives "auto", an unknown effort the default."""
     m, _, e = raw.strip().partition(",")
     m, e = m.strip(), e.strip().lower()
-    return (m if m in MODELS else DEFAULT_MODEL, e if e in EFFORTS else DEFAULT_EFFORT)
+    return (m if valid_model_id(m) else DEFAULT_MODEL, e if e in EFFORTS else DEFAULT_EFFORT)
 
 
 def format_model_pref(model: str, effort: str) -> str:
     return f"{model},{effort}" if effort in EFFORTS else model
 
 
-def reconcile(model: str, tool: str, changed: str) -> tuple[str, str]:
-    """Fable only runs in Claude Code. `changed` ("model"|"tool") is the side
-    the user just set, so the other side gives way."""
-    if model == "fable" and tool != DEFAULT_TOOL:
-        return (model, DEFAULT_TOOL) if changed == "model" else ("opus", tool)
-    return model, tool
+# ── Model lists per agent (maude-models.json) ──────────────────────────────
+
+# Built-in fallback: identical to light/maude-models.json (tests/test-models-config.sh checks that). Used
+# when neither ~/.maude/models-default.json nor ~/.maude/models.json is usable, e.g. maude.exe offline.
+MODELS_FALLBACK_JSON = r'''{
+  "version": 1,
+  "agents": {
+    "Claude Code": {"models": [
+      {"label": "fable", "id": "fable"},
+      {"label": "opus", "id": "opus"},
+      {"label": "sonnet", "id": "sonnet"},
+      {"label": "haiku", "id": "haiku"}
+    ]},
+    "Codex": {"models": [
+      {"label": "6.2 astra", "id": "gpt-6.2-astra"},
+      {"label": "6.2 sol", "id": "gpt-6.2-sol"},
+      {"label": "6.1 sol", "id": "gpt-6.1-sol"},
+      {"label": "6.1 terra", "id": "gpt-6.1-terra"},
+      {"label": "6 luna", "id": "gpt-6-luna"}
+    ]},
+    "Antigravity": {"models": [
+      {"label": "4 neon", "id": "gemini-4-neon"},
+      {"label": "4 carbon", "id": "gemini-4-carbon"},
+      {"label": "4 argon", "id": "gemini-4-argon"},
+      {"label": "4 hydro", "id": "gemini-4-hydrogen"},
+      {"label": "3.8 flash", "id": "gemini-3.8-flash"}
+    ]},
+    "Grok CLI": {"models": [
+      {"label": "fable", "id": "claude-fable-5-2"},
+      {"label": "opus", "id": "claude-opus-5-5"},
+      {"label": "sonnet", "id": "claude-sonnet-5-5"},
+      {"label": "haiku", "id": "claude-haiku-5-5"},
+      {"label": "grok 4.7", "id": "grok-4.7"},
+      {"label": "grok 4.6", "id": "grok-4.6"},
+      {"label": "grok 4.5", "id": "grok-4.5"}
+    ]},
+    "Kiro CLI": {"models": [
+      {"label": "fable", "id": "claude-fable-5.1"},
+      {"label": "opus", "id": "claude-opus-5.5"},
+      {"label": "sonnet", "id": "claude-sonnet-5.5"},
+      {"label": "haiku", "id": "claude-haiku-5.5"},
+      {"label": "5.6 sol", "id": "gpt-5.6-sol"},
+      {"label": "5.6 terra", "id": "gpt-5.6-terra"},
+      {"label": "5.6 luna", "id": "gpt-5.6-luna"}
+    ]},
+    "GitHub Copilot CLI": {"models": [
+      {"label": "fable", "id": "claude-fable-5.2"},
+      {"label": "opus", "id": "claude-opus-5.5"},
+      {"label": "sonnet", "id": "claude-sonnet-5.5"},
+      {"label": "haiku", "id": "claude-haiku-5.5"},
+      {"label": "6.2 sol", "id": "gpt-6.2-sol"},
+      {"label": "6.2 astra", "id": "gpt-6.2-astra"},
+      {"label": "6.1 terra", "id": "gpt-6.1-terra"}
+    ]},
+    "OpenCode": {"models": [
+      {"label": "fable", "id": "anthropic/claude-fable-5-2"},
+      {"label": "opus", "id": "anthropic/claude-opus-5-5"},
+      {"label": "sonnet", "id": "anthropic/claude-sonnet-5-5"},
+      {"label": "haiku", "id": "anthropic/claude-haiku-5-5"}
+    ]},
+    "Crush": {"models": [
+      {"label": "fable", "id": "anthropic/claude-fable-5-2"},
+      {"label": "opus", "id": "anthropic/claude-opus-5-5"},
+      {"label": "sonnet", "id": "anthropic/claude-sonnet-5-5"},
+      {"label": "haiku", "id": "anthropic/claude-haiku-5-5"},
+      {"label": "6.2 sol", "id": "openai/gpt-6.2-sol"},
+      {"label": "6.2 astra", "id": "openai/gpt-6.2-astra"}
+    ]}
+  }
+}'''
 
 
-def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
-    cmd = tool_command(tool, model, fresh)
+def _model_entries(raw) -> list[tuple[str, str]]:
+    """Valid (label, id) pairs of a JSON list: label 1-12 chars, id syntactically valid, no duplicates, and
+    never "auto" (that one is built in)."""
+    out, seen = [], {MODEL_AUTO}
+    for e in raw if isinstance(raw, list) else []:
+        if not isinstance(e, dict):
+            continue
+        label, mid = e.get("label"), e.get("id")
+        if not (isinstance(label, str) and isinstance(mid, str)):
+            continue
+        label, mid = label.strip(), mid.strip()
+        if not label or len(label) > 12 or not valid_model_id(mid) or mid in seen:
+            continue
+        seen.add(mid)
+        out.append((label, mid))
+    return out
+
+
+def parse_models_config(obj) -> dict | None:
+    """Validate one config document: {"version": 1, "agents": {"<agent>": {"models": [...], "extra": [...]}}}.
+    "models" replaces an agent's list, "extra" appends to it. Returns {agent: {"models": list, "extra": list}}
+    for the known agents that have at least one valid entry, or None when the schema is not met."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("agents"), dict):
+        return None
+    out = {}
+    for agent, d in obj["agents"].items():
+        if agent not in AGENTS or not isinstance(d, dict):
+            continue
+        models, extra = _model_entries(d.get("models")), _model_entries(d.get("extra"))
+        if models or extra:
+            out[agent] = {"models": models, "extra": extra}
+    return out or None
+
+
+def validate_models_bytes(data: bytes) -> bool:
+    """A downloaded maude-models.json is acceptable: parses, schema ok, and EVERY known agent has a list
+    (so a truncated or half-edited file can never replace a good one)."""
+    try:
+        parsed = parse_models_config(json.loads(_decode_state(data)))
+    except (ValueError, TypeError):
+        return False
+    return bool(parsed) and all(a in parsed and parsed[a]["models"] for a in AGENTS)
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(_decode_state(path.read_bytes()))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def load_models_config() -> dict:
+    """{agent: [(label, id), ...]} without the built-in auto entry: embedded fallback, then the daily
+    ~/.maude/models-default.json, then the user's ~/.maude/models.json (a corrupt or invalid file is skipped)."""
+    cfg = {a: d["models"] for a, d in (parse_models_config(json.loads(MODELS_FALLBACK_JSON)) or {}).items()}
+    for path in (MODELS_DEFAULT_FILE, MODELS_USER_FILE):
+        parsed = parse_models_config(_read_json(path))
+        for agent, d in (parsed or {}).items():
+            if d["models"]:
+                cfg[agent] = d["models"]
+            if d["extra"]:
+                have = {i for _, i in cfg.get(agent, [])}
+                cfg[agent] = cfg.get(agent, []) + [e for e in d["extra"] if e[1] not in have]
+    return cfg
+
+
+def agent_models(agent: str, cfg: dict | None = None) -> list[tuple[str, str]]:
+    """The Model column of an agent: auto first (always, once), then its configured models."""
+    cfg = load_models_config() if cfg is None else cfg
+    return [(MODEL_AUTO, MODEL_AUTO)] + list(cfg.get(agent, []))[:MODEL_SLOTS - 1]
+
+
+def resolve_model(agent: str, model: str, remembered: str = "", cfg: dict | None = None) -> str:
+    """The model to select for an agent: `remembered` (the one used last with this agent) if it is still in
+    the list, else `model` (the current one) if it is, else the first entry (auto)."""
+    ids = [i for _, i in agent_models(agent, cfg)]
+    for cand in (remembered, model):
+        if cand in ids:
+            return cand
+    return ids[0]
+
+
+def maybe_update_models(fetch=None, now=None) -> bool:
+    """Refresh ~/.maude/models-default.json from GitHub once per day, at or after noon local time (like
+    maybe_self_update). Downloads are validated (validate_models_bytes), written to a temp file in the same
+    folder and moved into place; the stamp is only set on success. Never raises. Runs on a worker thread,
+    never at UI mount. True if a new file was written."""
+    try:
+        now = now or datetime.now()
+        if now.hour < UPDATE_HOUR:
+            return False
+        today = now.date().isoformat()
+        try:
+            if MODELS_STAMP.read_text().strip() == today:
+                return False
+        except OSError:
+            pass
+        if fetch is None:
+            def fetch() -> bytes:
+                with urllib.request.urlopen(f"{MODELS_URL}?cache={int(time.time())}", timeout=10) as resp:
+                    return resp.read(1_000_000)
+        data = fetch()
+        if not validate_models_bytes(data):
+            return False
+        maude_dir()
+        fd, tmp = tempfile.mkstemp(dir=str(STATE_DIR), prefix=".models-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, MODELS_DEFAULT_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        MODELS_STAMP.write_text(today)
+        return True
+    except Exception:
+        return False
+
+
+def start_models_refresh() -> None:
+    """Fire-and-forget daily refresh of the model lists on a daemon thread (no network on the UI thread).
+    MAUDE_MODELS_REFRESH=0 turns it off (tests)."""
+    if os.environ.get("MAUDE_MODELS_REFRESH") == "0":
+        return
+    import threading
+    threading.Thread(target=maybe_update_models, name="maude-models", daemon=True).start()
+
+
+# ── Settings (~/.maude/settings.json) and the restriction outside the sandbox ───
+
+def load_settings() -> dict:
+    """~/.maude/settings.json merged over SETTINGS_DEFAULTS. A missing file gives the defaults; a corrupt one
+    (not JSON, or not an object) is moved to settings.json.bak and the defaults are used. A value of the
+    wrong type for a known key falls back to its default. Unknown keys are kept. Never raises."""
+    d = dict(SETTINGS_DEFAULTS)
+    try:
+        raw = SETTINGS_FILE.read_bytes()
+    except OSError:
+        return d
+    try:
+        obj = json.loads(_decode_state(raw))
+        if not isinstance(obj, dict):
+            raise ValueError("not an object")
+    except (ValueError, TypeError):
+        try:
+            os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".bak"))
+        except OSError:
+            pass
+        return d
+    for k, v in obj.items():
+        if k in SETTINGS_DEFAULTS and not isinstance(v, type(SETTINGS_DEFAULTS[k])):
+            continue
+        d[k] = v
+    return d
+
+
+def save_settings(d: dict) -> bool:
+    """Write the settings atomically (temp file in ~/.maude, mode 0600, os.replace). True on success."""
+    try:
+        maude_dir()
+        fd, tmp = tempfile.mkstemp(dir=str(STATE_DIR), prefix=".settings-", suffix=".tmp")  # created 0600
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=2, sort_keys=True)
+                f.write("\n")
+            os.replace(tmp, SETTINGS_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
+    except OSError:
+        return False
+
+
+def agent_allowed(agent: str, settings: dict | None = None, native: bool | None = None) -> bool:
+    """Outside the sandbox (native) with native_only_approved on, only NATIVE_APPROVED_AGENTS may run.
+    Inside the sandbox the setting has no effect."""
+    settings = load_settings() if settings is None else settings
+    native = NATIVE if native is None else native
+    return not (native and settings.get("native_only_approved", True)) or agent in NATIVE_APPROVED_AGENTS
+
+
+def restrict_agent(agent: str, settings: dict | None = None, native: bool | None = None) -> str:
+    """The agent itself if allowed, else FALLBACK_AGENT (Kiro CLI)."""
+    return agent if agent_allowed(agent, settings, native) else FALLBACK_AGENT
+
+
+def reconcile(model: str, tool: str, changed: str = "tool") -> tuple[str, str]:
+    """(model, agent) that can really run: the agent is switched to Kiro CLI if the restriction forbids it,
+    and the model must be in that agent's list (else auto). `changed` is kept for old callers."""
+    tool = restrict_agent(tool if tool in AGENTS else DEFAULT_TOOL)
+    return resolve_model(tool, model), tool
+
+
+def _open_other_tool(tool: str, model: str, fresh: bool, effort: str = "") -> None:
+    cmd = tool_command(tool, model, fresh, effort)
     env = _child_env(tools=True)  # raw clauderc exports only
     if IS_MAC:  # offer the install (y/N, never sudo); the TUI is suspended here
         exe = mac_ensure_tool(cmd[0])
@@ -1292,8 +1607,8 @@ def _open_other_tool(tool: str, model: str, fresh: bool) -> None:
         # Interop is off in the sandbox, so a browser cannot open: use the device code flow.
         subprocess.run([cmd[0], "login", "--use-device-flow"], check=False, env=env)
     ret = subprocess.run(cmd, check=False, env=env).returncode
-    if ret != 0 and tool == "Kiro CLI" and not fresh:
-        subprocess.run([cmd[0], *tool_command(tool, model, True)[1:]], check=False, env=env)  # nothing to resume
+    if ret != 0 and tool in RESUME_FALLBACK_AGENTS and not fresh:
+        subprocess.run([cmd[0], *tool_command(tool, model, True, effort)[1:]], check=False, env=env)  # nothing to resume
 
 
 def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: str = "") -> None:
@@ -1312,15 +1627,19 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: st
         if rc == 3:  # claude missing: run_windows printed the install hint
             input("Press Enter to go back. ")
         return
-    cmd = tool_command(tool, model, fresh)
+    if tool not in getattr(mx, "TOOL_INSTALL", {}):  # no Windows installer known for this agent (yet): a hint, never a crash
+        input(f"{tool} cannot be installed by Maude on Windows yet; install it yourself and make sure "
+              f"'{tool_command(tool, MODEL_AUTO, True)[0]}' is on the PATH. Press Enter to go back. ")
+        return
+    cmd = tool_command(tool, model, fresh, effort)
     exe = mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path)
     if not exe:  # ensure_tool said why (declined, failed, not found)
         input("Press Enter to go back. ")
         return
     print(mx.banner_text(str(path), HAS_SANDBOX))
     env = _child_env(tools=True)  # raw clauderc exports (None = inherit)
-    if mx._run([exe, *cmd[1:]], cwd=str(path), env=env) and tool == "Kiro CLI" and not fresh:
-        mx._run([exe, *tool_command(tool, model, True)[1:]], cwd=str(path), env=env)  # nothing to resume
+    if mx._run([exe, *cmd[1:]], cwd=str(path), env=env) and tool in RESUME_FALLBACK_AGENTS and not fresh:
+        mx._run([exe, *tool_command(tool, model, True, effort)[1:]], cwd=str(path), env=env)  # nothing to resume
 
 
 def open_project(project_path: Path, model: str, *, fresh: bool = False,
@@ -1341,9 +1660,10 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
         return
     os.chdir(project_path)
     if tool != DEFAULT_TOOL:
-        _open_other_tool(tool, model, fresh)
+        _open_other_tool(tool, model, fresh, effort)
         return
-    head, env = ["claude", model], _child_env()  # sandbox: the ~/bin/claude wrapper takes the model as a word
+    mw = [] if model == MODEL_AUTO or not valid_model_id(model) else [model]  # auto: no model argument at all
+    head, env = ["claude", *mw], _child_env()  # sandbox: the ~/bin/claude wrapper takes the model as a word
     if IS_MAC:  # no wrapper outside the sandbox: the real claude (--model) with Maude's env
         mac_offer("git")
         mac_offer("gh")
@@ -1353,7 +1673,7 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
                 input("Press Enter to go back. ")
                 return
             real = plat_real_claude()
-        head = [real, "--model", model]
+        head = [real, *(["--model", model] if mw else [])]
     sync_perplexity()
     eff = effort_args(effort)
     if fresh:
@@ -1420,8 +1740,29 @@ def _save_model_effort(model: str, effort: str) -> None:
 
 
 def read_model() -> str:
-    """Return the user's saved Claude model alias, or the default."""
+    """Return the user's saved model id (of the saved agent), or the default (auto)."""
     return read_model_effort()[0]
+
+
+def read_agent_models() -> dict:
+    """{agent: model id} last used per agent (~/.maude/agent-models.json). Corrupt file -> {}."""
+    obj = _read_json(AGENT_MODELS_FILE)
+    return {k: v for k, v in obj.items() if k in AGENTS and valid_model_id(v)} if isinstance(obj, dict) else {}
+
+
+def save_agent_model(agent: str, model: str) -> None:
+    """Remember the model for an agent (best effort)."""
+    if agent not in AGENTS or not valid_model_id(model):
+        return
+    d = read_agent_models()
+    d[agent] = model
+    try:
+        maude_dir()
+        tmp = AGENT_MODELS_FILE.with_name(AGENT_MODELS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(d, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, AGENT_MODELS_FILE)
+    except OSError:
+        pass
 
 
 def read_effort() -> str:
@@ -1429,7 +1770,7 @@ def read_effort() -> str:
 
 
 def save_model(name: str) -> None:
-    if name in MODELS:
+    if valid_model_id(name):
         _save_model_effort(name, read_effort())
 
 
@@ -4684,7 +5025,7 @@ class MaudeApp(App):
     }
 
     #sidebar {
-        width: 41;
+        width: 48;
         padding: 0 1;
         background: #242424;
         border-right: solid #b87878;
@@ -4712,10 +5053,19 @@ class MaudeApp(App):
         height: auto;
     }
 
-    /* three pickers share the sidebar width: model | AI tool | thinking */
-    #pick-row #model-col { width: 11; }
-    #pick-row #tool-col  { width: 16; }
-    #pick-row #effort-col { width: 11; }
+    /* three pickers share the sidebar width: agent | model | thinking (label width + 4 each) */
+    #pick-row #agent-col  { width: 22; }
+    #pick-row #model-col  { width: 13; }
+    #pick-row #effort-col { width: 10; }
+
+    /* greyed-out choices: agents not allowed outside the sandbox, Thinking when the agent has none */
+    RadioButton:disabled, RadioSet:disabled > RadioButton {
+        color: #5a5050;
+        text-style: none;
+    }
+    RadioButton:disabled > .toggle--button {
+        color: #4a4040;
+    }
 
     /* Compact one-line toggles: box left of the label, no border/padding, all in one column. */
     #sidebar Checkbox {
@@ -4755,24 +5105,24 @@ class MaudeApp(App):
     #divider3 {
         color: #6a5058;
         height: 1;
-        margin-top: 1;
+        margin-top: 0;
         margin-bottom: 0;
     }
 
-    #model-label, #tool-label, #effort-label {
+    #agent-label, #model-label, #effort-label {
         color: #d4a0a0;
         text-style: bold;
         margin-bottom: 0;
     }
 
-    #model-select, #tool-select, #effort-select {
+    #agent-select, #model-select, #effort-select {
         background: #242424;
         border: none;
         padding: 0;
         height: auto;
     }
 
-    #model-select:focus-within, #tool-select:focus-within, #effort-select:focus-within {
+    #agent-select:focus-within, #model-select:focus-within, #effort-select:focus-within {
         background: #2a2424;
     }
 
@@ -5265,15 +5615,21 @@ class MaudeApp(App):
         self._select = os.path.realpath(select) if ((IS_WIN or IS_MAC) and select) else ""
         self._extra: tuple = (self._select,) if self._select else ()
         self._bar_on = False  # the warning bar (#win-warning) is active
-        self._tool = read_tool()
-        want = model if model in MODELS else ""
+        self._settings = load_settings()
+        saved_tool = read_tool()
+        self._tool = restrict_agent(saved_tool, self._settings)  # not allowed outside the sandbox -> Kiro CLI
         saved_model, self._effort = read_model_effort()
-        model = want or saved_model
-        self._model, self._tool = reconcile(model, self._tool, "model" if want else "tool")
-        if want:
-            save_model(self._model)
+        cfg = load_models_config()
+        # model = a Claude Code alias from `maude.exe --model`: it selects Claude Code (if allowed) and that model
+        if model and DEFAULT_TOOL == restrict_agent(DEFAULT_TOOL, self._settings) \
+                and model in [i for _, i in agent_models(DEFAULT_TOOL, cfg)]:
+            self._tool, saved_model = DEFAULT_TOOL, model
+        elif model and model in [i for _, i in agent_models(self._tool, cfg)]:
+            saved_model = model
+        self._model = resolve_model(self._tool, saved_model, cfg=cfg)
+        if self._tool != saved_tool:
             save_tool(self._tool)
-        elif self._model != model:
+        if self._model != read_model():
             save_model(self._model)
 
     def compose(self) -> ComposeResult:
@@ -5292,19 +5648,27 @@ class MaudeApp(App):
                 )
                 yield Static("─" * 28, id="divider2")
                 with Horizontal(id="pick-row"):
+                    with Vertical(classes="opt-col", id="agent-col"):
+                        yield Label("Agent", id="agent-label")
+                        with RadioSet(id="agent-select"):
+                            for t in AGENTS:
+                                yield RadioButton(t, value=(t == self._tool),
+                                                  disabled=not agent_allowed(t, self._settings))
                     with Vertical(classes="opt-col", id="model-col"):
                         yield Label("Model", id="model-label")
+                        # A fixed pool of buttons: relabelled (and hidden when unused) whenever the agent changes,
+                        # so nothing is removed or mounted at runtime.
+                        self._model_entries = agent_models(self._tool)
                         with RadioSet(id="model-select"):
-                            for m in MODELS:
-                                yield RadioButton(m, value=(m == self._model))
-                    with Vertical(classes="opt-col", id="tool-col"):
-                        yield Label("AI tool", id="tool-label")
-                        with RadioSet(id="tool-select"):
-                            for t in AI_TOOLS:
-                                yield RadioButton(t, value=(t == self._tool))
+                            for n in range(MODEL_SLOTS):
+                                if n < len(self._model_entries):
+                                    lab, mid = self._model_entries[n]
+                                    yield RadioButton(lab, value=(mid == self._model))
+                                else:
+                                    yield RadioButton("-", disabled=True)
                     with Vertical(classes="opt-col", id="effort-col"):
                         yield Label("Thinking", id="effort-label")
-                        with RadioSet(id="effort-select"):
+                        with RadioSet(id="effort-select", disabled=self._tool not in EFFORT_AGENTS):
                             for e in EFFORT_LABELS:
                                 yield RadioButton(e, value=(e == (self._effort or "auto")))
                 yield Static("─" * 28, id="divider3")
@@ -5346,6 +5710,8 @@ class MaudeApp(App):
                 self.query_one("#logo").styles.height = 6  # room for the caption line
         warn = self.query_one("#win-warning", Static)
         warn.display = False
+        self._fill_models()  # hides the unused buttons of the Model pool
+        start_models_refresh()  # daily model-list refresh, on a thread (takes effect on the next launch)
         self._refresh_table()
         if self._select:
             self._bar_on = True
@@ -5366,8 +5732,8 @@ class MaudeApp(App):
         self.call_after_refresh(self._maybe_prompt_ssh_unlock)
 
     def _sync_model_cursor(self) -> None:
-        self._sync_cursor("#model-select", MODELS, self._model)
-        self._sync_cursor("#tool-select", AI_TOOLS, self._tool)
+        self._sync_cursor("#model-select", tuple(i for _, i in self._model_entries), self._model)
+        self._sync_cursor("#agent-select", AGENTS, self._tool)
         self._sync_cursor("#effort-select", EFFORT_LABELS, self._effort or "auto")
 
     def _sync_cursor(self, sel: str, items: tuple, value: str) -> None:
@@ -5733,16 +6099,65 @@ class MaudeApp(App):
 
     @on(RadioSet.Changed, "#model-select")
     def model_changed(self, event: RadioSet.Changed) -> None:
-        new = str(event.pressed.label)
+        idx = event.radio_set.pressed_index
+        if not 0 <= idx < len(self._model_entries):
+            return
+        new = self._model_entries[idx][1]
         if new == self._model:  # echo of a programmatic update
             return
-        self._model, tool = reconcile(new, self._tool, "model")
-        save_model(self._model)
-        if tool != self._tool:
-            self._tool = tool
-            save_tool(tool)
-            self._press("#tool-select", AI_TOOLS, tool)
+        self._model = new
+        save_model(new)
+        save_agent_model(self._tool, new)
         self.query_one("#projects-table", DataTable).focus()
+
+    def _fill_models(self) -> None:
+        """Show the model list of the current agent (auto first) in the fixed pool of Model buttons and select
+        self._model (which must be in the list; else the first entry, auto)."""
+        entries = agent_models(self._tool)
+        self._model_entries = entries
+        ids = [i for _, i in entries]
+        if self._model not in ids:
+            self._model = ids[0]
+            save_model(self._model)
+        idx = ids.index(self._model)
+        rs = self.query_one("#model-select", RadioSet)
+        buttons = list(rs.query(RadioButton))
+        with rs.prevent(RadioButton.Changed):
+            for i, b in enumerate(buttons):
+                if i < len(entries):
+                    b.label = entries[i][0]
+                    b.display, b.disabled, b.value = True, False, i == idx
+                else:
+                    b.label = "-"
+                    b.display, b.disabled, b.value = False, True, False
+        rs._pressed_button = buttons[idx]  # type: ignore[attr-defined]
+        self._sync_cursor("#model-select", tuple(ids), self._model)
+        self.query_one("#effort-select", RadioSet).disabled = self._tool not in EFFORT_AGENTS
+
+    def _switch_agent(self, new: str, press: bool = True) -> None:
+        """Select an agent: remember it, restore the model used last with it (else keep the current one if the
+        new agent has it, else auto), rebuild the Model column and enable/disable Thinking."""
+        self._tool = new
+        save_tool(new)
+        self._model = resolve_model(new, self._model, read_agent_models().get(new, ""))
+        save_model(self._model)
+        save_agent_model(new, self._model)
+        if press:
+            self._press("#agent-select", AGENTS, new)
+        self._fill_models()
+
+    def apply_agent_restrictions(self) -> None:
+        """Public: re-read ~/.maude/settings.json (native_only_approved) and refresh the Agent column. Outside the
+        sandbox with native_only_approved on, every agent except Kiro CLI and GitHub Copilot CLI is greyed out
+        (disabled, not hidden); if the selected agent is one of them the selection moves to Kiro CLI. Inside
+        the sandbox it enables everything. The Settings screen calls this after save_settings()."""
+        self._settings = load_settings()
+        for b in self.query_one("#agent-select", RadioSet).query(RadioButton):
+            b.disabled = not agent_allowed(str(b.label), self._settings)
+        new = restrict_agent(self._tool, self._settings)
+        if new != self._tool:
+            self._switch_agent(new)
+            self.notify(f"Only {' and '.join(NATIVE_APPROVED_AGENTS)} may run outside the sandbox; switched to {new}")
 
     @on(RadioSet.Changed, "#effort-select")
     def effort_changed(self, event: RadioSet.Changed) -> None:
@@ -5754,19 +6169,15 @@ class MaudeApp(App):
         save_effort(new)
         self.query_one("#projects-table", DataTable).focus()
 
-    @on(RadioSet.Changed, "#tool-select")
-    def tool_changed(self, event: RadioSet.Changed) -> None:
+    @on(RadioSet.Changed, "#agent-select")
+    def agent_changed(self, event: RadioSet.Changed) -> None:
         new = str(event.pressed.label)
         if new == self._tool:
             return
-        self._tool = new
-        save_tool(new)
-        model, _ = reconcile(self._model, new, "tool")
-        if model != self._model:
-            self._model = model
-            save_model(model)
-            self._press("#model-select", MODELS, model)
-            self.notify("Fable is only available in Claude Code; switched model to opus")
+        if not agent_allowed(new, self._settings):  # greyed out: cannot normally be clicked, never accept it
+            self._press("#agent-select", AGENTS, self._tool)
+            return
+        self._switch_agent(new, press=False)
         self.query_one("#projects-table", DataTable).focus()
 
     def _press(self, sel: str, items: tuple, value: str) -> None:

@@ -27,7 +27,7 @@ In this mode, `maude.exe` runs on Windows. The AI tool runs on your Windows acco
     maude
     ```
 
-The Maude TUI opens. Select a project and press **Open Project**. If the AI tool is not installed (Claude Code, Kiro CLI, OpenCode or Crush), Maude offers to install it on first open. It also offers Git (MinGit, the small official zip) and the GitHub CLI (official zip), both optional, per user, with no admin prompt.
+The Maude TUI opens. Select a project and press **Open Project**. If the agent is not installed (outside the sandbox, Kiro CLI and GitHub Copilot CLI are the agents you can pick by default), Maude offers to install it on first open. It also offers Git (MinGit, the small official zip) and the GitHub CLI (official zip), both optional, per user, with no admin prompt.
 
 For all details, see [maude.exe on Windows](windows-exe.md).
 

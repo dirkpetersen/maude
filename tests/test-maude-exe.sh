@@ -937,7 +937,7 @@ finally:
 print("|".join(out))
 PY
 )"
-assert_eq "state files: read, validation, migration" "('opus', '')|('sonnet', 'high')|('claude-opus-4-5', '')|('haiku', '')|('opus', 'max')|('fable', 'max')|('opus', '')|opus|('sonnet', 'low')|sonnet,low|False|('sonnet', 'low')|True|True|0o700|True|('opus', '')|('opus', '')|('opus', 'high')|('sonnet', 'low')|('opus', 'max')|('haiku', 'low')|False|('opus', '')" "$PREF_OUT"
+assert_eq "state files: read, validation, migration" "('auto', '')|('sonnet', 'high')|('claude-opus-4-5', '')|('haiku', '')|('auto', 'max')|('fable', 'max')|('auto', '')|auto|('sonnet', 'low')|sonnet,low|False|('sonnet', 'low')|True|True|0o700|True|('auto', '')|('auto', '')|('opus', 'high')|('sonnet', 'low')|('opus', 'max')|('haiku', 'low')|False|('auto', '')" "$PREF_OUT"
 
 # OPEN_SH: reads ~/.maude/maude-model ("<model>[,<effort>]"), old file as fallback; fake claude echoes its args
 OSH_OUT="$(python3 -I - "${SCRIPT_DIR}/../light" 2>/dev/null <<'PY'
@@ -955,12 +955,12 @@ try:
         r = subprocess.run(["bash", "-c", m.OPEN_SH, "maude", *arg], env=env, capture_output=True, text=True)
         return r.stdout.replace("\n", ";")
     new, old = os.path.join(home, ".maude", "maude-model"), os.path.join(home, ".maude-model")
-    out = [run()]                                              # nothing -> opus
+    out = [run()]                                              # nothing -> auto (no model argument)
     open(old, "w").write("haiku\n"); out.append(run())          # old file fallback
     open(new, "w").write("sonnet,high\n"); out.append(run())    # new file with effort wins
     open(new, "w").write("fable"); out.append(run())           # model only
     open(new, "w").write("opus,turbo"); out.append(run())      # bad effort dropped
-    open(new, "w").write("x;touch pwn,max"); out.append(run()) # bad model -> opus, effort kept
+    open(new, "w").write("x;touch pwn,max"); out.append(run()) # bad model -> auto, effort kept
     out.append(run("haiku"))                                   # override model keeps the saved effort
     open(new, "wb").write(b"sonnet\r\n"); out.append(run())     # CRLF written by Windows tools
     open(new, "wb").write(b"opus,max\r\n"); out.append(run())
@@ -970,7 +970,7 @@ finally:
 print("|".join(out))
 PY
 )"
-assert_eq "OPEN_SH reads model,effort" "claude opus --continue;claude opus;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude opus --effort max --continue;claude opus --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False" "$OSH_OUT"
+assert_eq "OPEN_SH reads model,effort" "claude --continue;claude ;|claude haiku --continue;claude haiku;|claude sonnet --effort high --continue;claude sonnet --effort high;|claude fable --continue;claude fable;|claude opus --continue;claude opus;|claude --effort max --continue;claude --effort max;|claude haiku --effort max --continue;claude haiku --effort max;|claude sonnet --continue;claude sonnet;|claude opus --effort max --continue;claude opus --effort max;|False" "$OSH_OUT"
 # "Starting Maude, please wait ..." banner: shown (before any heavy import) only for the TUI modes, only on a TTY.
 bn_run() { env -u MAUDE_TIMING python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
 import io, os, sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
