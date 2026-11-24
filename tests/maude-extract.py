@@ -23,7 +23,7 @@ WANT = {
     "MODELS_STAMP", "MODELS_FALLBACK_JSON", "AGENT_BINARIES", "AGENT_BIN", "INSTALL_LABEL", "CLAUDE_ALIASES", "CLAUDE_ID_RE",
     "LABEL_MAX", "CONFIG_VERSION", "claude_model_ok", "model_ok", "default_model", "agent_retry_fresh",
     "tool_model_passed", "agent_exit_note", "_clean_label", "initial_selection", "_parse_settings", "recall_model",
-    "remember_model",
+    "remember_model", "NORMAL_QUIT_CODES", "agent_quit_normally",
     "read_tool", "save_tool", "valid_model_id", "effort_for", "effort_args", "tool_command", "parse_model_pref",
     "format_model_pref", "_model_entries", "parse_models_config", "validate_models_bytes", "_read_json",
     "load_models_config", "agent_models", "resolve_model", "maybe_update_models", "load_settings", "save_settings",

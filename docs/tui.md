@@ -40,7 +40,7 @@ The columns are in the order Agent, Model, Thinking. With eight agents the left 
 | OpenCode | `opencode` | `--model provider/model` | `--continue` | none |
 | Crush | `crush` | `--model provider/model` | `--continue` | none |
 
-If an agent exits with an error code, Maude does not paint the TUI over the message. When a resume flag was used and no model was passed (agents that can fail for want of a session), it starts the agent once more without the resume flag. In every other case it prints `<agent> exited with code N` (with "try Model: auto" when a model was passed) and waits for Enter. A missing agent: in the sandbox `maude update` installs all eight; on Windows and macOS Maude offers to install it when you open a project. Kiro CLI asks for a device-code sign-in on first use.
+If an agent exits with an error code, Maude does not paint the TUI over the message. A normal quit (exit code 0, Ctrl+C: 130, a SIGINT/SIGTERM signal, or the Windows Ctrl+C status) is not an error. When a resume flag was used (agents that can fail for want of a session), Maude first starts the agent once more without it, keeping the model. If that run fails too, or no resume flag was used, it prints `<agent> exited with code N` and waits for Enter, adding "try Model: auto" when a model was passed and "Thinking: auto" when `--effort` was passed. A missing agent: in the sandbox `maude update` installs all eight; on Windows and macOS Maude offers to install it when you open a project. Kiro CLI asks for a device-code sign-in on first use.
 
 ### Model lists
 

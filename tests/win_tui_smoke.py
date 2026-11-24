@@ -657,10 +657,15 @@ try:
     mx._run = lambda cmd, **kw: runs.append(cmd) or rc_seq.pop(0)
     real_input = builtins.input; builtins.input = lambda q="": shown.append(q) or ""
     try:
-        rc_seq[:] = [3]
+        rc_seq[:] = [3, 3]                                   # resume run fails, the fresh retry (same model) fails too
+        maude.open_project(proj, "claude-opus-5.5", tool="Kiro CLI", effort="high")
+        assert [r[1:] for r in runs] == [["chat", "--model", "claude-opus-5.5", "--effort", "high", "--resume"],
+                                         ["chat", "--model", "claude-opus-5.5", "--effort", "high"]], runs
+        assert len(shown) == 1 and "exited with code 3" in shown[0], shown
+        assert "try Model: auto / Thinking: auto" in shown[0], shown
+        runs.clear(); shown.clear(); rc_seq[:] = [3, 0]                # a model was passed, the retry succeeds: no pause
         maude.open_project(proj, "claude-opus-5.5", tool="Kiro CLI")
-        assert len(runs) == 1 and shown and "exited with code 3" in shown[0] and "try Model: auto" in shown[0], (runs, shown)
-        assert runs[0][1:] == ["chat", "--model", "claude-opus-5.5", "--resume"], runs
+        assert len(runs) == 2 and not shown, (runs, shown)
         runs.clear(); shown.clear(); rc_seq[:] = [1, 0]
         maude.open_project(proj, "auto", tool="Codex")
         assert [r[1:] for r in runs] == [["resume", "--last"], []] and not shown, (runs, shown)  # retried fresh, ok
@@ -670,6 +675,10 @@ try:
         runs.clear(); shown.clear(); rc_seq[:] = [0]
         maude.open_project(proj, "auto", tool="Codex", fresh=True)
         assert len(runs) == 1 and not shown, (runs, shown)
+        for code in (130, 0xC000013A, -2, -15):                        # a deliberate quit: no retry, no pause
+            runs.clear(); shown.clear(); rc_seq[:] = [code]
+            maude.open_project(proj, "gpt-6.2-sol", tool="Codex")
+            assert len(runs) == 1 and not shown, (code, runs, shown)
     finally:
         builtins.input = real_input
     mx._run = lambda cmd, **kw: envs.append((cmd[0], kw.get("env"))) or 0

@@ -32,7 +32,6 @@ for a in "Claude Code" "Codex" "Antigravity" "Grok CLI" "Kiro CLI" "GitHub Copil
     assert_eq "$a: first entry is auto, listed once" "('auto', 1)" "$(py "(agent_models('$a')[0][1], [i for _,i in agent_models('$a')].count('auto'))")"
 done
 assert_eq "Codex: OpenAI only after auto" "True" "$(py 'all(i.startswith("gpt-") for _,i in agent_models("Codex")[1:])')"
-assert_eq "Antigravity: Gemini only after auto" "True" "$(py 'all(i.startswith("gemini-") for _,i in agent_models("Antigravity")[1:])')"
 assert_eq "Grok CLI: auto + grok-* only (Claude needs BYOK config Maude does not write)" "['auto', 'grok-4.7', 'grok-4.6', 'grok-4.5']" "$(py '[i for _,i in agent_models("Grok CLI")]')"
 assert_eq "Kiro: all 7 verified ids, Claude then GPT" "['auto', 'claude-fable-5.1', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']" "$(py '[i for _,i in agent_models("Kiro CLI")]')"
 assert_eq "Antigravity is auto-only" "[('auto', 'auto')]" "$(py 'agent_models("Antigravity")')"

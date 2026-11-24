@@ -1344,22 +1344,40 @@ def tool_command(tool: str, model: str, fresh: bool, effort: str = "") -> list[s
     return [exe, *opt("--model"), *cont]  # GitHub Copilot CLI, OpenCode, Crush
 
 
-def agent_retry_fresh(tool: str, model: str, fresh: bool, ret: int) -> bool:
+# Exit codes that are a deliberate quit, not a failure: 0, 130 (128+SIGINT), a negative signal number for SIGINT or
+# SIGTERM (POSIX subprocess), and Windows STATUS_CONTROL_C_EXIT 0xC000013A (unsigned and signed).
+NORMAL_QUIT_CODES = frozenset({0, 130, -2, -15, 0xC000013A, 0xC000013A - 2**32})
+
+
+def agent_quit_normally(ret: int) -> bool:
+    return ret in NORMAL_QUIT_CODES
+
+
+def agent_retry_fresh(tool: str, fresh: bool, ret: int) -> bool:
     """After an agent exited with `ret`: start it once more without the resume flag? Only when it was started
-    with a resume flag (not fresh), failed, resume can fail for want of a session (RESUME_FALLBACK_AGENTS) and
-    NO model flag was passed (a failure with a model id is more likely the id, and must stay readable)."""
-    return bool(ret) and not fresh and tool in RESUME_FALLBACK_AGENTS and not tool_model_passed(tool, model)
+    with a resume flag (not fresh), did not just quit normally (agent_quit_normally), and resume can fail for
+    want of a session (RESUME_FALLBACK_AGENTS). Whether a model was passed does not matter: the fresh run keeps
+    it, and only if that fails too is the error shown."""
+    return not agent_quit_normally(ret) and not fresh and tool in RESUME_FALLBACK_AGENTS
 
 
 def tool_model_passed(tool: str, model: str) -> bool:
     return model != MODEL_AUTO and model_ok(tool, model)
 
 
-def agent_exit_note(tool: str, model: str, ret: int) -> str:
-    """Text to show (and wait on) when an agent exits non-zero, so a wrong model id is not repainted over."""
+def agent_exit_note(tool: str, model: str, ret: int, effort: str = "") -> str:
+    """Text to show (and wait on) when an agent failed (also after the retry without resume), so a wrong model id
+    or thinking level is not repainted over. Names what was passed: the model flag and/or --effort."""
     s = f"{tool} exited with code {ret}."
+    passed, tries = [], []
     if tool_model_passed(tool, model):
-        s += f" A model was passed ({model}): if that is the problem, try Model: auto."
+        passed.append(f"A model ({model})")
+        tries.append("Model: auto")
+    if effort_for(tool, effort):
+        passed.append(f"Thinking ({effort_for(tool, effort)})")
+        tries.append("Thinking: auto")
+    if passed:
+        s += f" {' and '.join(passed)} {'was' if len(passed) == 1 else 'were'} passed: if that is the problem, try {' / '.join(tries)}."
     return s + " Press Enter to go back. "
 
 
@@ -1681,17 +1699,17 @@ def _pause(msg: str) -> None:
 
 
 def _after_agent(tool: str, model: str, fresh: bool, effort: str, ret: int, rerun) -> None:
-    """The agent exited with `ret`. 0: done. Otherwise start it once more without the resume flag if that is
-    what failed (agent_retry_fresh), and if it still (or for another reason) failed, stop and show the exit
-    code, so the error stays readable instead of being painted over by the TUI. rerun(cmd) runs a command
-    line and returns its exit code."""
-    if not ret:
+    """The agent exited with `ret`. A normal quit (0, Ctrl+C: agent_quit_normally) is done. Otherwise start it once
+    more without the resume flag if one was used (agent_retry_fresh), and if that also fails, stop and show the exit
+    code (with "try Model: auto / Thinking: auto" for what was passed), so the error stays readable instead of being
+    painted over by the TUI. rerun(cmd) runs a command line and returns its exit code."""
+    if agent_quit_normally(ret):
         return
-    if agent_retry_fresh(tool, model, fresh, ret):
+    if agent_retry_fresh(tool, fresh, ret):
         ret = rerun(tool_command(tool, model, True, effort))
-        if not ret:
+        if agent_quit_normally(ret):
             return
-    _pause(agent_exit_note(tool, model, ret))
+    _pause(agent_exit_note(tool, model, ret, effort))
 
 
 def _open_other_tool(tool: str, model: str, fresh: bool, effort: str = "") -> None:
@@ -1846,7 +1864,7 @@ def _save_model_effort(model: str, effort: str) -> None:
 
 
 def read_model() -> str:
-    """Return the user's saved model id (of the saved agent), or the default (auto)."""
+    """Claude Code's saved model (maude-model): opus when nothing is saved, "auto" for an empty model field."""
     return read_model_effort()[0]
 
 
@@ -5754,7 +5772,8 @@ class MaudeApp(App):
         self._cfg = load_models_config()  # read once; again only when the daily refresh has written a new file
         saved_tool = read_tool()
         claude_model, self._effort = read_model_effort()
-        if model and model_ok(DEFAULT_TOOL, model) and agent_allowed(DEFAULT_TOOL, self._settings):
+        if model and agent_allowed(DEFAULT_TOOL, self._settings) \
+                and model in [i for _, i in agent_models(DEFAULT_TOOL, self._cfg)]:
             # `maude.exe --model X`: Claude Code with that model, remembered like a click
             self._tool, self._model = DEFAULT_TOOL, resolve_model(DEFAULT_TOOL, model, cfg=self._cfg)
             if self._model == model:

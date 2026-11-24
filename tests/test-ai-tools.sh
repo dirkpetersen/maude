@@ -161,16 +161,25 @@ assert_eq "model memory: Codex -> agent-models"      "gpt-6.2-sol" "$(py 'rememb
 assert_eq "Claude Code is never in agent-models.json" "{'Codex': 'gpt-6.2-sol'}" "$(py 'save_agent_model("Claude Code", "opus") or read_agent_models()')"
 assert_eq "maude-model has no other agent's id"       "opus" "$(cat "$d/home/.maude/maude-model")"
 
-# failure handling: retry without resume only when a resume flag and NO model flag were used
-assert_eq "retry: Codex resume, auto, failed"   "True"  "$(py 'agent_retry_fresh("Codex","auto",False,1)')"
-assert_eq "no retry when a model was passed"    "False" "$(py 'agent_retry_fresh("Codex","gpt-6.2-sol",False,1)')"
-assert_eq "no retry when it was fresh"          "False" "$(py 'agent_retry_fresh("Codex","auto",True,1)')"
-assert_eq "no retry on success"                 "False" "$(py 'agent_retry_fresh("Codex","auto",False,0)')"
-assert_eq "no retry for Claude Code"            "False" "$(py 'agent_retry_fresh("Claude Code","auto",False,1)')"
-assert_eq "no retry for Crush"                  "False" "$(py 'agent_retry_fresh("Crush","auto",False,1)')"
-assert_eq "retry: Kiro auto"                    "True"  "$(py 'agent_retry_fresh("Kiro CLI","auto",False,2)')"
-assert_eq "exit note, model passed"             "Kiro CLI exited with code 3. A model was passed (claude-opus-5.5): if that is the problem, try Model: auto. Press Enter to go back. " "$(py 'agent_exit_note("Kiro CLI","claude-opus-5.5",3)')"
-assert_eq "exit note, auto"                     "Codex exited with code 1. Press Enter to go back. " "$(py 'agent_exit_note("Codex","auto",1)')"
+# failure handling: a normal quit is not a failure; a failed resume is retried once (model or not); the note names what was passed
+for code in 0 130 3221225786 -1073741510 -2 -15; do
+    assert_eq "exit code $code is a normal quit" "True" "$(py "agent_quit_normally($code)")"
+    assert_eq "exit code $code: no retry"        "False" "$(py "agent_retry_fresh('Codex', False, $code)")"
+done
+for code in 1 2 3 137 143 255 3221225477; do
+    assert_eq "exit code $code is a failure"     "False" "$(py "agent_quit_normally($code)")"
+done
+assert_eq "retry: Codex resume, failed"        "True"  "$(py 'agent_retry_fresh("Codex", False, 1)')"
+assert_eq "retry: Kiro resume, failed"         "True"  "$(py 'agent_retry_fresh("Kiro CLI", False, 2)')"
+assert_eq "retry ignores the model"            "True"  "$(py 'agent_retry_fresh("GitHub Copilot CLI", False, 1)')"
+assert_eq "no retry when it was fresh"         "False" "$(py 'agent_retry_fresh("Codex", True, 1)')"
+assert_eq "no retry for Claude Code"           "False" "$(py 'agent_retry_fresh("Claude Code", False, 1)')"
+assert_eq "no retry for Crush"                 "False" "$(py 'agent_retry_fresh("Crush", False, 1)')"
+assert_eq "exit note, model passed"            "Kiro CLI exited with code 3. A model (claude-opus-5.5) was passed: if that is the problem, try Model: auto. Press Enter to go back. " "$(py 'agent_exit_note("Kiro CLI","claude-opus-5.5",3)')"
+assert_eq "exit note, model + thinking"        "Kiro CLI exited with code 3. A model (claude-opus-5.5) and Thinking (high) were passed: if that is the problem, try Model: auto / Thinking: auto. Press Enter to go back. " "$(py 'agent_exit_note("Kiro CLI","claude-opus-5.5",3,"high")')"
+assert_eq "exit note, thinking only (agy)"     "Antigravity exited with code 1. Thinking (low) was passed: if that is the problem, try Thinking: auto. Press Enter to go back. " "$(py 'agent_exit_note("Antigravity","auto",1,"low")')"
+assert_eq "exit note, thinking not for Copilot" "GitHub Copilot CLI exited with code 1. Press Enter to go back. " "$(py 'agent_exit_note("GitHub Copilot CLI","auto",1,"high")')"
+assert_eq "exit note, auto"                    "Codex exited with code 1. Press Enter to go back. " "$(py 'agent_exit_note("Codex","auto",1)')"
 
 # link_kiro_skills: four cases with a fake HOME (cleanup targets "$d" only).
 source "${SCRIPT_DIR}/../light/lib/cli-tools.sh"
