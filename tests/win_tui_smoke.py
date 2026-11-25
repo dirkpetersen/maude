@@ -36,6 +36,13 @@ async def wait_query(pilot, screen_getter, selector, timeout=5.0):
     return screen_getter().query_one(selector)
 
 
+async def wait_ui_ready(pilot, screen, timeout=15.0):
+    """Wait until CredsEntryScreen._init_ui has run (it sets the checkbox, the mode and the status after a refresh);
+    asserting initial state before that races on slow CI runners."""
+    ok = await wait_until(pilot, lambda: screen._ui_ready, timeout)
+    assert ok and screen._ui_ready, "Settings screen never finished _init_ui"
+
+
 async def wait_table(pilot, rows=1, timeout=5.0):
     """Wait for #projects-table on the app screen to have at least `rows` rows; returns it."""
     app = pilot.app
@@ -590,6 +597,7 @@ try:
             app.query_one("#btn-creds").press(); await pilot.pause()
             await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
+            await wait_ui_ready(pilot, app.screen)
             await pilot.pause()  # let the first render settle (a click within milliseconds of opening is not a human click)
             # slow CI runners: children can mount after the screen is pushed
             (await wait_query(pilot, lambda: app.screen, "#btn-creds-mode-foundry")).press(); await pilot.pause(); await pilot.pause()
@@ -703,6 +711,7 @@ try:
             await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             scr = app.screen
             assert isinstance(scr, maude.CredsEntryScreen)
+            await wait_ui_ready(pilot, scr)
             for b in ("#btn-creds-mode-foundry", "#btn-creds-mode-bedrock", "#btn-creds-mode-paste", "#btn-creds-cancel"):
                 await wait_query(pilot, lambda: scr, b)  # all children mounted before the rapid presses
             calls = []
@@ -742,6 +751,7 @@ try:
             await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             scr = app.screen
             assert isinstance(scr, maude.CredsEntryScreen)
+            await wait_ui_ready(pilot, scr)
             await pilot.pause()
             await wait_query(pilot, lambda: scr, "#btn-creds-mode-foundry")
             (await wait_query(pilot, lambda: scr, "#creds-text")).text = "export ANTHROPIC_API_KEY=sk-ant-hidden-pane\n"
@@ -783,6 +793,7 @@ try:
         assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
         await pilot.pause()
         await wait_query(pilot, lambda: app.screen, "#btn-creds-save")
+        await wait_ui_ready(pilot, app.screen)
         return app.screen
 
     async def press_mode(pilot, scr, mode):
@@ -1036,6 +1047,7 @@ try:
                 await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
                 scr = app.screen
                 await wait_query(pilot, lambda: scr, "#btn-creds-save")
+                await wait_ui_ready(pilot, scr)
                 assert len(scr.query("#creds-native-only")) == 0, "no native-only checkbox in the sandbox"
                 await press_mode(pilot, scr, "anthropic")
                 key, use = scr.query_one("#creds-anthropic-key"), scr.query_one("#creds-anthropic-use", Checkbox)
@@ -1089,6 +1101,7 @@ try:
                         await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
                         scr = app.screen
                         await wait_query(pilot, lambda: scr, "#btn-creds-save")
+                        await wait_ui_ready(pilot, scr)
                     else:
                         scr = await open_settings(pilot)
                     cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
@@ -1202,6 +1215,7 @@ try:
             await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
             assert isinstance(app.screen, maude.CredsEntryScreen), app.screen
             # slow CI runners: the screen is pushed before its children are mounted
+            await wait_ui_ready(pilot, app.screen)
             (await wait_query(pilot, lambda: app.screen, "#btn-creds-cancel")).press(); await pilot.pause(); await pilot.pause()
             await wait_until(pilot, lambda: opened)
             assert opened == [proj], opened  # Cancel on Windows/macOS still opens the project

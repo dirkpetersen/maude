@@ -3702,6 +3702,7 @@ class CredsEntryScreen(ModalScreen[bool]):
         self._anth_initial_use = False
         self._default_bedrock_initial = False
         self._parked_at_open = False  # Bedrock was the parked default when the screen opened
+        self._ui_ready = False        # set once _init_ui has run (initial state is final)
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -3739,6 +3740,12 @@ class CredsEntryScreen(ModalScreen[bool]):
         self.call_after_refresh(self._init_ui)
 
     def _init_ui(self) -> None:
+        try:
+            self._init_ui_inner()
+        finally:
+            self._ui_ready = True
+
+    def _init_ui_inner(self) -> None:
         try:
             self._switch_mode(self.mode)
             self._update_default_checkbox()
