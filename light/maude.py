@@ -6,6 +6,7 @@ Always launched via:  maude tui
 from __future__ import annotations  # macOS /usr/bin/python3 is 3.9: `X | None` annotations must not run at def time
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1282,6 +1284,40 @@ def _has_claude_sessions(path: Path) -> bool:
         return False
 
 
+def _mac_has_claude_sessions(path: Path, env: dict | None = None) -> bool:
+    """macOS gate for `--continue`: True if Claude may have saved sessions for `path`. Conservative like
+    maude_exe.has_claude_sessions (maude_exe is not loaded on macOS): config dir from CLAUDE_CONFIG_DIR in `env`
+    (what the child gets; None = os.environ), else ~/.claude; an encoded name over 200 characters, a character
+    above U+FFFF, CLAUDE_CODE_PROJECT_DIR_NAME (Claude then picks the dir name itself) or any error says True, so a
+    resume is never lost; NFC/NFD forms are tried and the name is matched case-insensitively."""
+    try:
+        e = env if env is not None else os.environ
+        if e.get("CLAUDE_CODE_PROJECT_DIR_NAME"):  # Claude names the project dir itself then: not predictable
+            return True
+        proj = Path(e.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")) / "projects"
+        names = []
+        for f in (os.path.abspath(path), os.path.realpath(path)):
+            if any(ord(c) > 0xFFFF for c in f):
+                return True
+            for g in (f, unicodedata.normalize("NFC", f), unicodedata.normalize("NFD", f)):
+                n = re.sub(r"[^A-Za-z0-9]", "-", g)
+                if len(n) > 200:
+                    return True
+                if n not in names:
+                    names.append(n)
+        if not proj.is_dir():
+            return False
+        entries = os.listdir(proj)
+        low = {x.lower(): x for x in entries}
+        for n in names:
+            x = n if n in entries else low.get(n.lower())
+            if x and any(y.endswith(".jsonl") for y in os.listdir(proj / x)):
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def _claude_mcp(*args: str, capture: bool = False):
     """Run `claude mcp ...`. Capture mode is for status checks; otherwise the
     child inherits the terminal so the user can follow the sign-in link.
@@ -1785,27 +1821,42 @@ def _open_other_tool(tool: str, model: str, fresh: bool, effort: str = "") -> No
                  lambda c: subprocess.run([cmd[0], *c[1:]], check=False, env=env).returncode)
 
 
+def _timed(label: str):
+    """MAUDE_STEP_TIMING=1 step timer; maude.exe's mx.timed when it has one (an older maude.exe does not)."""
+    f = getattr(mx, "timed", None)
+    return f(label) if f else contextlib.nullcontext()
+
+
 def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: str = "") -> None:
     """Windows: run the tool natively in the project folder, OUTSIDE the sandbox, with normal
     permission prompts (no bypass flag anywhere). Children go through mx._run so Ctrl+C
     never kills them."""
-    mx.offer_git()
-    mx.offer_gh()
+    with _timed("offer_git"):
+        mx.offer_git()
+    with _timed("offer_gh"):
+        mx.offer_gh()
     if tool == DEFAULT_TOOL:
-        if not mx.find_claude(os.environ["USERPROFILE"]):  # offer the install; run_windows finds it after
-            if not mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path):
+        with _timed("find_claude"):
+            found = mx.find_claude(os.environ["USERPROFILE"])
+        if not found:  # offer the install; run_windows finds it after
+            with _timed("ensure_tool"):
+                ok = mx.ensure_tool(tool, mx.find_tool, refresh=mx.refresh_path)
+            if not ok:
                 input("Press Enter to go back. ")
                 return
-        sync_perplexity()
+        with _timed("sync_perplexity"):
+            sync_perplexity()
         rc = mx.run_windows(str(path), model, fresh=fresh, effort=effort)
         if rc == 3:  # claude missing: run_windows printed the install hint
             input("Press Enter to go back. ")
         return
     label, binary = INSTALL_LABEL.get(tool, tool), AGENT_BIN[tool]
     if label in getattr(mx, "TOOL_INSTALL", {}):  # found on the PATH or the installer folders, else offered
-        exe = mx.ensure_tool(label, mx.find_tool, refresh=mx.refresh_path)
+        with _timed("ensure_tool " + label):
+            exe = mx.ensure_tool(label, mx.find_tool, refresh=mx.refresh_path)
     else:  # no installer known for it: only a hint, when it is truly missing
-        exe = mx.find_tool(binary)
+        with _timed("find_tool " + binary):
+            exe = mx.find_tool(binary)
         if not exe:
             print(f"{tool} is not installed and Maude cannot install it on Windows; install it yourself and make "
                   f"sure '{binary}' is on the PATH.")
@@ -1814,7 +1865,10 @@ def _open_project_win(path: Path, model: str, fresh: bool, tool: str, effort: st
         return
     cmd = tool_command(tool, model, fresh, effort)
     print(mx.banner_text(str(path), HAS_SANDBOX))
-    env = _child_env(tools=True, tool=tool)  # raw clauderc exports (None = inherit)
+    with _timed("_child_env"):
+        env = _child_env(tools=True, tool=tool)  # raw clauderc exports (None = inherit)
+    if os.environ.get("MAUDE_STEP_TIMING") == "1":
+        print(f"Maude timing: starting {exe} at {time.strftime('%H:%M:%S')}", file=sys.stderr)
     ret = mx._run([exe, *cmd[1:]], cwd=str(path), env=env)
     _after_agent(tool, model, fresh, effort, ret, lambda c: mx._run([exe, *c[1:]], cwd=str(path), env=env))
 
@@ -1831,6 +1885,10 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
     several sessions exist), and finally a fresh launch.
     When `fresh=True`, skip `--continue` entirely so the conversation
     starts with no history.
+    macOS: `--continue` is tried only when `_mac_has_claude_sessions()` says the
+    project may have sessions (conservative), else Claude starts once, fresh.
+    Windows: `_open_project_win` / `maude_exe.run_windows` apply the same rule
+    with `has_claude_sessions()`; a failed `--continue` is retried once without it.
     """
     if IS_WIN:  # no chdir: the TUI must not hold the folder (delete would fail); children get cwd=
         _open_project_win(project_path, model, fresh, tool, effort)
@@ -1853,7 +1911,7 @@ def open_project(project_path: Path, model: str, *, fresh: bool = False,
         head = [real, *(["--model", model] if mw else [])]
     sync_perplexity()
     eff = effort_args(effort)
-    if fresh:
+    if fresh or (IS_MAC and not _mac_has_claude_sessions(project_path, env)):  # mac: no session, so --continue would only fail and start claude twice
         subprocess.run([*head, *eff], check=False, env=env)
         return
     ret = subprocess.run([*head, *eff, "--continue"], check=False, env=env).returncode

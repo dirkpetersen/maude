@@ -1185,4 +1185,50 @@ False" "$(sb_run novt)"
 assert_eq "show_banner: not a TTY -> nothing" "False False False False
 False" "$(sb_run pipe)"
 
+# has_claude_sessions: --continue only when Claude saved a session for the folder (fake config dir under mktemp)
+hs_run() { python3 -I - "${SCRIPT_DIR}/../light" "$@" <<'PY'
+import sys, os, re, shutil, tempfile; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+case = sys.argv[2]
+d = tempfile.mkdtemp()
+try:
+    os.chdir(d)  # short cwd: realpath() of the fake Windows path on Linux must not exceed the 200 character fallback
+    env = {"CLAUDE_CONFIG_DIR": d}
+    folder = r"C:\Users\u\gh\app"
+    proj = os.path.join(d, "projects")
+    def mk(name, fn):
+        os.makedirs(os.path.join(proj, name)); open(os.path.join(proj, name, fn), "w").close()
+    if case == "match": mk("C--Users-u-gh-app", "s.jsonl")
+    elif case == "nojsonl": mk("C--Users-u-gh-app", "x.txt")
+    elif case == "case": mk("c--Users-u-gh-app", "s.jsonl")
+    elif case == "long": folder = "C:\\" + "a" * 250
+    elif case == "slash": folder += "\\"; mk("C--Users-u-gh-app", "s.jsonl")
+    elif case == "nonbmp": folder = "C:/Users/u/" + chr(0x1F600)
+    elif case == "userprofile":  # no CLAUDE_CONFIG_DIR: %USERPROFILE%\.claude
+        env = {"USERPROFILE": d}; proj = os.path.join(d, ".claude", "projects"); mk("C--Users-u-gh-app", "s.jsonl")
+    elif case == "error": env = None  # .get on None raises: the fallback is True
+    elif case == "dirname": env["CLAUDE_CODE_PROJECT_DIR_NAME"] = "custom"  # Claude picks the dir name itself: True
+    elif case == "nfd":  # the dir was made from the decomposed form of the folder name
+        folder = "C:/Users/u/caf\u00e9"; mk(re.sub(r"[^A-Za-z0-9]", "-", "C:/Users/u/cafe\u0301"), "s.jsonl")
+    print(m.has_claude_sessions(folder, env))
+finally:
+    os.chdir(tempfile.gettempdir())
+    shutil.rmtree(d)
+PY
+}
+assert_eq "sessions: no projects dir -> False" "False" "$(hs_run noproj)"
+assert_eq "sessions: matching jsonl -> True" "True" "$(hs_run match)"
+assert_eq "sessions: dir without jsonl -> False" "False" "$(hs_run nojsonl)"
+assert_eq "sessions: drive letter case differs -> True" "True" "$(hs_run case)"
+assert_eq "sessions: very long path -> True (fallback)" "True" "$(hs_run long)"
+assert_eq "sessions: trailing separator -> True" "True" "$(hs_run slash)"
+assert_eq "sessions: character above U+FFFF -> True (fallback)" "True" "$(hs_run nonbmp)"
+assert_eq "sessions: USERPROFILE fallback without CLAUDE_CONFIG_DIR -> True" "True" "$(hs_run userprofile)"
+assert_eq "sessions: error -> True (fallback)" "True" "$(hs_run error)"
+assert_eq "sessions: CLAUDE_CODE_PROJECT_DIR_NAME set -> True" "True" "$(hs_run dirname)"
+assert_eq "sessions: NFD form of the folder name -> True" "True" "$(hs_run nfd)"
+tm_code='import sys; sys.path.insert(0, sys.argv[1]); import maude_exe as m
+with m.timed("x"): pass'
+assert_eq "timed: silent without MAUDE_STEP_TIMING (even with MAUDE_TIMING=1)" "" "$(env -u MAUDE_STEP_TIMING MAUDE_TIMING=1 python3 -I -c "$tm_code" "${SCRIPT_DIR}/../light" 2>&1)"
+assert_contains "timed: prints with MAUDE_STEP_TIMING=1" "Maude timing: x " "$(env -u MAUDE_TIMING MAUDE_STEP_TIMING=1 python3 -I -c "$tm_code" "${SCRIPT_DIR}/../light" 2>&1)"
+
 suite_summary

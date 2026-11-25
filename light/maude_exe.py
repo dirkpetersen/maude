@@ -9,6 +9,7 @@ current console. See docs/windows-exe.md.
 import time
 _T0 = time.perf_counter()  # first line of Maude code that runs (after the onefile unpack)
 import ntpath
+import unicodedata
 import contextlib
 import hashlib
 import json
@@ -1169,25 +1170,87 @@ def _creds_env() -> dict | None:
               file=sys.stderr)
         return None
 
+@contextlib.contextmanager
+def timed(label: str):
+    """MAUDE_STEP_TIMING=1: print how long the block took ("Maude timing: <label> 1.23s") to stderr.
+    A no-op otherwise. Opt-in aid for finding where the wait before the agent appears goes."""
+    if os.environ.get("MAUDE_STEP_TIMING") != "1":
+        yield
+        return
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        print(f"Maude timing: {label} {time.perf_counter() - t0:.2f}s", file=sys.stderr)
+
+
+def has_claude_sessions(folder: str, env=os.environ) -> bool:
+    """True if Claude Code may have saved sessions for folder, so `--continue` has something to resume.
+    Sessions live in <config dir>/projects/<absolute folder, non-alphanumerics -> '-'>/*.jsonl (config dir:
+    CLAUDE_CONFIG_DIR, else %USERPROFILE%/.claude). Conservative: a long encoded name (Claude shortens
+    those) or any error says True, and so does CLAUDE_CODE_PROJECT_DIR_NAME (Claude then picks the dir name itself) or a
+    character above U+FFFF; NFC/NFD forms of the path are tried too, so a resume is never lost; only a clear "no sessions" says False."""
+    try:
+        if env.get("CLAUDE_CODE_PROJECT_DIR_NAME"):  # Claude names the project dir itself then: not predictable
+            return True
+        cfg = env.get("CLAUDE_CONFIG_DIR") or os.path.join(
+            env.get("USERPROFILE") or os.path.expanduser("~"), ".claude")
+        proj = os.path.join(cfg, "projects")
+        names = []
+        for f in (ntpath.abspath(folder), os.path.realpath(folder)):
+            if any(ord(c) > 0xFFFF for c in f):  # Claude (JavaScript) may encode per UTF-16 unit: unsure, so True
+                return True
+            for g in (f, unicodedata.normalize("NFC", f), unicodedata.normalize("NFD", f)):
+                n = re.sub(r"[^A-Za-z0-9]", "-", g)
+                if len(n) > 200:
+                    return True
+                if n not in names:
+                    names.append(n)
+        if not os.path.isdir(proj):
+            return False
+        entries = os.listdir(proj)
+        low = {e.lower(): e for e in entries}  # the drive letter case can differ
+        for n in names:
+            e = n if n in entries else low.get(n.lower())
+            if e and any(x.endswith(".jsonl") for x in os.listdir(os.path.join(proj, e))):
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def run_windows(folder: str, model: str, banner: bool = True, fresh: bool = False,
                 effort: str | None = None) -> int:
     env = os.environ
-    claude = find_claude(env["USERPROFILE"])
+    with timed("find_claude"):
+        claude = find_claude(env["USERPROFILE"])
     if not claude:
         print("Maude: Claude Code for Windows was not found.\n" + INSTALL_HINT, file=sys.stderr)
         return 3
     if banner:
-        print(banner_text(folder, has_sandbox()))
-    saved_model, saved_effort = windows_model_effort(env["USERPROFILE"])
+        with timed("has_sandbox + banner"):
+            print(banner_text(folder, has_sandbox()))
+    with timed("windows_model_effort"):
+        saved_model, saved_effort = windows_model_effort(env["USERPROFILE"])
     model = model or saved_model
     effort = saved_effort if effort is None else effort  # None: take the saved level
     kw = {"cwd": folder}
-    cenv = _creds_env()
+    with timed("_creds_env"):
+        cenv = _creds_env()
     if cenv is not None:
         kw["env"] = cenv
-    rc = _run(windows_cmd(claude, model, not fresh, effort), **kw)
-    if rc and not fresh:
-        rc = _run(windows_cmd(claude, model, False, effort), **kw)
+    cont = False
+    if not fresh:  # --continue only when there is a session: otherwise it fails and Claude starts twice
+        with timed("session check"):  # with the env Claude gets: a clauderc may set CLAUDE_CONFIG_DIR
+            cont = has_claude_sessions(folder, cenv if cenv is not None else env)
+    cmd = windows_cmd(claude, model, cont, effort)
+    if os.environ.get("MAUDE_STEP_TIMING") == "1":
+        print(f"Maude timing: starting {cmd[0]} at {time.strftime('%H:%M:%S')}", file=sys.stderr)
+    with timed(("claude --continue" if cont else "claude") + " (until exit)"):
+        rc = _run(cmd, **kw)
+    if rc and cont:  # --continue was used and failed: once more without it
+        with timed("claude retry without --continue (until exit)"):
+            rc = _run(windows_cmd(claude, model, False, effort), **kw)
     return rc
 
 

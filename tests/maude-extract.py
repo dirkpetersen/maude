@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -29,12 +30,12 @@ WANT = {
     "load_models_config", "agent_models", "resolve_model", "maybe_update_models", "load_settings", "save_settings",
     "agent_allowed", "restrict_agent", "read_agent_models", "save_agent_model", "maude_dir",
     "_decode_state", "_migrate_state", "_read_state", "_write_state", "read_model_effort", "_save_model_effort",
-    "read_model", "read_effort", "save_model", "save_effort", "replace_retry",
+    "read_model", "read_effort", "save_model", "save_effort", "replace_retry", "_mac_has_claude_sessions",
 }
 src = open(sys.argv[1], encoding="utf-8").read()
 ns = {"os": os, "re": re, "json": json, "time": time, "tempfile": tempfile, "shutil": shutil,
       "subprocess": subprocess, "urllib": urllib, "datetime": datetime.datetime, "Path": Path,
-      "IS_WIN": False, "NATIVE": False}
+      "unicodedata": unicodedata, "IS_WIN": False, "NATIVE": False}
 flags = __future__.annotations.compiler_flag
 for n in ast.parse(src).body:
     names = {t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)} | {getattr(n, "name", "")}

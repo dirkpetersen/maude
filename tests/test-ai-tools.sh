@@ -199,4 +199,49 @@ rm -rf "$d/h/.kiro"; mkdir -p "$d/h/.kiro"; ln -s /elsewhere "$d/h/.kiro/skills"
 lk
 assert_eq "wrong link -> relinked" "$want" "$(readlink "$d/h/.kiro/skills")"
 assert_eq "wrong link kept as backup" "/elsewhere" "$(readlink "$d"/h/.kiro/skills.bak.*)"
+# macOS gate for --continue: _mac_has_claude_sessions (conservative; True when unsure). Fake HOME per case under mktemp.
+ms() {
+  local h; h=$(mktemp -d)
+  local code='
+import tempfile, shutil, os, re
+from pathlib import Path
+case = "'"$1"'"
+t = tempfile.mkdtemp()
+try:
+    pdir = os.path.join(t, "proj"); os.makedirs(pdir)
+    folder = Path(pdir)
+    enc = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(pdir))
+    cfg = os.path.join(t, "cfg")
+    def mk(base, name, fn):
+        os.makedirs(os.path.join(base, "projects", name)); open(os.path.join(base, "projects", name, fn), "w").close()
+    env = {"CLAUDE_CONFIG_DIR": cfg}
+    if case == "match": mk(cfg, enc, "s.jsonl")
+    elif case == "upper": mk(cfg, enc.upper(), "s.jsonl")
+    elif case == "nojsonl": mk(cfg, enc, "x.txt")
+    elif case == "noprojects": pass
+    elif case == "long": folder = Path(t) / ("a" * 250)
+    elif case == "nonbmp": folder = Path(t) / chr(0x1F600)
+    elif case == "envnone": env = None; mk(os.path.join(str(Path.home()), ".claude"), enc, "s.jsonl")
+    elif case == "envnone-empty": env = None
+    elif case == "cfgother": mk(os.path.join(str(Path.home()), ".claude"), enc, "s.jsonl")
+    elif case == "dirname": env["CLAUDE_CODE_PROJECT_DIR_NAME"] = "custom"
+    elif case == "error": env = {"CLAUDE_CONFIG_DIR": 5}
+    res = _mac_has_claude_sessions(folder, env)
+finally:
+    shutil.rmtree(t)
+res'
+  HOME="$h" env -u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_PROJECT_DIR_NAME python3 -I "${SCRIPT_DIR}/maude-extract.py" "$MAUDE_PY" "$code"
+  rm -rf "$h"
+}
+assert_eq "mac sessions: matching jsonl (CLAUDE_CONFIG_DIR) -> True" "True" "$(ms match)"
+assert_eq "mac sessions: dir name case differs -> True" "True" "$(ms upper)"
+assert_eq "mac sessions: dir without jsonl -> False" "False" "$(ms nojsonl)"
+assert_eq "mac sessions: no projects dir -> False" "False" "$(ms noprojects)"
+assert_eq "mac sessions: long path -> True" "True" "$(ms long)"
+assert_eq "mac sessions: character above U+FFFF -> True" "True" "$(ms nonbmp)"
+assert_eq "mac sessions: env=None reads ~/.claude -> True" "True" "$(ms envnone)"
+assert_eq "mac sessions: env=None, no sessions -> False" "False" "$(ms envnone-empty)"
+assert_eq "mac sessions: CLAUDE_CONFIG_DIR wins over ~/.claude -> False" "False" "$(ms cfgother)"
+assert_eq "mac sessions: CLAUDE_CODE_PROJECT_DIR_NAME set -> True" "True" "$(ms dirname)"
+assert_eq "mac sessions: error -> True" "True" "$(ms error)"
 suite_summary

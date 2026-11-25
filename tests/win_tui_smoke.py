@@ -570,6 +570,7 @@ try:
     mx.find_claude = lambda up: "C:/c.exe"
     mx._run = lambda cmd, **kw: calls.append((cmd, kw.get("cwd"))) or 0
     cwd0 = os.getcwd()
+    mx.has_claude_sessions = lambda *a, **k: True  # saved sessions: --continue is used
     maude.open_project(proj, "sonnet", fresh=False)
     assert os.getcwd() == cwd0  # TUI must not hold the project folder
     maude.open_project(proj, "sonnet", fresh=True)
@@ -585,6 +586,33 @@ try:
     calls.clear()
     maude.open_project(proj, "auto", fresh=False, effort="low")  # auto: no --model flag at all
     assert calls == [(["C:/c.exe", "--effort", "low", "--continue"], str(proj))], calls
+    calls.clear()
+    mx.has_claude_sessions = lambda *a, **k: False  # no saved session: no --continue, claude starts once
+    maude.open_project(proj, "sonnet", fresh=False)
+    assert calls == [(["C:/c.exe", "--model", "sonnet"], str(proj))], calls
+    # retry rules with a failing agent: no sessions = exactly one run; sessions = --continue, then one retry without it
+    real_run = mx._run
+    mx._run = lambda cmd, **kw: calls.append((cmd, kw.get("cwd"))) or 1
+    calls.clear()
+    maude.open_project(proj, "sonnet", fresh=False)
+    assert calls == [(["C:/c.exe", "--model", "sonnet"], str(proj))], calls
+    mx.has_claude_sessions = lambda *a, **k: True
+    calls.clear()
+    maude.open_project(proj, "sonnet", fresh=False)
+    assert calls == [(["C:/c.exe", "--model", "sonnet", "--continue"], str(proj)),
+                     (["C:/c.exe", "--model", "sonnet"], str(proj))], calls
+    mx._run = real_run
+    # the session check gets the env Claude runs with (a clauderc may set CLAUDE_CONFIG_DIR), else os.environ
+    seen, real_ce = [], mx._creds_env
+    mx.has_claude_sessions = lambda folder, env=None: seen.append(env) or True
+    mx._creds_env = lambda: {"CLAUDE_CONFIG_DIR": "X:/cfg", "USERPROFILE": os.environ["USERPROFILE"]}
+    calls.clear()
+    maude.open_project(proj, "sonnet", fresh=False)
+    mx._creds_env = lambda: None
+    maude.open_project(proj, "sonnet", fresh=False)
+    mx._creds_env = real_ce
+    assert seen[0].get("CLAUDE_CONFIG_DIR") == "X:/cfg" and seen[1] is os.environ, seen
+    mx.has_claude_sessions = lambda *a, **k: True
     calls.clear()
     # Settings on Windows: the button opens the screen, Save writes <home>/.maude/clauderc (never ~/.azure),
     # and the saved env reaches Claude Code and the other tools.
