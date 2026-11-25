@@ -432,26 +432,32 @@ def clauderc_path(create: bool = False) -> Path:
     return (maude_dir() if create else STATE_DIR) / "clauderc"
 
 
-# Variables that make a clauderc select a backend by themselves (a live Foundry setup, a custom endpoint, a direct key).
-BACKEND_SELECTORS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-
-
-def has_backend_selector(rc: dict) -> bool:
-    """True if the parsed clauderc `rc` selects a backend itself: CLAUDE_CODE_USE_FOUNDRY=1, or a non-empty
-    ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN."""
-    return rc.get("CLAUDE_CODE_USE_FOUNDRY") == "1" or any(rc.get(k) for k in BACKEND_SELECTORS)
+def has_backend_selector(rc: dict, native: bool | None = None) -> bool:
+    """True if the parsed active clauderc `rc` selects a backend itself, mirroring the order in which the backend is
+    effectively chosen: a non-empty ANTHROPIC_BASE_URL or CLAUDE_CODE_USE_FOUNDRY=1 selects one everywhere (the sandbox
+    wrapper checks the base URL first, then the login, then the Foundry flag); otherwise CLAUDE_CODE_USE_BEDROCK=1 means
+    Bedrock itself (it drops a key: wrapper and claude_env_from), so it is no selector; otherwise a plain
+    ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN selects a direct backend on Windows/macOS only (claude_env_from passes
+    it), while the sandbox wrapper has no plain-key or auth-token branch, so there they select nothing."""
+    native = is_native() if native is None else native
+    if rc.get("ANTHROPIC_BASE_URL") or rc.get("CLAUDE_CODE_USE_FOUNDRY") == "1":
+        return True
+    if rc.get("CLAUDE_CODE_USE_BEDROCK") == "1":
+        return False
+    return native and bool(rc.get("ANTHROPIC_API_KEY") or rc.get("ANTHROPIC_AUTH_TOKEN"))
 
 
 def bedrock_parked_state() -> bool:
     """"Default to AWS Bedrock" is on by way of the parked file. The one predicate the Settings box reader and
     plat_claude_env() share. False without clauderc.inactive. With it: parked when the active clauderc is missing,
-    empty or undecodable, or holds no backend selector (a Paste/Bedrock/Foundry save re-created it while parked,
-    e.g. only AWS_REGION: Bedrock stays the default). An active file with a backend selector (the Foundry flag,
-    ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN; e.g. a stale .inactive next to a live Foundry or
-    custom-endpoint setup) is not parked: that backend is the effective one."""
+    empty or undecodable, or holds no backend selector (has_backend_selector: a Paste/Bedrock/Foundry save re-created
+    it while parked, e.g. only AWS_REGION: Bedrock stays the default). An active file with a backend selector (a stale
+    .inactive next to a live Foundry, custom-endpoint or, natively, direct-key setup) is not parked: that backend is
+    the effective one."""
     if not clauderc_inactive_path().exists():
         return False
     return not has_backend_selector(read_clauderc())
+
 
 def clauderc_inactive_path() -> Path:
     """Where clauderc is parked while "Default to AWS Bedrock" is on (same toggle on every platform)."""
@@ -537,7 +543,7 @@ def plat_claude_env() -> dict:
         return {}
     rc = read_clauderc()
     parked = False
-    if bedrock_parked_state():  # inactive present and the active file (if any) is not a Foundry setup
+    if bedrock_parked_state():  # inactive present and the active file (if any) selects no other backend
         parked = read_clauderc(clauderc_inactive_path()).get("CLAUDE_CODE_USE_BEDROCK") == "1"
         # (an active file next to it, e.g. only AWS_REGION, still contributes its variables through rc)
     env: dict = {}
@@ -3183,6 +3189,7 @@ def park_clauderc(park: bool) -> None:
     write_clauderc(merged, dst)
     src.unlink()
 
+
 def remove_clauderc_keys(keys) -> None:
     """Delete `keys` from clauderc_path() (other exports stay). A clauderc left empty is removed, so it no
     longer counts as configured credentials. An undecodable file is left untouched (OSError)."""
@@ -3982,19 +3989,19 @@ class CredsEntryScreen(ModalScreen[bool]):
                 self._save_opencode()
             else:
                 self._save_foundry()
+            # The routing checkbox, from every pane (a flip of "Default to AWS Bedrock" is never dropped; a flip
+            # also switches an active Anthropic API key off), right after the pane wrote its files and before the
+            # remaining step, so a failure of that step cannot leave a clauderc that should have been parked.
+            try:
+                note = self._apply_default_provider()
+            except OSError as err:
+                raise OSError(f"could not switch the default provider: {err}") from None
             self._save_native_only()
         except _CredsValidation:
             # The handler already populated the status label.
             return
         except OSError as err:
             self._set_status(f"[bold red]Could not save: {err}[/]")
-            return
-        # Apply the routing checkbox if it's visible, from every pane (a flip of "Default to AWS Bedrock" is never
-        # dropped; a flip also switches an active Anthropic API key off).
-        try:
-            note = self._apply_default_provider()
-        except OSError as err:
-            self._set_status(f"[bold red]Could not switch the default provider: {err}[/]")
             return
         if note:
             self.app.notify(note, timeout=8)  # the modal closes right away: the status line would not be seen
@@ -4140,6 +4147,17 @@ class CredsEntryScreen(ModalScreen[bool]):
         merge_clauderc(env)
         os.environ.update(env)
 
+    @staticmethod
+    def _drop_parked_env() -> None:
+        """Before the active clauderc is parked: forget this session's copy of the backend selectors in it. The saves
+        copy what they write into os.environ, which would keep ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY /
+        ANTHROPIC_AUTH_TOKEN alive after the file is gone. Only a value equal to the one in the file is popped, so a
+        different value from the user's own environment is never touched."""
+        active = read_clauderc()
+        for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            if k in active and os.environ.get(k) == active[k]:
+                os.environ.pop(k, None)
+
     def _apply_default_provider(self) -> str:
         """Honour the Bedrock/Foundry default checkbox if it's visible.
 
@@ -4163,6 +4181,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             # stale .inactive next to an active backend (_parked_at_open False) is left alone.
             if (cb.value and self._parked_at_open and self.mode in (self.MODE_PASTE, self.MODE_BEDROCK, self.MODE_FOUNDRY)
                     and clauderc_path().exists() and read_clauderc() != self._active_at_open):
+                self._drop_parked_env()
                 park_clauderc(True)
                 os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
                 os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
@@ -4174,11 +4193,15 @@ class CredsEntryScreen(ModalScreen[bool]):
         if cb.value:
             # Bedrock is the default now: a plain API key must not win over it, and clauderc is parked so the
             # wrapper doesn't source Foundry creds. Both files existing is merged, never deleted (park_clauderc).
+            note = ""
             if active_anthropic_key():
                 apply_anthropic_key("", False)
+                note = "Bedrock is the default; the API key is saved but not in use."
+            self._drop_parked_env()
             park_clauderc(True)
             os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
             os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
+            return note
         else:
             # Foundry active → restore clauderc if it was parked (merging when a save re-created it).
             park_clauderc(False)

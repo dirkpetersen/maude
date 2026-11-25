@@ -29,7 +29,8 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "replace_ini_section", "_merge_ini_file", "write_aws_credentials", "parse_creds_text", "CRED_PREFIXES",
         "active_anthropic_key", "with_active_anthropic_key", "anthropic_key_file", "read_secret", "_one_line",
         "ANTHROPIC_ACTIVE_SETTING", "load_settings", "_parse_settings", "_decode_state", "SETTINGS_FILE",
-        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS", "KEY_AGENTS", "bedrock_parked_state", "has_backend_selector", "BACKEND_SELECTORS",
+        "SETTINGS_DEFAULTS", "_ACTIVE_OFF_VARS", "_ACTIVE_UNSET_VARS", "KEY_AGENTS", "bedrock_parked_state",
+        "has_backend_selector",
         "replace_retry"}
 
 def load(platform):

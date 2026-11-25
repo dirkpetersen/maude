@@ -1137,6 +1137,8 @@ try:
                         assert parked.get("AWS_ACCESS_KEY_ID") == "AKIAXX", parked
                     else:
                         assert parked.get("ANTHROPIC_FOUNDRY_API_KEY") == "newfk", parked
+                    if mode == "paste_key":   # the pasted selector is not kept alive in this process once it is parked
+                        assert os.environ.get("ANTHROPIC_API_KEY") != "sk-ant-pasted", "pasted key still in os.environ"
                     if mode.startswith("paste") or mode == "foundry":   # the user is told the saved values are dormant
                         await wait_until(pilot, lambda: any("Bedrock stays the default" in n.message for n in app._notifications))
                         assert any("Bedrock stays the default" in n.message for n in app._notifications), (mode, list(app._notifications))
@@ -1182,7 +1184,7 @@ try:
                 if f.exists():
                     f.unlink()
 
-        async def empty_save(active_vals, expect_checked, expect_parked_at_open):
+        async def empty_save(active_vals, expect_checked, expect_parked_at_open, paste=""):
             reset_files()
             maude.write_clauderc(parked_vals, inactive_file)
             maude.write_clauderc(active_vals, rc_file)
@@ -1192,6 +1194,8 @@ try:
                 cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
                 await wait_until(pilot, lambda: cb.display and cb.value is expect_checked)
                 assert cb.value is expect_checked and scr._parked_at_open is expect_parked_at_open, (active_vals, cb.value, scr._parked_at_open)
+                if paste:
+                    scr.query_one("#creds-text").text = paste
                 await save_and_close(pilot, scr)
             after = (rc_file.read_text(), inactive_file.read_text(), {k: os.environ.get(k) for k in flags})
             assert after == before, ("an empty Save changed something", active_vals, before, after)
@@ -1199,19 +1203,27 @@ try:
         await empty_save({"ANTHROPIC_BASE_URL": "https://my.proxy/v1", "ANTHROPIC_API_KEY": "k"}, False, False)  # custom endpoint is active
         await empty_save({"ANTHROPIC_API_KEY": "sk-ant-direct"}, False, False)                                   # a direct key is active
         await empty_save({"AWS_REGION": "eu-west-1"}, True, True)                                                # only a non-backend variable
+        # a Paste whose content equals the active file changes nothing, so nothing is re-parked
+        await empty_save({"AWS_REGION": "eu-west-1"}, True, True, paste="export AWS_REGION=eu-west-1\n")
+        # Bedrock flag + key in the active file: Bedrock wins (it drops the key), still parked, an empty Save changes nothing
+        await empty_save({"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_API_KEY": "sk-ant-x"}, True, True)
         # flip on the Anthropic pane: Foundry active (no .inactive), box unchecked -> tick it, Save -> parked, key switched off
         reset_files()
         maude.write_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk", "CLAUDE_CODE_USE_BEDROCK": "0"}, rc_file)
         maude.write_secret(home / ".maude" / "anthropic-key", "sk-ant-flip")
-        s = maude.load_settings(); s["anthropic_key_active"] = True; maude.save_settings(s)
+        s = maude.load_settings(); s["anthropic_key_active"] = False; maude.save_settings(s)
         async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            app = pilot.app
             scr = await open_settings(pilot)
             cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
             await wait_until(pilot, lambda: cb.display)
             assert cb.value is False
             await press_mode(pilot, scr, "anthropic")
+            scr.query_one("#creds-anthropic-use", Checkbox).value = True    # tick "Use this API key" AND flip to Bedrock
             cb.value = True
             await save_and_close(pilot, scr)
+            await wait_until(pilot, lambda: any("API key is saved but not in use" in n.message for n in app._notifications))
+            assert any("Bedrock is the default; the API key is saved but not in use" in n.message for n in app._notifications), list(app._notifications)
         assert inactive_file.exists() and not rc_file.exists(), "the flip from the Anthropic pane was dropped"
         assert maude.load_settings().get("anthropic_key_active") is False and (home / ".maude" / "anthropic-key").read_text() == "sk-ant-flip"
         # flip on the OpenCode pane: parked (box checked) -> untick it, Save with empty OpenCode fields -> restored
@@ -1226,6 +1238,47 @@ try:
             await save_and_close(pilot, scr)
         assert rc_file.exists() and not inactive_file.exists(), "the flip from the OpenCode pane was dropped"
         assert "CLAUDE_CODE_USE_FOUNDRY" in rc_file.read_text()
+        # The same flips with the sandbox flags (paths under ~/.azure; only this screen runs as the sandbox)
+        azure = home / ".azure"
+        arc, ain = azure / "clauderc", azure / "clauderc.inactive"
+
+        async def sandbox_flip(pane, to_checked):
+            for f in (rc_file, inactive_file, arc, ain):
+                if f.exists():
+                    f.unlink()
+            for k in flags:
+                os.environ.pop(k, None)
+            if to_checked:   # Foundry active, no .inactive: tick the box
+                maude.write_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, arc)
+            else:            # parked: untick the box
+                maude.write_clauderc(parked_vals, ain)
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                app = pilot.app
+                await wait_table(pilot)
+                maude.IS_WIN = False
+                try:
+                    app.push_screen(maude.CredsEntryScreen())
+                    await wait_until(pilot, lambda: isinstance(app.screen, maude.CredsEntryScreen))
+                    scr = app.screen
+                    await wait_query(pilot, lambda: scr, "#btn-creds-save")
+                    cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+                    await wait_until(pilot, lambda: cb.display and cb.value is (not to_checked))
+                    await press_mode(pilot, scr, pane)
+                    cb.value = to_checked
+                    scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                    await wait_until(pilot, lambda: len(app.screen_stack) == 1)
+                    assert len(app.screen_stack) == 1, (pane, to_checked, str(scr.query_one("#creds-status").render()))
+                    if to_checked:
+                        assert ain.exists() and not arc.exists(), (pane, "the sandbox flip to Bedrock was dropped")
+                    else:
+                        assert arc.exists() and not ain.exists(), (pane, "the sandbox flip to Foundry was dropped")
+                finally:
+                    maude.IS_WIN = True
+
+        await sandbox_flip("anthropic", True)
+        await sandbox_flip("opencode", True)
+        await sandbox_flip("anthropic", False)
+        await sandbox_flip("opencode", False)
     saved_env = dict(os.environ)
     try:
         asyncio.run(check_unflipped_and_flip_panes())
@@ -1234,7 +1287,8 @@ try:
         for f in (home / ".aws" / "credentials", home / ".aws" / "config", rc_file, inactive_file, home / ".maude" / "anthropic-key"):
             if f.exists():
                 f.unlink()
-        s = maude.load_settings(); s.pop("anthropic_key_active", None); maude.save_settings(s)    # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
+        s = maude.load_settings(); s.pop("anthropic_key_active", None); maude.save_settings(s)
+    # Setup Git(hub) and To Github are on natively: the wizard opens with the native titles, the push screen
     # opens (hint while gh is not authenticated), and nothing talks to GitHub or the real ~/.ssh.
     old_pt, old_auth = maude.plat_tool, maude.gh_is_authed
     maude.plat_tool = lambda n: "C:/fake/" + n + ".exe"   # git and gh "installed": no offer, no suspend

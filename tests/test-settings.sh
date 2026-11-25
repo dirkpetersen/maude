@@ -33,7 +33,8 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "with_active_anthropic_key", "apply_anthropic_key", "OPENCODE_PROVIDER", "OPENCODE_NPM", "OPENCODE_KEY_REF",
         "opencode_config_path", "opencode_url_error", "_opencode_load", "_opencode_store", "read_opencode_custom",
         "merge_opencode_config", "remove_opencode_custom", "KEY_AGENTS",
-        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "bedrock_parked_state", "has_backend_selector", "BACKEND_SELECTORS", "claude_env_from", "plat_claude_env", "plat_tool_env",
+        "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "bedrock_parked_state", "has_backend_selector",
+        "claude_env_from", "plat_claude_env", "plat_tool_env",
         "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
 
 def load(platform, login=False):
@@ -315,6 +316,28 @@ for what, vals in (("base_url", {"ANTHROPIC_BASE_URL": "https://my.proxy/v1", "A
     check(f"parked.both_active_{what}_means_not_parked", ns["bedrock_parked_state"]() is False)
 ns["write_clauderc"]({"OPENAI_API_KEY": "o", "AWS_REGION": "x"}, rc)   # non-backend variables are no selector
 check("parked.both_active_non_backend_still_parked", ns["bedrock_parked_state"]() is True)
+# the effective order: an active CLAUDE_CODE_USE_BEDROCK=1 beats a key (Bedrock drops it), a base URL / Foundry flag beats Bedrock
+ns["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_API_KEY": "sk-ant-x"}, rc)
+check("parked.native.bedrock_flag_plus_key_is_parked", ns["bedrock_parked_state"]() is True)
+ns["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_BASE_URL": "https://my.proxy/v1"}, rc)
+check("parked.native.base_url_beats_bedrock_flag", ns["bedrock_parked_state"]() is False)
+ns["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_FOUNDRY": "1"}, rc)
+check("parked.native.foundry_flag_beats_bedrock_flag", ns["bedrock_parked_state"]() is False)
+# sandbox: the wrapper has no plain-key or auth-token branch, so a key or token alone selects nothing
+rc.unlink(); inactive.unlink()
+nsl = load("linux")
+rcl, inl = nsl["clauderc_path"](), nsl["clauderc_inactive_path"]()
+nsl["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1"}, inl)
+for what, vals, expect in (("key_only", {"ANTHROPIC_API_KEY": "sk-ant-x"}, True), ("token_only", {"ANTHROPIC_AUTH_TOKEN": "t"}, True),
+                           ("bedrock_flag_plus_key", {"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_API_KEY": "k"}, True),
+                           ("base_url", {"ANTHROPIC_BASE_URL": "https://my.proxy/v1"}, False), ("foundry_flag", {"CLAUDE_CODE_USE_FOUNDRY": "1"}, False)):
+    nsl["write_clauderc"](vals, rcl)
+    check(f"parked.sandbox.{what}", nsl["bedrock_parked_state"]() is expect, vals)
+rcl.unlink(); inl.unlink()
+ns = load("win32")
+rc, inactive = ns["clauderc_path"](), ns["clauderc_inactive_path"]()
+ns["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2"}, inactive)
+ns["write_clauderc"]({"AWS_REGION": "eu-west-1"}, rc)
 ns["write_clauderc"]({"ANTHROPIC_BASE_URL": ""}, rc)                   # an empty value selects nothing
 check("parked.empty_selector_value_ignored", ns["bedrock_parked_state"]() is True)
 rc.unlink(); inactive.unlink()
@@ -328,7 +351,8 @@ check("parked.env.both_files_bedrock", e.get("CLAUDE_CODE_USE_BEDROCK") == "1" a
 ns["write_clauderc"]({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_BASE_URL": "https://f", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, ns["clauderc_path"]())
 e = ns["plat_claude_env"]()
 check("parked.env.stale_inactive_next_to_active_foundry", e.get("ANTHROPIC_BASE_URL") == "https://f" and e.get("CLAUDE_CODE_USE_BEDROCK") == "0", e)
-# active ANTHROPIC_API_KEY only next to a parked Bedrock: the direct key is what Claude gets (as on main), not Bedrock
+# active ANTHROPIC_API_KEY only next to a parked Bedrock: the direct key is what Claude gets (as on main), not Bedrock.
+# have_claude_login is stubbed False by load() (default login=False): with a claude.ai login the wrapper rule would strip the key.
 ns["write_clauderc"]({"ANTHROPIC_API_KEY": "sk-ant-direct"}, ns["clauderc_path"]())
 e = ns["plat_claude_env"]()
 check("parked.env.active_api_key_only_is_direct", e.get("ANTHROPIC_API_KEY") == "sk-ant-direct" and e.get("CLAUDE_CODE_USE_BEDROCK") != "1", e)
