@@ -35,7 +35,7 @@ want = {"PLATFORM", "IS_WIN", "IS_MAC", "SANDBOXED", "NATIVE", "current_platform
         "merge_opencode_config", "remove_opencode_custom", "KEY_AGENTS",
         "OPENCODE_PREV_MODEL_SETTING", "replace_retry", "bedrock_parked_state", "has_backend_selector",
         "claude_env_from", "plat_claude_env", "plat_tool_env",
-        "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
+        "drop_parked_key_dup", "_PARKED_ENV_VARS", "_AMBIENT_ENV_VAR", "_load_ambient_snapshot", "_AMBIENT_AT_START", "parked_env_to_drop", "_DUMMY_API_KEY", "_BEDROCK_PROFILE_RE", "AWS_CONFIG_PATH", "credentials_configured", "NATIVE_CRED_ENV"}
 
 def load(platform, login=False):
     ns = {"os": os, "re": re, "json": json, "shutil": shutil, "subprocess": subprocess, "time": time,
@@ -360,6 +360,59 @@ check("parked.env.active_api_key_only_is_direct", e.get("ANTHROPIC_API_KEY") == 
 reset()
 # secrets are written atomically: no temp file is left behind
 check("secret.no_tmp_left", not [q for q in (home / ".maude").iterdir() if q.name.startswith(".secret-")])
+# ── re-parking drops only Maude's own copy of a selector, never one the user's environment had at startup ──
+pd = ns["parked_env_to_drop"]
+act = {"ANTHROPIC_BASE_URL": "https://p", "ANTHROPIC_API_KEY": "k1", "AWS_REGION": "r"}
+check("drop.maude_copy_popped", sorted(pd(act, {"ANTHROPIC_BASE_URL": "https://p", "ANTHROPIC_API_KEY": "k1"}, {}))
+      == ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"])
+check("drop.ambient_same_value_kept", pd(act, {"ANTHROPIC_API_KEY": "k1"}, {"ANTHROPIC_API_KEY": "k1"}) == [])
+check("drop.different_value_kept", pd(act, {"ANTHROPIC_API_KEY": "mine"}, {}) == [])
+check("drop.ambient_other_value_still_popped", pd(act, {"ANTHROPIC_API_KEY": "k1"}, {"ANTHROPIC_API_KEY": "old"}) == ["ANTHROPIC_API_KEY"])
+check("drop.not_in_file_kept", pd({"AWS_REGION": "r"}, {"ANTHROPIC_API_KEY": "k1"}, {}) == [])
+check("drop.snapshot_is_dict", isinstance(ns["_AMBIENT_AT_START"], dict))
+# the snapshot survives a Reload (os.execv): the first process leaves it in MAUDE_AMBIENT_AT_START as JSON
+ld = ns["_load_ambient_snapshot"]
+ev = {"ANTHROPIC_BASE_URL": "https://maude-copy", "ANTHROPIC_API_KEY": "k1"}
+check("snap.fresh", ld(dict(ev)) == ev)
+e2 = {**ev, "MAUDE_AMBIENT_AT_START": json.dumps({"ANTHROPIC_API_KEY": "k1"})}
+check("snap.carried_over", ld(e2) == {"ANTHROPIC_API_KEY": "k1"} and "MAUDE_AMBIENT_AT_START" not in e2, e2)
+e3 = {**ev, "MAUDE_AMBIENT_AT_START": json.dumps({})}
+check("snap.carried_empty", ld(e3) == {} and "MAUDE_AMBIENT_AT_START" not in e3, e3)
+for bad in ("not json", "[1]", json.dumps({"PATH": "x"}), json.dumps({"ANTHROPIC_API_KEY": 5})):
+    eb = {**ev, "MAUDE_AMBIENT_AT_START": bad}
+    check("snap.invalid." + bad[:12], ld(eb) == ev and "MAUDE_AMBIENT_AT_START" not in eb, eb)
+check("snap.module_env_clean", "MAUDE_AMBIENT_AT_START" not in os.environ)
+# apply_anthropic_key pops Maude's copy of the key, never one that was ambient at startup
+nsw = load("win32")
+os.environ["ANTHROPIC_API_KEY"] = "sk-same"
+nsw["apply_anthropic_key"]("sk-same", False)
+check("ambient.key_popped_when_maudes", "ANTHROPIC_API_KEY" not in os.environ, os.environ.get("ANTHROPIC_API_KEY"))
+reset()
+nsw = load("win32")
+os.environ["ANTHROPIC_API_KEY"] = "sk-same"
+nsw["_AMBIENT_AT_START"] = {"ANTHROPIC_API_KEY": "sk-same"}
+nsw["apply_anthropic_key"]("sk-same", False)
+check("ambient.key_kept_when_users", os.environ.get("ANTHROPIC_API_KEY") == "sk-same", os.environ.get("ANTHROPIC_API_KEY"))
+os.environ.pop("ANTHROPIC_API_KEY", None)
+reset()
+eb = {**ev, "MAUDE_AMBIENT_AT_START": "[" * 200000}
+check("snap.invalid.recursion", ld(eb) == ev and "MAUDE_AMBIENT_AT_START" not in eb)
+# the saved key's duplicate leaves clauderc.inactive on the Bedrock flip, nothing else does
+nsd = load("win32")
+dd, ip = nsd["drop_parked_key_dup"], nsd["clauderc_inactive_path"]()
+nsd["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_API_KEY": "sk-k"}, ip)
+check("dup.removed", dd("sk-k") is True and nsd["read_clauderc"](ip) == {"CLAUDE_CODE_USE_BEDROCK": "1"}, nsd["read_clauderc"](ip))
+nsd["write_clauderc"]({"CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_API_KEY": "other"}, ip)
+check("dup.different_key_kept", dd("sk-k") is False and nsd["read_clauderc"](ip).get("ANTHROPIC_API_KEY") == "other")
+nsd["write_clauderc"]({"ANTHROPIC_API_KEY": "sk-k"}, ip)
+check("dup.key_only_file_left", dd("sk-k") is False and nsd["read_clauderc"](ip) == {"ANTHROPIC_API_KEY": "sk-k"} and ip.exists())
+ip.write_bytes(bytes([0xff, 0xfe, 0x00, 0x80, 0x81, 0xc3, 0x28]))
+raw = ip.read_bytes()
+check("dup.undecodable_skipped", dd("sk-k") is False and ip.read_bytes() == raw)
+ip.unlink()
+check("dup.missing_file", dd("sk-k") is False)
+check("dup.empty_key", dd("") is False)
+reset()
 # ── OpenCode URL validation ──
 e = ns["opencode_url_error"]
 for url, ok in (("https://h.example/v1", True), ("https://h.example:8443/v1", True), ("http://localhost:11434/v1", True),

@@ -2,6 +2,7 @@
 Needs textual. On Windows it takes the real import path; on Linux it forces Windows mode
 after import (so it can run anywhere). Uses a fake USERPROFILE with a fake share. No window opens."""
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -1307,6 +1308,160 @@ try:
         await sandbox_flip("opencode", True)
         await sandbox_flip("anthropic", False)
         await sandbox_flip("opencode", False)
+        # L1: the park fails after the box was flipped to Bedrock -> the Anthropic key must stay ON, error shown
+        for f in (rc_file, inactive_file):
+            if f.exists():
+                f.unlink()
+        maude.write_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk",
+                              "ANTHROPIC_BASE_URL": "https://l1.example/v1"}, rc_file)
+        os.environ["ANTHROPIC_BASE_URL"] = "https://l1.example/v1"   # Maude's copy: must survive a failed park
+        os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
+        env_before = dict(os.environ)
+        maude.write_secret(home / ".maude" / "anthropic-key", "sk-ant-keep")
+        s = maude.load_settings(); s["anthropic_key_active"] = True; maude.save_settings(s)
+        real_park = maude.park_clauderc
+
+        def failing_park(park):
+            raise OSError("boom-park")
+        maude.park_clauderc = failing_park
+        try:
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                scr = await open_settings(pilot)
+                cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+                await wait_until(pilot, lambda: cb.display)
+                cb.value = True
+                scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                await wait_until(pilot, lambda: "boom-park" in str(scr.query_one("#creds-status").render()))
+                assert "boom-park" in str(scr.query_one("#creds-status").render()), "no error shown for the failed park"
+                assert len(pilot.app.screen_stack) == 2, "the modal must stay open after a failed park"
+                assert maude.load_settings().get("anthropic_key_active") is True, "a failed park switched the key off"
+                assert rc_file.exists() and not inactive_file.exists()
+                assert dict(os.environ) == env_before, "a failed park changed os.environ"
+        finally:
+            maude.park_clauderc = real_park
+            os.environ.pop("ANTHROPIC_BASE_URL", None)
+        # N9: the park works but switching the key off fails -> _PartialSave message, no "Could not save" prefix
+        for f in (rc_file, inactive_file):
+            if f.exists():
+                f.unlink()
+        maude.write_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, rc_file)
+        s = maude.load_settings(); s["anthropic_key_active"] = True; maude.save_settings(s)
+        real_apply = maude.apply_anthropic_key
+
+        def failing_apply(k, a):
+            raise OSError("boom-key")
+        maude.apply_anthropic_key = failing_apply
+        try:
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                scr = await open_settings(pilot)
+                cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+                await wait_until(pilot, lambda: cb.display)
+                cb.value = True
+                scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                await wait_until(pilot, lambda: "boom-key" in str(scr.query_one("#creds-status").render()))
+                st = str(scr.query_one("#creds-status").render())
+                assert "still in use" in st and "Could not save" not in st, st
+                assert inactive_file.exists() and not rc_file.exists(), "the park should have been applied"
+                assert maude.load_settings().get("anthropic_key_active") is True
+                assert len(pilot.app.screen_stack) == 2
+        finally:
+            maude.apply_anthropic_key = real_apply
+        # a duplicate of the saved key in the parked file is dropped on the flip (N2), the rest of it is kept
+        for f in (rc_file, inactive_file):
+            if f.exists():
+                f.unlink()
+        for v in flags:   # the env the earlier park left behind would make the box start checked
+            os.environ.pop(v, None)
+        maude.write_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk", "ANTHROPIC_API_KEY": "sk-ant-keep"}, rc_file)
+        s = maude.load_settings(); s["anthropic_key_active"] = True; maude.save_settings(s)
+        async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+            scr = await open_settings(pilot)
+            cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+            await wait_until(pilot, lambda: cb.display)
+            cb.value = True
+            await save_and_close(pilot, scr)
+        pv = maude.read_clauderc(inactive_file)
+        assert "ANTHROPIC_API_KEY" not in pv and pv.get("CLAUDE_CODE_USE_FOUNDRY") == "1", (pv, inactive_file.exists(), rc_file.exists(), inactive_file)
+        assert maude.load_settings().get("anthropic_key_active") is False
+        # _park_for_bedrock: pops Maude's copy of a parked selector, keeps one the user's environment had at startup
+        for f in (rc_file, inactive_file):
+            if f.exists():
+                f.unlink()
+        maude.write_clauderc({"ANTHROPIC_BASE_URL": "https://maude.example", "ANTHROPIC_API_KEY": "kk", "AWS_REGION": "r"}, rc_file)
+        os.environ["ANTHROPIC_BASE_URL"] = "https://maude.example"
+        os.environ["ANTHROPIC_API_KEY"] = "kk"
+        real_amb = maude._AMBIENT_AT_START
+        maude._AMBIENT_AT_START = {"ANTHROPIC_API_KEY": "kk"}   # the user had this one before Maude started
+        try:
+            maude.CredsEntryScreen._park_for_bedrock()
+        finally:
+            maude._AMBIENT_AT_START = real_amb
+        assert "ANTHROPIC_BASE_URL" not in os.environ, "Maude's own copy should be popped"
+        assert os.environ.get("ANTHROPIC_API_KEY") == "kk", "the user's own value must stay"
+        assert inactive_file.exists() and not rc_file.exists()
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        # S1: the reload exit (42) leaves the snapshot of the user's own selectors for the reloaded process
+        os.environ.pop(maude._AMBIENT_ENV_VAR, None)
+        real_amb = maude._AMBIENT_AT_START
+        maude._AMBIENT_AT_START = {"ANTHROPIC_BASE_URL": "https://users.example"}
+        try:
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                app = pilot.app
+                await wait_table(pilot)
+                exits = []
+                app.exit = lambda *a, **k: exits.append(a[0] if a else None)
+                app.push_screen = lambda screen, cb=None: cb(True)   # "Update Maude" finished with Reload
+                assert maude._AMBIENT_ENV_VAR not in os.environ
+                app.btn_update()
+                assert exits == [42], exits
+                assert json.loads(os.environ[maude._AMBIENT_ENV_VAR]) == {"ANTHROPIC_BASE_URL": "https://users.example"}
+            assert maude._load_ambient_snapshot(dict(os.environ)) == {"ANTHROPIC_BASE_URL": "https://users.example"}
+        finally:
+            maude._AMBIENT_AT_START = real_amb
+            os.environ.pop(maude._AMBIENT_ENV_VAR, None)
+        # L2: everything applied, then the native-only step fails -> the message says what was saved and what was not
+        for f in (rc_file, inactive_file):
+            if f.exists():
+                f.unlink()
+        s = maude.load_settings(); s["anthropic_key_active"] = False; maude.save_settings(s)
+        maude.write_clauderc({"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_API_KEY": "fk"}, rc_file)
+        for v in flags:
+            os.environ.pop(v, None)
+        real_save = maude.save_settings
+        maude.save_settings = lambda d: False
+        try:
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                scr = await open_settings(pilot)
+                cb = await wait_query(pilot, lambda: scr, "#creds-default-bedrock")
+                await wait_until(pilot, lambda: cb.display)
+                cb.value = True
+                scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                await wait_until(pilot, lambda: "were saved" in str(scr.query_one("#creds-status").render()))
+                st = str(scr.query_one("#creds-status").render())
+                assert "other changes were saved" in st and "checkbox was not" in st, st
+                assert inactive_file.exists() and not rc_file.exists(), "the Bedrock flip should have been applied"
+                assert len(pilot.app.screen_stack) == 2
+        finally:
+            maude.save_settings = real_save
+        # N5: the setting is saved but apply_agent_restrictions() raises -> its own message
+        for f in (rc_file, inactive_file):
+            if f.exists():
+                f.unlink()
+        real_apply_r = maude.MaudeApp.apply_agent_restrictions
+
+        def failing_restrictions(self):
+            raise RuntimeError("boom-refresh")
+        maude.MaudeApp.apply_agent_restrictions = failing_restrictions
+        try:
+            async with maude.MaudeApp().run_test(size=(140, 50)) as pilot:
+                scr = await open_settings(pilot)
+                scr.query_one("#btn-creds-save").press(); await pilot.pause()
+                await wait_until(pilot, lambda: "boom-refresh" in str(scr.query_one("#creds-status").render()))
+                st = str(scr.query_one("#creds-status").render())
+                assert "could not be refreshed" in st and "checkbox was not saved" not in st, st
+                assert len(pilot.app.screen_stack) == 2
+        finally:
+            maude.MaudeApp.apply_agent_restrictions = real_apply_r
     saved_env = dict(os.environ)
     try:
         asyncio.run(check_unflipped_and_flip_panes())

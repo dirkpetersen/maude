@@ -3275,6 +3275,37 @@ def remove_clauderc_keys(keys) -> None:
 ANTHROPIC_ACTIVE_SETTING = "anthropic_key_active"  # settings.json: is the key in ~/.maude/anthropic-key in use?
 _ACTIVE_OFF_VARS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX")
 _ACTIVE_UNSET_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
+# Backend selectors the Settings saves copy into os.environ (merge_clauderc + os.environ.update). What the user's own
+# shell / Windows environment held at startup is remembered, so re-parking never pops a value that was theirs.
+_PARKED_ENV_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+_AMBIENT_ENV_VAR = "MAUDE_AMBIENT_AT_START"  # carries the snapshot across the Reload (set where the TUI exits with 42)
+
+
+def _load_ambient_snapshot(environ) -> dict:
+    """The user's own selector variables as they were when the very first Maude process started. After a Reload
+    (the sandbox/macOS os.execv and the Windows relaunch both inherit os.environ, including the copies Maude made
+    itself) the first process leaves its snapshot as JSON
+    in MAUDE_AMBIENT_AT_START; it is used when valid and always removed from the environment. Else: snapshot now."""
+    raw = environ.pop(_AMBIENT_ENV_VAR, None)
+    if raw:
+        try:
+            snap = json.loads(raw)
+            if isinstance(snap, dict) and all(k in _PARKED_ENV_VARS and isinstance(v, str) for k, v in snap.items()):
+                return snap
+        except (ValueError, RecursionError):  # a crafted value must never crash the import
+            pass
+    return {k: environ[k] for k in _PARKED_ENV_VARS if k in environ}
+
+
+_AMBIENT_AT_START = _load_ambient_snapshot(os.environ)
+
+
+def parked_env_to_drop(active: dict, environ, ambient) -> list:
+    """Pure: the selector variables to pop from `environ` when clauderc `active` is parked: those whose value equals
+    the one in the file (so a different value is never touched) and that were not already in the environment, with
+    that same value, when Maude started (`ambient`: set independently by the user, so not Maude's to remove)."""
+    return [k for k in _PARKED_ENV_VARS
+            if k in active and environ.get(k) == active[k] and ambient.get(k) != active[k]]
 
 
 def anthropic_key_file() -> Path:
@@ -3367,8 +3398,24 @@ def apply_anthropic_key(new_key: str, active: bool) -> None:
         raise OSError("could not write ~/.maude/settings.json")
     if rc.get("ANTHROPIC_API_KEY") == key:
         remove_clauderc_keys(["ANTHROPIC_API_KEY"])
-    if os.environ.get("ANTHROPIC_API_KEY") == key:
-        os.environ.pop("ANTHROPIC_API_KEY", None)
+    if os.environ.get("ANTHROPIC_API_KEY") == key and _AMBIENT_AT_START.get("ANTHROPIC_API_KEY") != key:
+        os.environ.pop("ANTHROPIC_API_KEY", None)  # Maude's own copy only, never one the user's environment had
+
+def drop_parked_key_dup(key: str) -> bool:
+    """Best effort: remove ANTHROPIC_API_KEY from clauderc.inactive when it equals `key` (the saved Anthropic key), so
+    unticking "Default to AWS Bedrock" does not bring a duplicate back. A different key, an undecodable file and a
+    file that would be left empty (it marks Bedrock as the default) are left alone. True when it was removed."""
+    try:
+        path = clauderc_inactive_path()
+        vals = read_clauderc(path)  # {} for a missing or undecodable file
+        if not key or vals.get("ANTHROPIC_API_KEY") != key or len(vals) < 2:
+            return False
+        vals.pop("ANTHROPIC_API_KEY")
+        write_clauderc(vals, path)
+        return True
+    except OSError:
+        return False
+
 
 # ── Settings > OpenCode: a custom OpenAI-compatible provider in ~/.config/opencode/opencode.json ───────
 # Format (opencode.ai/docs/providers "Custom provider", /docs/config): `provider.<id>.npm` =
@@ -4052,11 +4099,28 @@ class CredsEntryScreen(ModalScreen[bool]):
             # remaining step, so a failure of that step cannot leave a clauderc that should have been parked.
             try:
                 note = self._apply_default_provider()
+            except _PartialSave:
+                raise
             except OSError as err:
                 raise OSError(f"could not switch the default provider: {err}") from None
-            self._save_native_only()
+            try:
+                self._save_native_only()
+            except (OSError, _RestrictRefreshError) as err:
+                # Everything above is already applied: say so, and still show the provider note.
+                if note:
+                    self.app.notify(note, timeout=8)
+                if isinstance(err, _RestrictRefreshError):
+                    self._set_status(f"[bold red]Everything was saved, but the Agent column could not be refreshed "
+                                     f"(restart Maude to apply the checkbox): {err}[/]")
+                else:
+                    self._set_status(f"[bold red]The other changes were saved, but the 'Only allow Kiro.dev and "
+                                     f"Github Copilot' checkbox was not saved: {err}[/]")
+                return
         except _CredsValidation:
             # The handler already populated the status label.
+            return
+        except _PartialSave as err:
+            self._set_status(f"[bold red]{err}[/]")  # the message says what was applied; no "Could not save" prefix
             return
         except OSError as err:
             self._set_status(f"[bold red]Could not save: {err}[/]")
@@ -4078,7 +4142,10 @@ class CredsEntryScreen(ModalScreen[bool]):
             raise OSError("could not write ~/.maude/settings.json")
         apply = getattr(self.app, "apply_agent_restrictions", None)
         if callable(apply):
-            apply()
+            try:
+                apply()
+            except Exception as err:  # the setting itself is saved; only the refresh failed
+                raise _RestrictRefreshError(str(err) or type(err).__name__) from None
 
     def _save_anthropic(self) -> None:
         if not is_native():
@@ -4206,15 +4273,17 @@ class CredsEntryScreen(ModalScreen[bool]):
         os.environ.update(env)
 
     @staticmethod
-    def _drop_parked_env() -> None:
-        """Before the active clauderc is parked: forget this session's copy of the backend selectors in it. The saves
-        copy what they write into os.environ, which would keep ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY /
-        ANTHROPIC_AUTH_TOKEN alive after the file is gone. Only a value equal to the one in the file is popped, so a
-        different value from the user's own environment is never touched."""
+    def _park_for_bedrock() -> dict:
+        """Park the active clauderc, then forget this session's copy of the backend selectors in it. The saves copy
+        what they write into os.environ, which would keep ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY /
+        ANTHROPIC_AUTH_TOKEN alive after the file is gone. Only a value equal to the one in the file is popped, and
+        never one the user's own environment already had at startup (`parked_env_to_drop`). The environment is only
+        touched once the park succeeded (OSError: nothing changed). Returns what the active file held."""
         active = read_clauderc()
-        for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-            if k in active and os.environ.get(k) == active[k]:
-                os.environ.pop(k, None)
+        park_clauderc(True)
+        for k in parked_env_to_drop(active, os.environ, _AMBIENT_AT_START):
+            os.environ.pop(k, None)
+        return active
 
     def _apply_default_provider(self) -> str:
         """Honour the Bedrock/Foundry default checkbox if it's visible.
@@ -4239,8 +4308,7 @@ class CredsEntryScreen(ModalScreen[bool]):
             # stale .inactive next to an active backend (_parked_at_open False) is left alone.
             if (cb.value and self._parked_at_open and self.mode in (self.MODE_PASTE, self.MODE_BEDROCK, self.MODE_FOUNDRY)
                     and clauderc_path().exists() and read_clauderc() != self._active_at_open):
-                self._drop_parked_env()
-                park_clauderc(True)
+                self._park_for_bedrock()
                 os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
                 os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
                 if self.mode == self.MODE_FOUNDRY:  # honour the box: the Foundry creds are saved but dormant
@@ -4251,15 +4319,24 @@ class CredsEntryScreen(ModalScreen[bool]):
         if cb.value:
             # Bedrock is the default now: a plain API key must not win over it, and clauderc is parked so the
             # wrapper doesn't source Foundry creds. Both files existing is merged, never deleted (park_clauderc).
-            note = ""
-            if active_anthropic_key():
-                apply_anthropic_key("", False)
-                note = "Bedrock is the default; the API key is saved but not in use."
-            self._drop_parked_env()
-            park_clauderc(True)
+            # The park comes first: if it fails, Bedrock is not the default and the key must stay on.
+            parked = self._park_for_bedrock()
             os.environ.pop("CLAUDE_CODE_USE_FOUNDRY", None)
             os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
-            return note
+            key = active_anthropic_key()
+            if key:
+                try:
+                    apply_anthropic_key("", False)
+                except OSError as err:
+                    raise _PartialSave(f"Bedrock is now the default, but the Anthropic API key is still switched on "
+                                       f"and still in use ("
+                                       f"switch it off in the Anthropic pane): {err}") from None
+                # What apply_anthropic_key did for the active file (moved a duplicate of the saved key out of
+                # clauderc) now has to be done on the parked copy, or unticking the box would bring it back.
+                # Best effort, and never when it would leave the parked file empty (that file marks Bedrock).
+                drop_parked_key_dup(key)
+                return "Bedrock is the default; the API key is saved but not in use."
+            return ""
         else:
             # Foundry active → restore clauderc if it was parked (merging when a save re-created it).
             park_clauderc(False)
@@ -4272,6 +4349,16 @@ class CredsEntryScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#btn-creds-cancel")
     def cancel(self) -> None:
         self.dismiss(False)
+
+
+class _PartialSave(OSError):
+    """A Save step failed after an earlier one was applied; the message already says which."""
+    pass
+
+
+class _RestrictRefreshError(Exception):
+    """The native-only setting was saved, but apply_agent_restrictions() raised."""
+    pass
 
 
 class _CredsValidation(Exception):
@@ -6798,6 +6885,10 @@ class MaudeApp(App):
     def btn_update(self) -> None:
         def _after_update(reload: bool) -> None:
             if reload:
+                # The reloaded process (os.execv in the sandbox/macOS, the launcher's relaunch on Windows) inherits
+                # os.environ, Maude's own copies of the selectors included: leave it the snapshot of the user's
+                # own. Nothing else is started between this line and the exit.
+                os.environ[_AMBIENT_ENV_VAR] = json.dumps(_AMBIENT_AT_START)
                 self.exit(42)  # 42 = reload signal; launch_tui() in bash re-execs
         self.push_screen(UpdateMaudeScreen(), _after_update)
 
