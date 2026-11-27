@@ -160,6 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wsl-image
+          retention-days: 1
           path: |
             ${{ steps.version.outputs.artifact }}
             ${{ steps.version.outputs.artifact }}.sha256
