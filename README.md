@@ -19,10 +19,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Ubuntu 26.04](https://img.shields.io/badge/Ubuntu-26.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://releases.ubuntu.com/26.04/)
-[![Build WSL](https://github.com/dirkpetersen/maude/actions/workflows/build-wsl.yml/badge.svg)](https://github.com/dirkpetersen/maude/actions/workflows/build-wsl.yml)
-[![Build Docker](https://github.com/dirkpetersen/maude/actions/workflows/build-docker.yml/badge.svg)](https://github.com/dirkpetersen/maude/actions/workflows/build-docker.yml)
 [![Release](https://img.shields.io/github/v/release/dirkpetersen/maude?include_prereleases)](https://github.com/dirkpetersen/maude/releases)
-[![Docker Pulls](https://img.shields.io/badge/ghcr.io-dirkpetersen%2Fmaude-blue?logo=docker)](https://github.com/dirkpetersen/maude/pkgs/container/maude)
 
 ---
 
@@ -41,6 +38,8 @@ maude is a pre-configured Ubuntu 26.04 appliance that gives developers a browser
 ---
 
 ## Quick Start
+
+> **Note:** The release-hosted WSL tarball is no longer built, and the `ghcr.io/dirkpetersen/maude` Docker image is no longer built or updated (existing images stay pullable); only Maude Light ships. Build them locally with `make build-wsl` / `make build-docker`.
 
 ### WSL (Windows Subsystem for Linux)
 

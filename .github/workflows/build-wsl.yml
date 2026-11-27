@@ -1,9 +1,8 @@
+# DISABLED (manual only): only Maude Light ships today, and it does not use this build.
+# Re-enable the push trigger when the full appliance is worked on again.
 name: Build WSL Image
 
 on:
-  # Monthly, 1st day at 03:00 UTC. The WSL image is also built on each release tag (release.yml).
-  schedule:
-    - cron: '0 3 1 * *'
   workflow_dispatch:
 
 permissions:

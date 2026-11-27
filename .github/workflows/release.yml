@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   # ── Fail early if light/checksums.txt is missing or stale ──────────────────
@@ -21,191 +20,6 @@ jobs:
       - name: Verify light/checksums.txt
         run: bash scripts/gen-checksums.sh --check
 
-  # ── Build WSL tarball ──────────────────────────────────────────────────────
-  build-wsl:
-    needs: verify-checksums
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    outputs:
-      wsl_artifact: ${{ steps.version.outputs.artifact }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set version
-        id: version
-        run: |
-          VERSION="${{ github.ref_name }}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "artifact=maude-wsl-ubuntu2604-${VERSION}.tar.gz" >> "$GITHUB_OUTPUT"
-
-      - name: Build WSL rootfs via Docker
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          BUILD_DATE="$(date -Iseconds)"
-          WORKSPACE="${GITHUB_WORKSPACE}"
-
-          docker run --name maude-wsl-build \
-            -v "${WORKSPACE}:/maude-src:ro" \
-            -e MAUDE_VERSION="${VERSION}" \
-            -e MAUDE_BUILD_DATE="${BUILD_DATE}" \
-            ubuntu:plucky bash -c '
-              set -e
-              export DEBIAN_FRONTEND=noninteractive TZ=UTC
-
-              apt-get update -qq
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl wget sudo locales tzdata \
-                git \
-                python3 python3-pip python3-venv python3-dev \
-                nodejs npm \
-                golang-go \
-                tmux \
-                openssh-server openssh-client \
-                bash-completion \
-                vim nano \
-                jq tree file less \
-                build-essential pkg-config \
-                libssl-dev libffi-dev \
-                net-tools bind9-dnsutils \
-                iputils-ping iproute2 \
-                unzip zip \
-                ripgrep \
-                ufw fail2ban
-              apt-get clean
-              rm -rf /var/lib/apt/lists/*
-
-              locale-gen en_US.UTF-8
-              echo LANG=en_US.UTF-8 > /etc/default/locale
-              echo "maude" > /etc/hostname
-
-              # mom group = users (GID 100) so every new user gets mom access
-              groupadd --gid 100 users 2>/dev/null || true
-
-              useradd --create-home --shell /bin/bash \
-                --comment "maude default user" \
-                --gid users \
-                maude
-              echo "maude:maude" | chpasswd
-              echo "maude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/maude
-              chmod 440 /etc/sudoers.d/maude
-
-              sed -i "/^#ADD_EXTRA_GROUPS/s/^#//" /etc/adduser.conf 2>/dev/null || true
-              sed -i "/^#EXTRA_GROUPS/s/^#//"     /etc/adduser.conf 2>/dev/null || true
-              grep -q "^ADD_EXTRA_GROUPS" /etc/adduser.conf || echo "ADD_EXTRA_GROUPS=1"   >> /etc/adduser.conf
-              grep -q "^EXTRA_GROUPS"     /etc/adduser.conf || echo 'EXTRA_GROUPS="users"' >> /etc/adduser.conf
-
-              # Install mom binary
-              _arch=$(dpkg --print-architecture 2>/dev/null || uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/")
-              if curl -fsSL --max-time 30 \
-                "https://github.com/dirkpetersen/mom/releases/latest/download/mom-linux-${_arch}" \
-                -o /usr/local/bin/mom 2>/dev/null; then
-                chmod 4755 /usr/local/bin/mom
-                echo "mom installed from GitHub release."
-              else
-                echo "WARNING: mom release not yet published — skipping. first-boot.sh will install it at runtime."
-                rm -f /usr/local/bin/mom
-              fi
-              mkdir -p /etc/mom
-              printf "group = \"users\"\ndeny_list = \"/etc/mom/deny.list\"\nlog_file = \"/var/log/mom.log\"\n" \
-                > /etc/mom/mom.conf
-              printf "nmap\ntcpdump\nwireshark*\naircrack*\nmetasploit*\n" > /etc/mom/deny.list
-
-              mkdir -p /etc/maude
-              cp /maude-src/scripts/profile.d/maude-path.sh       /etc/profile.d/
-              cp /maude-src/scripts/profile.d/maude-firstlogin.sh  /etc/profile.d/
-              cp /maude-src/scripts/new-user-login.sh              /etc/maude/
-              cp /maude-src/scripts/first-boot.sh                  /etc/maude/
-              cp /maude-src/scripts/maude-setup                    /usr/local/bin/
-              cp /maude-src/scripts/maude-adduser                  /usr/local/bin/
-
-              chmod 644 /etc/profile.d/maude-*.sh
-              chmod 755 /etc/maude/new-user-login.sh /etc/maude/first-boot.sh
-              chmod 755 /usr/local/bin/maude-setup /usr/local/bin/maude-adduser
-
-              # Hook maude-path.sh at END of .bashrc so it always wins
-              # Use double-quotes (single-quotes would close the outer bash -c '...' string)
-              printf "\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n" \
-                >> /home/maude/.bashrc
-              printf "\n# maude: enforce correct PATH order (runs last)\nif [ -f /etc/profile.d/maude-path.sh ]; then . /etc/profile.d/maude-path.sh; fi\n" \
-                >> /etc/skel/.bashrc
-
-              printf "MAUDE_VERSION=%s\nMAUDE_BUILD_DATE=%s\nMAUDE_DEPLOY_TARGET=wsl\n" \
-                "${MAUDE_VERSION}" "${MAUDE_BUILD_DATE}" > /etc/maude/maude.conf
-
-              printf "[boot]\nsystemd=true\ncommand=/etc/maude/first-boot.sh\n\n[network]\nhostname=maude\ngenerateResolvConf=true\n\n[user]\ndefault=maude\n\n[interop]\nenabled=true\nappendWindowsPath=false\n" \
-                > /etc/wsl.conf
-
-              usermod --home /home/maude maude 2>/dev/null || true
-
-              if [ -f /etc/ssh/sshd_config ]; then
-                sed -i \
-                  -e "s/^#PermitRootLogin.*/PermitRootLogin no/" \
-                  -e "s/^#PasswordAuthentication.*/PasswordAuthentication yes/" \
-                  -e "s/^#MaxAuthTries.*/MaxAuthTries 5/" \
-                  /etc/ssh/sshd_config
-              fi
-              echo "WSL rootfs build complete."
-            '
-
-      - name: Export container as WSL tarball
-        run: |
-          ARTIFACT="${{ steps.version.outputs.artifact }}"
-          docker export maude-wsl-build | gzip > "${ARTIFACT}"
-          docker rm maude-wsl-build
-          sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
-
-      - name: Upload WSL artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wsl-image
-          retention-days: 1
-          path: |
-            ${{ steps.version.outputs.artifact }}
-            ${{ steps.version.outputs.artifact }}.sha256
-
-  # ── Build Docker image ─────────────────────────────────────────────────────
-  build-docker:
-    needs: verify-checksums
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
-
   # ── Build maude.exe (Windows launcher) ─────────────────────────────────────
   build-exe:
     uses: ./.github/workflows/build-maude-exe.yml
@@ -213,18 +27,12 @@ jobs:
   # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
     runs-on: ubuntu-latest
-    needs: [build-wsl, build-docker, build-exe]
+    needs: [verify-checksums, build-exe]
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download WSL artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wsl-image
-          path: dist/
 
       - name: Download maude.exe artifact
         uses: actions/download-artifact@v4
@@ -249,8 +57,6 @@ jobs:
           gh release create "${VERSION}" \
             --title "maude ${VERSION}" \
             --notes-file /tmp/release-notes.md \
-            "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz" \
-            "dist/maude-wsl-ubuntu2604-${VERSION}.tar.gz.sha256" \
             dist/maude.exe \
             dist/maude.exe.sha256
 

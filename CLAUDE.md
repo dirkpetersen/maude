@@ -142,7 +142,7 @@ make tag VERSION=v0.2.0    # Creates + pushes git tag -> triggers CI release wor
 
 1. **Maude Light (WSL2)** -- production-ready; single PowerShell command install from GitHub
 2. **VM (VMware + KVM)** -- built with Packer, outputs `.ova` and `.qcow2`
-3. **WSL image** -- full appliance variant, built via GitHub Actions
+3. **WSL image** -- full appliance variant; manual-only (`build-wsl.yml` dispatch), not currently built
 4. **Docker** -- `ghcr.io/dirkpetersen/maude:latest`
 5. **Proxmox appliance** -- lower priority
 
@@ -271,9 +271,9 @@ Always prefix appmotel CLI calls with `sudo -u appmotel appmo ...`
 
 ## CI/CD Workflows
 
-- **build-wsl.yml** -- Builds WSL rootfs tarball on push to main
-- **build-docker.yml** -- Builds and pushes Docker image to GHCR on push to main
-- **release.yml** -- Triggered on version tags (`v*.*.*`); builds WSL + Docker, creates GitHub Release with checksums
+- **build-wsl.yml** -- Builds WSL rootfs tarball. DISABLED: manual (`workflow_dispatch`) only, because only Maude Light ships today and it does not use this build; re-add the `push` trigger when the full appliance is worked on again
+- **build-docker.yml** -- Builds and pushes Docker image to GHCR. DISABLED: manual (`workflow_dispatch`) only, same reason as build-wsl.yml
+- **release.yml** -- Triggered on version tags (`v*.*.*`); verifies `light/checksums.txt`, builds `maude.exe` (via `build-maude-exe.yml`), and creates the GitHub Release with `maude.exe` + `maude.exe.sha256` only (no WSL tarball, no Docker image), then dispatches `docs.yml`
 - **build-maude-exe.yml** -- Windows runner; on push to main (paths: `light/maude_exe.py`, `light/maude.py`, `tests/win_tui_smoke.py`, the workflow), manual dispatch, or `workflow_call` from release.yml: runs `tests/win_tui_smoke.py`, builds `maude.exe` with PyInstaller (version = tag, else `dev`), smoke-tests `--version`/`--selftest`, uploads it as a workflow artifact (no release asset published by this workflow itself)
 - **docs.yml** -- Builds the docs site from `docs/` with Zensical (`zensical.toml`, nav defined there) and deploys to GitHub Pages on push to main (paths: `docs/**`, `zensical.toml`, the workflow, `scripts/docs-set-release.py`) or dispatch (optional `tag` input, default newest release)
 - **maude.exe download links in docs (rule)**: always point straight at the asset, `https://github.com/dirkpetersen/maude/releases/download/<tag>/maude.exe` (and `.../maude.exe.sha256`) with link text `Download maude.exe (<tag>)`, never at the releases page. The URLs are real versioned URLs in the markdown (so they also work on GitHub). `docs.yml` runs `scripts/docs-set-release.py <tag> docs` before the build, rewriting them to the newest release tag (the `tag` input if it is strict `vX.Y.Z`, else `gh release view`); `release.yml` job `update-docs` (after `create-release`) runs `gh workflow run docs.yml --ref main -f tag=<tag>`: a release made with `GITHUB_TOKEN` does not trigger other workflows, and `workflow_call` would run on the tag ref, which the `github-pages` environment rejects (main only). Zensical 0.1.3 has no `{{ }}` variables or macros (verified), so do not try one. When adding a new maude.exe link, use exactly that URL/text format so the script matches it.

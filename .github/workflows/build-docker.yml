@@ -1,14 +1,8 @@
+# DISABLED (manual only): only Maude Light ships today, and it does not use this build.
+# Re-enable the push trigger when the full appliance is worked on again.
 name: Build Docker Image
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'Dockerfile'
-      - 'docker-entrypoint.sh'
-      - 'scripts/**'
-      - 'packages/**'
-      - '.github/workflows/build-docker.yml'
   workflow_dispatch:
 
 permissions:

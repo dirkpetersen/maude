@@ -266,7 +266,7 @@ How to work on it:
 
 - `python3 -m py_compile light/maude_exe.py` and `bash tests/test-maude-exe.sh` are quick. `make test-fast` takes about 3 minutes.
 - The pure helpers (`path_with`, `find_tool`, `mingit_plan`, `mingit_release`, `install_plan`, `kiro_package`, `msiexec_cmd`, `gh_release`, `checksum_for`, `unsafe_zip_names`) and the Kiro/GitHub CLI/MinGit download flows (fake network, fake `msiexec`) are tested on Linux. Registry, `ctypes` and real `msiexec` calls only run on Windows. `tests/win_tui_smoke.py` runs in CI on `windows-latest`.
-- Release: `make tag VERSION=vX.Y.Z` runs `release.yml`, which builds `maude.exe` and the WSL tarball. A run takes a few minutes. Check with `gh run list`.
+- Release: `make tag VERSION=vX.Y.Z` runs `release.yml`, which builds `maude.exe` only. A run takes a few minutes. Check with `gh run list`.
 - Docs site (https://dirkpetersen.github.io/maude/): the Documentation workflow runs only when `docs/**`, `zensical.toml` or the workflow file change. Pages was enabled with `gh api -X POST repos/dirkpetersen/maude/pages -f build_type=workflow`.
 - `setup-wsl-maude.ps1` must keep CRLF line endings (check with `file`).
 

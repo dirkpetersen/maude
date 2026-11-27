@@ -47,6 +47,10 @@ wsl --set-default-version 2
 
 ## Step 3 — Download and Import maude
 
+> **Note:** Releases no longer include a `maude-wsl-ubuntu2604-*.tar.gz` image (only Maude Light ships
+> today), so the download below will fail. Use Maude Light (see the [Maude Light README](https://github.com/dirkpetersen/maude/blob/main/light/README.md#install)), or build the image
+> yourself with `make build-wsl`.
+
 Open a regular **Command Prompt** (not PowerShell, not Administrator):
 
 ```cmd
