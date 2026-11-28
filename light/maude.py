@@ -1513,7 +1513,10 @@ MODELS_FALLBACK_JSON = r'''{
       {"label": "6.1 terra", "id": "gpt-6.1-terra"},
       {"label": "6 luna", "id": "gpt-6-luna"}
     ]},
-    "Antigravity": {"models": []},
+    "Antigravity": {"models": [
+      {"label": "hydrogen", "id": "gemini-4-hydrogen-high"},
+      {"label": "3.8 flash", "id": "gemini-3.8-flash-high"}
+    ]},
     "Grok CLI": {"models": [
       {"label": "grok 4.7", "id": "grok-4.7"},
       {"label": "grok 4.6", "id": "grok-4.6"},
@@ -1526,7 +1529,8 @@ MODELS_FALLBACK_JSON = r'''{
       {"label": "haiku", "id": "claude-haiku-5.5"},
       {"label": "5.6 sol", "id": "gpt-5.6-sol"},
       {"label": "5.6 terra", "id": "gpt-5.6-terra"},
-      {"label": "5.6 luna", "id": "gpt-5.6-luna"}
+      {"label": "5.6 luna", "id": "gpt-5.6-luna"},
+      {"label": "grok 4.7", "id": "grok-4.7"}
     ]},
     "GitHub Copilot CLI": {"models": [
       {"label": "fable", "id": "claude-fable-5.2"},
@@ -1535,7 +1539,8 @@ MODELS_FALLBACK_JSON = r'''{
       {"label": "haiku", "id": "claude-haiku-5.5"},
       {"label": "6.2 sol", "id": "gpt-6.2-sol"},
       {"label": "6.2 astra", "id": "gpt-6.2-astra"},
-      {"label": "6.1 terra", "id": "gpt-6.1-terra"}
+      {"label": "6.1 terra", "id": "gpt-6.1-terra"},
+      {"label": "5.6 sol", "id": "gpt-5.6-sol"}
     ]},
     "OpenCode": {"models": [
       {"label": "fable", "id": "anthropic/claude-fable-5-2"},

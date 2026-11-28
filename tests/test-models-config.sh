@@ -33,10 +33,10 @@ for a in "Claude Code" "Codex" "Antigravity" "Grok CLI" "Kiro CLI" "GitHub Copil
 done
 assert_eq "Codex: OpenAI only after auto" "True" "$(py 'all(i.startswith("gpt-") for _,i in agent_models("Codex")[1:])')"
 assert_eq "Grok CLI: auto + grok-* only (Claude needs BYOK config Maude does not write)" "['auto', 'grok-4.7', 'grok-4.6', 'grok-4.5']" "$(py '[i for _,i in agent_models("Grok CLI")]')"
-assert_eq "Kiro: all 7 verified ids, Claude then GPT" "['auto', 'claude-fable-5.1', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']" "$(py '[i for _,i in agent_models("Kiro CLI")]')"
-assert_eq "Antigravity is auto-only" "[('auto', 'auto')]" "$(py 'agent_models("Antigravity")')"
+assert_eq "Kiro: all 8 verified ids, Claude, GPT, then Grok" "['auto', 'claude-fable-5.1', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'grok-4.7']" "$(py '[i for _,i in agent_models("Kiro CLI")]')"
+assert_eq "Antigravity: auto + 2 verified ids" "['auto', 'gemini-4-hydrogen-high', 'gemini-3.8-flash-high']" "$(py '[i for _,i in agent_models("Antigravity")]')"
 assert_eq "Crush is auto-only"       "[('auto', 'auto')]" "$(py 'agent_models("Crush")')"
-assert_eq "Copilot: 4 Claude then OpenAI" "True" "$(py '[i.split("-")[0] for _,i in agent_models("GitHub Copilot CLI")[1:]] == ["claude"]*4 + ["gpt"]*3')"
+assert_eq "Copilot: 4 Claude then OpenAI" "True" "$(py '[i.split("-")[0] for _,i in agent_models("GitHub Copilot CLI")[1:]] == ["claude"]*4 + ["gpt"]*4')"
 assert_eq "Claude Code ids pass the wrapper allowlist" "True" "$(py 'all(claude_model_ok(i) for _,i in agent_models("Claude Code")[1:])')"
 assert_eq "unknown agent: just auto" "[('auto', 'auto')]" "$(py 'agent_models("Nope")')"
 assert_eq "pool is big enough for every list" "True" "$(py 'all(len(agent_models(a)) <= MODEL_SLOTS for a in AGENTS)')"
