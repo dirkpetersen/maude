@@ -158,7 +158,7 @@ try:
             assert all(b.display for b in app.query_one("#agent-select").query(RadioButton))  # greyed out, not hidden
             await wait_until(pilot, lambda: get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["auto"]})
             assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["auto"]}, get_on()
-            assert labels("#model-select") == ["auto", "fable", "opus", "sonnet", "haiku", "5.6 sol", "5.6 terra", "5.6 luna"], labels("#model-select")
+            assert labels("#model-select") == ["auto", "fable", "opus", "sonnet", "haiku", "5.6 sol", "5.6 terra", "5.6 luna", "grok 4.7"], labels("#model-select")
             assert not app.query_one("#effort-select").disabled  # Kiro CLI has --effort
             assert maude.read_tool() == "Claude Code" and not maude.MODEL_FILE.exists(), "a restricted start writes nothing"
             await pilot.click(rb("#agent-select", 7)); await pilot.pause()   # Crush: disabled, a click changes nothing
@@ -167,8 +167,8 @@ try:
             await wait_until(pilot, lambda: app._model == "claude-opus-5.5")
             assert get_on() == {"#agent-select": ["Kiro CLI"], "#model-select": ["opus"]} and maude.read_agent_models().get("Kiro CLI") == "claude-opus-5.5" and not maude.MODEL_FILE.exists(), get_on()
             await pilot.click(rb("#agent-select", 5)); await pilot.pause()    # GitHub Copilot CLI: its own list
-            await wait_until(pilot, lambda: app._tool == "GitHub Copilot CLI" and labels("#model-select")[-1] == "6.1 terra")
-            assert labels("#model-select") == ["auto", "fable", "opus", "sonnet", "haiku", "6.2 sol", "6.2 astra", "6.1 terra"], labels("#model-select")
+            await wait_until(pilot, lambda: app._tool == "GitHub Copilot CLI" and labels("#model-select")[-1] == "5.6 sol")
+            assert labels("#model-select") == ["auto", "fable", "opus", "sonnet", "haiku", "6.2 sol", "6.2 astra", "6.1 terra", "5.6 sol"], labels("#model-select")
             # the current id (claude-opus-5.5) is also in Copilot's list, so it stays selected
             assert get_on() == {"#agent-select": ["GitHub Copilot CLI"], "#model-select": ["opus"]} and app._model == "claude-opus-5.5", get_on()
             await pilot.click(rb("#model-select", 5)); await pilot.pause()    # 6.2 sol
@@ -479,7 +479,7 @@ try:
                 assert cb.region.height == 1 and cb.region.x == fresh.region.x, (cb.id, cb.region)
             assert perp.region.y == fresh.region.y + 1, (fresh.region, perp.region)
             assert [w.id for w in app.query_one("#sidebar").children if isinstance(w, Checkbox)] == ["fresh-context", "perplexity", "autostart"]
-            # Linux sandbox layout (Autostart shown): same column, one more row, still inside the sidebar.
+            # Linux sandbox layout (Autostart shown): same column, one more row; the toggles stay inside the sidebar.
             try:
                 app.query_one("#autostart").display = True
                 await pilot.pause()
@@ -487,8 +487,17 @@ try:
                 auto = app.query_one("#autostart", Checkbox)
                 assert str(auto.label) == "Autostart" and auto.region.height == 1 and auto.region.x == fresh.region.x, auto.region
                 assert auto.region.y == perp.region.y + 1 and auto.region.bottom <= side.bottom, (auto.region, side)
-                assert app.query_one("#maude-version").region.bottom <= side.bottom
+                # With a 9-entry model list (Kiro CLI, Copilot CLI) the sandbox column is one row taller
+                # than 120x35 shows: the version line is reached by scrolling the sidebar (at most 1 row).
+                sb = app.query_one("#sidebar")
+                assert sb.max_scroll_y <= 1, sb.max_scroll_y
+                sb.scroll_end(animate=False)
+                await pilot.pause()
+                ver = lambda: app.query_one("#maude-version").region
+                assert await wait_until(pilot, lambda: ver().height > 0 and ver().bottom <= sb.region.bottom), (ver(), sb.region)
             finally:
+                app.query_one("#sidebar").scroll_home(animate=False)
+                await wait_until(pilot, lambda: app.query_one("#sidebar").scroll_y == 0)
                 app.query_one("#autostart").display = False
             assert [str(b.label) for b in app.query_one("#effort-select").query(RadioButton)] == ["auto", "low", "medium", "high", "xhigh", "max"]
             tips = str(app.query_one("#tips", Static).render())
